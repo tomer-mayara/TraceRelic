@@ -2,16 +2,16 @@
   "ignoreBinaries": ["uvx"],
   "workspaces": {
     ".": {
-      "entry": [".habit-hooks/eslint.config.mjs"],
+      "entry": [".habit-hooks/eslint.config.mjs", "test/acceptance/**/*.{test,steps}.ts"],
       "ignoreDependencies": ["@typespec/json-schema", "jscpd", "ts-morph"]
     },
     "apps/*": {
-      "entry": ["src/**/*.test.{ts,tsx}", "src/**/*.steps.ts", "src/storage/collector-storage.ts", "scripts/*.mjs"],
-      "project": ["src/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"]
+      "entry": ["test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts", "src/cli.ts", "src/storage/collector-storage.ts", "scripts/*.mjs"],
+      "project": ["{src,test}/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"]
     },
     "packages/*": {
-      "entry": ["src/index.ts", "src/**/*.test.{ts,tsx}"],
-      "project": ["src/**/*.{ts,tsx}"]
+      "entry": ["src/index.ts", "test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts"],
+      "project": ["{src,test}/**/*.{ts,tsx}"]
     }
   }
 }

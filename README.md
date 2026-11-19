@@ -2,7 +2,35 @@
 
 TraceRelic is a starter for collecting token usage from Codex and Claude Code sessions. The collector lives in `apps/collector`, the API in `apps/api`, and shared TypeScript code in `packages/shared`.
 
-The [local collector engineering spec](docs/specs/local-collector.md) defines session accounting, remote persistence and the in-memory storage fixture. Run `bun run check:collector-storage` to exercise the fixture and its contract.
+## Read local Codex history
+
+The collector defines its configuration fields and validation rules in TypeScript. Pass `--config` the JSON values for the instance you want to run. The supplied file selects the usual Codex directory. [TypeScript definition](apps/collector/src/config/global-config-schema.ts) · [tracerelic.config.json](tracerelic.config.json)
+
+```json
+{ "codexPath": "~/.codex" }
+```
+
+From the repository root, run the history command with an inclusive start and exclusive end. It writes matching records as a JSON array.
+
+```sh
+bun run collector history --config ./tracerelic.config.json --from 2026-02-01T00:00:00Z --to 2026-02-02T00:00:00Z
+```
+
+The CLI resolves `--config` from the working directory. Within the file, `codexPath` can be absolute, relative to the file's directory, or start with `~/` for the current user's home. To use the reader from TypeScript, load the config once and pass it to the constructor.
+
+```ts
+import { GlobalConfigLoader } from "@tracerelic/collector/config";
+import { LocalLLMHistoryCodex } from "@tracerelic/collector/history";
+
+const config = await GlobalConfigLoader.load("./tracerelic.config.json");
+const reader = new LocalLLMHistoryCodex(config);
+const entries = await reader.readLocalHistory(
+  new Date("2026-02-01T00:00:00Z"),
+  new Date("2026-02-02T00:00:00Z"),
+);
+```
+
+Run `bun run check:collector-history` to check startup and the reader. Run `bun run check:collector-storage` to exercise the in-memory storage fixture. [Local collector engineering spec](docs/specs/local-collector.md)
 
 ## Run the checks
 
@@ -16,7 +44,9 @@ bun run lint
 bun run test
 ```
 
-`bun run test` checks types with `tsrs`, builds each workspace with SWC, and runs the compiled tests with Node's built-in test runner. The suite includes storage fixture tests and environment checks for the native SQLite binding and Fastify.
+`bun run test` type-checks, compiles, and runs each component's `*.test.ts` suites under `test/unit/`, `test/integration/`, `test/interface/`, and `test/acceptance/`. The collector contract checks run the Cucumber features with their adjacent step definitions. [Test layout](docs/engineering-guidelines/coding-principles.md#test-locations)
+
+For a suite that spans components, place it in `test/acceptance/` at the repository root. Declare the workspace packages it imports in the root `devDependencies`. The same `bun run test` command runs it.
 
 ## Run Habit Hooks
 
@@ -24,7 +54,7 @@ Run the scan manually from the repository root. Install the Bun dependencies abo
 
 ```sh
 bun run habit-hooks --all
-bun run habit-hooks --file apps/collector/src/environment.test.ts
+bun run habit-hooks --file apps/collector/test/integration/environment.test.ts
 bun run habit-hooks --branch main
 ```
 

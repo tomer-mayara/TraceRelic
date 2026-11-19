@@ -4,15 +4,17 @@ import { BeforeAll, Given, Then, When, setWorldConstructor } from "@cucumber/cuc
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import type {
-  Batch, CollectorStorage, CommitResult, Message, SessionKey, SessionView, StreamKey, Usage,
-} from "../storage/collector-storage.js";
-import { InMemoryCollectorStorage } from "./in-memory-collector-storage.js";
+  CollectorStorage, CommitResult, SessionKey, SessionView,
+} from "../../../src/storage/collector-storage.ts";
+import { initialPlanningBatch, observation, prompt } from "../../fixtures/collector-storage-fixture.ts";
+import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
-const schemaFile = new URL("../../../../dist/collector-storage/storage.schema.json", import.meta.url);
+const schemaFile = new URL(
+  "../../dist/collector-storage/storage.schema.json", import.meta.resolve("@tracerelic/collector/package.json"),
+);
 const schema: unknown = JSON.parse(readFileSync(schemaFile, "utf8"));
 assert(schema && typeof schema === "object" && "$schema" in schema && typeof schema.$schema === "string");
 const contract = new Ajv2020({ formats: fullFormats }).addSchema({ ...schema, $schema: schema.$schema });
-const observedAt = "2026-01-01T00:00:00Z";
 
 function checkWireValue(model: string, value: unknown): void {
   const wireValue: unknown = JSON.parse(JSON.stringify(value));
@@ -21,12 +23,9 @@ function checkWireValue(model: string, value: unknown): void {
 
 class StorageScenario {
   readonly store: CollectorStorage = new InMemoryCollectorStorage();
-  readonly key: SessionKey = { harness: "claude", sessionId: "planning" };
-  readonly source: StreamKey = { ...this.key, streamId: "main" };
-  batch: Batch = {
-    source: this.source, expectedOffset: 0, checkpoint: { offset: 100, parserState: "{}" },
-    messages: [], usage: [],
-  };
+  batch = initialPlanningBatch();
+  readonly source = this.batch.source;
+  readonly key: SessionKey = { harness: this.source.harness, sessionId: this.source.sessionId };
   result?: CommitResult;
 
   async commit(): Promise<void> {
@@ -53,14 +52,6 @@ BeforeAll(function () {
   assert.equal(contract.validate("Batch.json", malformed), false);
   assert(contract.errors?.some(error => error.instancePath === "/expectedOffset" && error.keyword === "minimum"));
 });
-
-function prompt(text: string): Message {
-  return { id: "message-1", role: "user", at: observedAt, text };
-}
-
-function observation(inputTokens: number, outputTokens: number, revision = 1): Usage {
-  return { id: "request-1/message-1", at: observedAt, model: "example-model", revision, inputTokens, outputTokens };
-}
 
 Given("an empty remote storage fixture", async function (this: StorageScenario) {
   assert.equal(await this.store.readSession(this.key), null);

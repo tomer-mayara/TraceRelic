@@ -2,18 +2,28 @@
   "name": "@tracerelic/collector",
   "private": true,
   "type": "module",
+  "exports": {
+    "./config": { "types": "./src/config/index.ts", "import": "./dist/config/index.js" },
+    "./history": { "types": "./src/history/index.ts", "import": "./dist/history/index.js" },
+    "./*": "./*"
+  },
+  "imports": {
+    "#src/*": { "types": "./src/*.ts", "default": "./dist/*.js" }
+  },
   "scripts": {
-    "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc",
-    "check:storage-scenarios": "cucumber-js ../../docs/specs/local-collector/storage.feature --import ./dist/testing/storage.steps.js --format summary"
+    "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc",
+    "check:storage-scenarios": "cucumber-js test/acceptance/storage/storage.feature --import ./dist/test/acceptance/storage/storage.steps.js --format summary",
+    "check:history-scenarios": "cucumber-js test/interface/history/codex-history.feature --import ./dist/test/interface/history/history.steps.js --format summary",
+    "check:config-scenarios": "cucumber-js test/acceptance/config/local-config.feature --import ./dist/test/acceptance/config/local-config.steps.js --format summary"
   },
   "dependencies": {
     "@tracerelic/shared": "workspace:*",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "better-sqlite3": "13.2.0"
   },
   "devDependencies": {
     "@cucumber/cucumber": "13.3.0",
-    "@types/better-sqlite3": "9.6.0",
-    "ajv": "8.20.0",
-    "ajv-formats": "3.0.1"
+    "@types/better-sqlite3": "9.6.0"
   }
 }

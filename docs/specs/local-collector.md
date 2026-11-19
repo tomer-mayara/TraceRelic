@@ -21,11 +21,13 @@ Feature: Read token use for a planning chat
 
 ## What to read
 
-**Codex.** Under `CODEX_HOME` (default `~/.codex`), find `rollout-*.jsonl` in `sessions/` and `archived_sessions/`. Read the ID from `session_meta.payload.id` or `session_id` in the same payload. A move to the archive keeps the same source. [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-advanced) · [Rollout discovery](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/streams/agents/codex.rs#L96-L125)
+**Codex.** Under the configured `codexPath`, find `rollout-*.jsonl` in `sessions/` and `archived_sessions/`. Read the ID from `session_meta.payload.id` or `session_id` in the same payload. A move to the archive keeps the same source. [Rollout discovery](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/streams/agents/codex.rs#L96-L125)
 
-**Claude Code.** Under `CLAUDE_CONFIG_DIR` (default `~/.claude`), read `projects/<project>/<session>.jsonl` and `projects/<project>/<session>/subagents/agent-*.jsonl`. Read `sessionId`. For a subagent, also read its agent ID from the record or filename. Orphaned and superseded transcripts are earlier copies. Use them to recover identifiable records in the same session. Skip tool-result files and prompt history. [Claude directory layout](https://code.claude.com/docs/en/claude-directory) · [Subagent files](https://code.claude.com/docs/en/sub-agents)
+**Claude Code.** LC-00b adds the Claude provider root to the local configuration. Under that directory (usually `~/.claude`), read `projects/<project>/<session>.jsonl` and `projects/<project>/<session>/subagents/agent-*.jsonl`. Read `sessionId`. For a subagent, also read its agent ID from the record or filename. Orphaned and superseded transcripts are earlier copies. Use them to recover identifiable records in the same session. Skip tool-result files and prompt history. [Claude directory layout](https://code.claude.com/docs/en/claude-directory) · [Subagent files](https://code.claude.com/docs/en/sub-agents)
 
-An explicit collector root takes precedence over the provider setting. Map selected projects, sessions, or a whole provider root to the destination workspace. A provider home can contain chats for more than one workspace. A selected chat can have no Git metadata.
+The local CLI takes a JSON file with `--config <file>`. At startup it loads one `GlobalConfig` and passes it to the reader. A relative `codexPath` starts at the directory containing the file. The supplied configuration uses `~/.codex`. [Local configuration](../../tracerelic.config.json) · [Configuration contract](local-collector/config.tsp)
+
+Map selected projects, sessions, or a whole provider root to the destination workspace. A provider home can contain chats for more than one workspace. A selected chat can have no Git metadata.
 
 **Session identity.** Use the workspace, provider (`codex` or `claude`), and native session ID. If a Claude child repeats its parent's ID, encode the parent and agent IDs as a distinct child key.
 
@@ -89,7 +91,7 @@ Use one scan operation under `apps/collector`. The command `scan --once` runs it
 
 ### Existing fixture and planned changes
 
-Today, `readCheckpoint(source)` returns an offset and parser state, or `null`. `commit(batch)` compares `expectedOffset` and requires the next offset to advance. `readSession(key)` returns the stored messages, latest usage per ID, metadata, total and coverage. A fixture instance represents one workspace. Keep that instance alive when a test restarts the scanner. [Storage interface](../../apps/collector/src/storage/collector-storage.ts) · [In-memory fixture](../../apps/collector/src/testing/in-memory-collector-storage.ts) · [Existing contract](local-collector/storage.tsp)
+Today, `readCheckpoint(source)` returns an offset and parser state, or `null`. `commit(batch)` compares `expectedOffset` and requires the next offset to advance. `readSession(key)` returns the stored messages, latest usage per ID, metadata, total and coverage. A fixture instance represents one workspace. Keep that instance alive when a test restarts the scanner. [Storage interface](../../apps/collector/src/storage/collector-storage.ts) · [In-memory fixture](../../apps/collector/test/fixtures/in-memory-collector-storage.ts) · [Existing contract](local-collector/storage.tsp)
 
 Keep the existing outcomes `committed`, `conflict` and `invalid`. Require RFC 3339 timestamps and nonnegative safe integer counts, including the session total. Cache reads and writes are disjoint parts of inclusive input. Reasoning is part of output. An identical message is safe to replay. Conflicting content under an immutable message ID rejects the batch. A higher usage revision replaces the prior observation. Equal revisions must agree. An invalid batch changes nothing.
 
@@ -111,10 +113,11 @@ Use synthetic files in a temporary directory. Run the scanner against the fixtur
 
 Track new sessions, rejected lines and batches, known gaps, version conflicts, and the age of the oldest pending source. Log identifiers and byte ranges. Keep chat text in the stored conversation. At the API, measure commit outcomes and latency. Set a production service objective after measurements exist.
 
-Use the repository's pinned Node and Bun versions. Run the checks below from the repository root. The storage check builds the project, compiles TypeSpec, checks dependency rules, and runs the four implemented storage scenarios. Keep those behaviors when updating the test steps for the revised interface. When the client and API share generated models, check in CI that they match TypeSpec. [Storage scenarios](local-collector/storage.feature) · [Component manifest](../../apps/collector/component.yaml) · [Dependency rules](../../.dependency-cruiser.collector.json) · [Repository checks](../../README.md#run-the-checks)
+Use the repository's pinned Node and Bun versions. Run the checks below from the repository root. The storage check builds the project, compiles TypeSpec, checks dependency rules, and runs the four implemented storage scenarios. Keep those behaviors when updating the test steps for the revised interface. When the client and API share generated models, check in CI that they match TypeSpec. [Storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) · [Component manifest](../../apps/collector/component.yaml) · [Dependency rules](../../.dependency-cruiser.collector.json) · [Repository checks](../../README.md#run-the-checks)
 
 ```sh
 bun install --frozen-lockfile
+bun run check:collector-history
 bun run check:collector-storage
 bun run test
 bun run lint
@@ -159,6 +162,22 @@ Feature: Read local Codex history
 
 1. **Interface.** Start with one `session_meta` header and one `response_item` message. Call `LocalLLMHistoryCodex` through the abstract type. Assert the session ID, recorded time and original payload.
 2. **Interface.** Run the four-row example in an active rollout and then in the archive. Put the file's modification time outside the range. Include an in-range `token_count` record in a separate case and check that its provider fields survive.
+
+| LC-00a constraint | Decision and check |
+| --- | --- |
+| Behavior | Read complete Codex records in the requested window from active and archived rollouts. Run the [date scenario](../../apps/collector/test/interface/history/codex-history.feature) with `bun run check:collector-history` and the interface tests with `bun run test`. |
+| Observability | Each result gives the caller the original timestamp, source path and line number. A failed file read surfaces its filesystem error. This local method has no service objective. |
+| Architecture | The reader uses local files and the shared harness identity. The [dependency check](../../.dependency-cruiser.collector.json) keeps it independent of storage and the API and rejects production imports of test code across workspaces. Run `bun run check:collector-deps`. |
+| Interface | The [history contract](local-collector/history.tsp) defines the date arguments and the original provider record with its source position. The [collector manifest](../../apps/collector/component.yaml) lists the boundary. `bun run check:collector-history` compiles the TypeSpec and TypeScript and checks returned entries against the emitted schema. |
+
+| Local startup constraint | Decision and check |
+| --- | --- |
+| Behavior | `collector history --config <file> --from <instant> --to <instant>` reads the selected provider root and writes the matching entries as a JSON array. Run the [startup scenarios](../../apps/collector/test/acceptance/config/local-config.feature) with `bun run check:collector-history`. |
+| Observability | A startup error writes a diagnostic to standard error and exits with a failure status. Config file errors identify the file. Invalid settings identify the field. The startup scenarios check these signals. |
+| Architecture | The CLI loads the file once. Readers receive the resulting `GlobalConfig` through their constructors. The [dependency check](../../.dependency-cruiser.collector.json) keeps file loading outside the history reader. |
+| Interface | The [TypeScript file schema](../../apps/collector/src/config/global-config-schema.ts) defines the JSON fields and validates them at startup. The [published contract](local-collector/config.tsp) describes the same inputs. The loader resolves `codexPath` before constructing `GlobalConfig`. Run `bun run test` for loader behavior and `bun run check:collector-history` for schema agreement and the CLI. |
+
+Opening a pull request, marking it ready for review, reopening it, or pushing new commits runs the workspace Node tests and the collector history, configuration, and storage scenarios. GitHub Actions reports each test group in the pull request check. [PR test workflow](../../.github/workflows/collector.yml)
 
 #### LC-00b · Read Claude Code chats through the same interface
 

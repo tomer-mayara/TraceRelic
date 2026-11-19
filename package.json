@@ -5,12 +5,15 @@
   "packageManager": "bun@1.4.4",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
-    "lint": "oxlint apps/collector/src apps/api/src apps/api/scripts packages/shared/src",
-    "check:collector-storage": "bun run build && tsp compile docs/specs/local-collector/storage.tsp --pretty false && depcruise --config .dependency-cruiser.collector.json apps/collector/src && bun run --cwd apps/collector check:storage-scenarios",
+    "collector": "bun apps/collector/src/cli.ts",
+    "lint": "oxlint apps packages test",
+    "check:collector-storage": "bun run build && tsp compile docs/specs/local-collector/storage.tsp --pretty false && bun run check:collector-deps && bun run --cwd apps/collector check:storage-scenarios",
+    "check:collector-history": "bun run build && tsp compile docs/specs/local-collector/history.tsp --pretty false --output-dir dist/collector-history --option @typespec/json-schema.bundleId=history.schema.json && bun run check:collector-deps && bun run --cwd apps/collector check:history-scenarios && bun run --cwd apps/collector check:config-scenarios",
+    "check:collector-deps": "depcruise --config .dependency-cruiser.collector.json \"{apps,packages}/*/{src,scripts,test}\"",
     "habit-hooks": "uvx --from 'habit-hooks[typescript]==1.5.0' habit-hooks",
     "typecheck": "tsrs --noEmit",
-    "build": "bun run typecheck && bun run --filter '@tracerelic/*' compile",
-    "test": "bun run build && node --enable-source-maps --test \"{apps,packages}/*/dist/**/*.test.js\"",
+    "build": "bun run typecheck && bun run --filter '@tracerelic/*' compile && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file .swcrc",
+    "test": "bun run build && node --enable-source-maps --test \"{apps,packages}/*/dist/test/{unit,integration,interface,acceptance}/**/*.test.js\" \"dist/test/acceptance/**/*.test.js\"",
     "db:check": "node --env-file=.env apps/api/scripts/check-db.mjs"
   },
   "devDependencies": {

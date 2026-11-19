@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "module": "NodeNext",
+    "allowImportingTsExtensions": true,
     "target": "ES2022",
     "types": ["node"],
     "strict": true,
@@ -8,5 +9,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["apps/*/src/**/*.ts", "packages/*/src/**/*.ts"]
+  "include": ["apps/*/src/**/*.ts", "apps/*/test/**/*.ts", "packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "test/**/*.ts"]
 }
