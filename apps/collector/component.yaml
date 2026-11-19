@@ -3,6 +3,7 @@ spec: ../../docs/specs/local-collector.md
 behavior:
   - test/acceptance/storage/storage.feature
   - test/interface/history/codex-history.feature
+  - test/interface/history/claude-history.feature
   - test/acceptance/config/local-config.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp

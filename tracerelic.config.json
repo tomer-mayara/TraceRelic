@@ -1,3 +1,4 @@
 {
-  "codexPath": "~/.codex"
+  "codexPath": "~/.codex",
+  "claudePath": "~/.claude"
 }

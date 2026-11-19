@@ -23,9 +23,9 @@ Feature: Read token use for a planning chat
 
 **Codex.** Under the configured `codexPath`, find `rollout-*.jsonl` in `sessions/` and `archived_sessions/`. Read the ID from `session_meta.payload.id` or `session_id` in the same payload. A move to the archive keeps the same source. [Rollout discovery](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/streams/agents/codex.rs#L96-L125)
 
-**Claude Code.** LC-00b adds the Claude provider root to the local configuration. Under that directory (usually `~/.claude`), read `projects/<project>/<session>.jsonl` and `projects/<project>/<session>/subagents/agent-*.jsonl`. Read `sessionId`. For a subagent, also read its agent ID from the record or filename. Orphaned and superseded transcripts are earlier copies. Use them to recover identifiable records in the same session. Skip tool-result files and prompt history. [Claude directory layout](https://code.claude.com/docs/en/claude-directory) · [Subagent files](https://code.claude.com/docs/en/sub-agents)
+**Claude Code.** Under the configured `claudePath` (usually `~/.claude`), read `projects/<project>/<session>.jsonl` and `projects/<project>/<session>/subagents/agent-*.jsonl`. Read `sessionId`. For a subagent, also read its agent ID from the record or filename. Orphaned and superseded transcripts are earlier copies. Use them to recover identifiable records in the same session. Skip tool-result files and prompt history. [Claude directory layout](https://code.claude.com/docs/en/claude-directory) · [Subagent files](https://code.claude.com/docs/en/sub-agents)
 
-The local CLI takes a JSON file with `--config <file>`. At startup it loads one `GlobalConfig` and passes it to the reader. A relative `codexPath` starts at the directory containing the file. The supplied configuration uses `~/.codex`. [Local configuration](../../tracerelic.config.json) · [Configuration contract](local-collector/config.tsp)
+The local CLI takes a JSON file with `--config <file>`. At startup it loads one `GlobalConfig` and passes it to the readers. Relative provider paths start at the directory containing the file. The supplied configuration selects `~/.codex` and `~/.claude`. A configuration with only `codexPath` reads only Codex. [Local configuration](../../tracerelic.config.json) · [Configuration contract](local-collector/config.tsp)
 
 Map selected projects, sessions, or a whole provider root to the destination workspace. A provider home can contain chats for more than one workspace. A selected chat can have no Git metadata.
 
@@ -199,6 +199,13 @@ Feature: Read local Claude Code history
 
 1. **Interface.** Run the LC-00a date assertions against `LocalLLMHistoryClaude` with native Claude fixtures. Check a plain user string and an assistant row with content blocks and `message.usage`.
 2. **Interface.** Read two project files through one configured Claude root. Add a nested subagent file that repeats its parent's `sessionId`. Check that the child has its own session key.
+
+| LC-00b constraint | Decision and check |
+| --- | --- |
+| Behavior | Read records from all projects under the configured Claude root within the same half-open date window as Codex. The CLI returns records from the configured providers. Run the [two-project scenario](../../apps/collector/test/interface/history/claude-history.feature) and the [startup scenarios](../../apps/collector/test/acceptance/config/local-config.feature) with `bun run check:collector-history`. |
+| Observability | Each result includes the original timestamp, file path and one-based line number. Filesystem errors reach the caller. Run the reader interface tests with `bun run test`. |
+| Architecture | Both readers receive the resolved configuration and share the date filter and complete JSONL record reader. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply to both. Run `bun run check:collector-deps`. |
+| Interface | The [config contract](local-collector/config.tsp) adds an optional `claudePath` with the same path rules as `codexPath`. The [history contract](local-collector/history.tsp) retains the original Claude row, including its content and usage. A child that repeats its parent's session ID uses a key formed from both the parent and agent IDs. Run `bun run check:collector-history` for the [collector manifest](../../apps/collector/component.yaml) scenarios and schema checks. |
 
 #### LC-00c · Check date boundaries and repeat reads for both providers
 

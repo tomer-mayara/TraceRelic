@@ -9,6 +9,10 @@ model GlobalConfig {
    * A leading ~/ selects the current user's home directory. */
   @pattern("^(?=[\\s\\S]*\\S)[^\\u0000]+$")
   codexPath: string;
+  /** Claude Code provider root. It follows the same path rules as codexPath.
+   * Omit this field to read only Codex history. */
+  @pattern("^(?=[\\s\\S]*\\S)[^\\u0000]+$")
+  claudePath?: string;
 }
 
 interface GlobalConfigLoader {

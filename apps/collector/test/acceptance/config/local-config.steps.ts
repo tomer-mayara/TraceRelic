@@ -25,6 +25,14 @@ Given("a configuration with an empty Codex path", async function (this: ConfigSc
   this.path = await this.fixture.writeConfig("");
 });
 
+Given("a configuration with a Codex chat {string} and a Claude chat {string} in separate directories", async function (
+  this: ConfigScenario, codexId: string, claudeId: string,
+) {
+  this.path = await this.fixture.writeConfig("..", "../claude");
+  await this.fixture.writeChat(this.fixture.configured, codexId);
+  await this.fixture.writeClaudeChat(claudeId);
+});
+
 When("I read February 1 history with that configuration", function (this: ConfigScenario) {
   this.result = this.fixture.history(this.path);
 });
@@ -41,4 +49,11 @@ Then("the collector reports a configuration error for {string}", function (this:
   assert.equal(this.result.stdout, "");
   assert(this.result.stderr.includes(field), this.result.stderr);
   assert(this.result.stderr.includes("local.json"), this.result.stderr);
+});
+
+Then("the collector returns the chats {string} and {string}", function (this: ConfigScenario, one: string, two: string) {
+  assert.equal(this.result.status, 0, this.result.stderr);
+  const history: unknown = JSON.parse(this.result.stdout);
+  assert(Array.isArray(history));
+  assert.deepEqual(history.map(entry => entry.harness + "/" + entry.sessionId).sort(), [one, two].sort());
 });

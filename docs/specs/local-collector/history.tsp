@@ -6,6 +6,8 @@ using TypeSpec.JsonSchema;
 @jsonSchema
 namespace TraceRelic.Collector;
 
+/** Claude records use their native session ID. A subagent that repeats its
+ * parent's ID uses <parent>/subagents/<agent>, with each ID percent-encoded. */
 model LocalHistoryEntry extends SessionKey {
   /** Absolute path of the transcript at the time of the read. */
   @minLength(1) sourceFile: string;

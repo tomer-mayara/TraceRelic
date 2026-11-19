@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import { GlobalConfigLoader } from "./config/global-config-loader.ts";
-import { LocalLLMHistoryCodex } from "./history/local-llm-history-codex.ts";
+import { LocalLLMHistoryClaude, LocalLLMHistoryCodex } from "./history/index.ts";
 import { isRecordedTimestamp } from "./recorded-timestamp.ts";
 
 const usage = "Usage: collector history --config <file> --from <instant> --to <instant>";
@@ -22,8 +22,9 @@ async function main(args: string[]): Promise<void> {
   const from = instant("--from", values.from);
   const to = instant("--to", values.to);
   const config = await GlobalConfigLoader.load(values.config);
-  const entries = await new LocalLLMHistoryCodex(config).readLocalHistory(from, to);
-  console.log(JSON.stringify(entries));
+  const readers = [new LocalLLMHistoryCodex(config), new LocalLLMHistoryClaude(config)];
+  const entries = await Promise.all(readers.map(reader => reader.readLocalHistory(from, to)));
+  console.log(JSON.stringify(entries.flat()));
 }
 
 try {

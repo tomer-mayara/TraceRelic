@@ -73,3 +73,30 @@ test("resolves a relative filename before asynchronous I/O", async t => {
     process.chdir(original);
   }
 });
+
+test("resolves the optional Claude path with the same rules as the Codex path", async t => {
+  const config = await ConfigFileFixture.create(t);
+  const absolute = join(config.directory, "absolute");
+  for (const [input, expected] of [
+    [undefined, undefined],
+    ["./providers/../claude", join(config.directory, "claude")],
+    [absolute, absolute],
+    ["~", homedir()],
+    ["~/.claude", join(homedir(), ".claude")],
+  ]) {
+    await config.write(JSON.stringify({ codexPath: "./codex", claudePath: input }));
+    assert.equal((await GlobalConfigLoader.load(config.file)).claudePath, expected);
+  }
+});
+
+test("identifies an invalid Claude path in the configuration file", async t => {
+  const config = await ConfigFileFixture.create(t);
+  for (const claudePath of [null, 123, "", " \t ", "bad\0path"]) {
+    await config.write(JSON.stringify({ codexPath: "./codex", claudePath }));
+    await assert.rejects(GlobalConfigLoader.load(config.file), (error: unknown) => {
+      assert.ok(error instanceof Error && error.message.includes(config.file));
+      assert.match(error.message, /claudePath/);
+      return true;
+    });
+  }
+});

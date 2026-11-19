@@ -2,12 +2,12 @@
 
 TraceRelic is a starter for collecting token usage from Codex and Claude Code sessions. The collector lives in `apps/collector`, the API in `apps/api`, and shared TypeScript code in `packages/shared`.
 
-## Read local Codex history
+## Read local Codex and Claude Code history
 
-The collector defines its configuration fields and validation rules in TypeScript. Pass `--config` the JSON values for the instance you want to run. The supplied file selects the usual Codex directory. [TypeScript definition](apps/collector/src/config/global-config-schema.ts) · [tracerelic.config.json](tracerelic.config.json)
+Pass the configuration file to the collector with `--config`. The supplied file selects the usual Codex and Claude Code directories. Omit `claudePath` to read only Codex. [TypeScript definition](apps/collector/src/config/global-config-schema.ts) · [tracerelic.config.json](tracerelic.config.json)
 
 ```json
-{ "codexPath": "~/.codex" }
+{ "codexPath": "~/.codex", "claudePath": "~/.claude" }
 ```
 
 From the repository root, run the history command with an inclusive start and exclusive end. It writes matching records as a JSON array.
@@ -16,21 +16,21 @@ From the repository root, run the history command with an inclusive start and ex
 bun run collector history --config ./tracerelic.config.json --from 2026-02-01T00:00:00Z --to 2026-02-02T00:00:00Z
 ```
 
-The CLI resolves `--config` from the working directory. Within the file, `codexPath` can be absolute, relative to the file's directory, or start with `~/` for the current user's home. To use the reader from TypeScript, load the config once and pass it to the constructor.
+The CLI resolves `--config` from the working directory. Within the file, each provider path can be absolute, relative to the file's directory, or start with `~/` for the current user's home. From TypeScript, pass the resolved configuration to `LocalLLMHistoryCodex` or `LocalLLMHistoryClaude`.
 
 ```ts
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
-import { LocalLLMHistoryCodex } from "@tracerelic/collector/history";
+import { LocalLLMHistoryClaude } from "@tracerelic/collector/history";
 
 const config = await GlobalConfigLoader.load("./tracerelic.config.json");
-const reader = new LocalLLMHistoryCodex(config);
+const reader = new LocalLLMHistoryClaude(config);
 const entries = await reader.readLocalHistory(
   new Date("2026-02-01T00:00:00Z"),
   new Date("2026-02-02T00:00:00Z"),
 );
 ```
 
-Run `bun run check:collector-history` to check startup and the reader. Run `bun run check:collector-storage` to exercise the in-memory storage fixture. [Local collector engineering spec](docs/specs/local-collector.md)
+Run `bun run check:collector-history` to check startup and both readers. Run `bun run check:collector-storage` to exercise the in-memory storage fixture. [Local collector engineering spec](docs/specs/local-collector.md)
 
 ## Run the checks
 

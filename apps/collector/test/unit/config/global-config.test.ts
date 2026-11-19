@@ -14,3 +14,12 @@ test("GlobalConfig rejects empty, relative and NUL-containing paths", () => {
     assert.throws(() => new GlobalConfig(path), /codexPath/);
   }
 });
+
+test("GlobalConfig stores an optional normalized Claude path", () => {
+  const root = tmpdir();
+  assert.equal(new GlobalConfig(root).claudePath, undefined);
+  assert.equal(new GlobalConfig(root, `${root}${sep}a${sep}..${sep}claude`).claudePath, join(root, "claude"));
+  for (const path of ["", "relative/claude", join(root, "bad\0path")]) {
+    assert.throws(() => new GlobalConfig(root, path), /claudePath/);
+  }
+});

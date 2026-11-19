@@ -33,9 +33,16 @@ export class GlobalConfigLoader {
       throw new Error(`Invalid configuration file ${filename}. ${reason}`);
     }
 
-    const { codexPath } = config;
-    const fromHome = codexPath === "~" || codexPath.startsWith("~/");
-    const absolutePath = fromHome ? join(homedir(), codexPath.slice(2)) : resolve(dirname(filename), codexPath);
-    return new GlobalConfig(absolutePath);
+    const { codexPath, claudePath } = config;
+    const directory = dirname(filename);
+    return new GlobalConfig(
+      GlobalConfigLoader.resolvePath(directory, codexPath),
+      claudePath === undefined ? undefined : GlobalConfigLoader.resolvePath(directory, claudePath),
+    );
+  }
+
+  private static resolvePath(directory: string, path: string): string {
+    const fromHome = path === "~" || path.startsWith("~/");
+    return fromHome ? join(homedir(), path.slice(2)) : resolve(directory, path);
   }
 }
