@@ -16,6 +16,22 @@ bun run test
 
 `bun run test` checks types with `tsrs`, builds each workspace with SWC, and runs the compiled tests with Node's built-in test runner. Expect two passing tests. One exercises the collector's native SQLite binding and the other sends a request to Fastify in memory.
 
+## Run Habit Hooks
+
+Run the scan manually from the repository root. Install the Bun dependencies above and make `uvx` available by installing uv. The command uses Habit Hooks **1.5.0** with Python **3.11 or later**. [Install uv](https://docs.astral.sh/uv/getting-started/installation/) · [Habit Hooks 1.5.0](https://pypi.org/project/habit-hooks/1.5.0/)
+
+```sh
+bun run habit-hooks --all
+bun run habit-hooks --file apps/collector/src/environment.test.ts
+bun run habit-hooks --branch main
+```
+
+ESLint checks TypeScript, TSX, and workspace `.mjs` scripts. Function limits are 60 code lines for TypeScript, 120 for TSX, and 200 for tests and scripts. The file limit is 500 code lines. jscpd flags duplicated blocks of at least 10 lines and 100 tokens. Knip checks dependencies across all workspaces, including during a single-file scan. Review the reported findings as well as the exit status.
+
+Knip's two root exceptions cover Habit Hooks tooling. The generic plugin launches `jscpd`, and the TypeScript plugin declares `ts-morph` as a prerequisite. ESLint's parser uses the TypeScript 6 JavaScript API. `bun run lint` runs Oxlint, and `bun run typecheck` uses `tsrs`.
+
+On the initial scaffold, the scan exits with status 1 because the API declares `@tracerelic/shared` and `node-pg-migrate` before it uses them. Both findings are visible in the scan.
+
 ## Connect to PostgreSQL
 
 From a fresh checkout, copy `.env.example` to `.env`. If you already have a `.env` file, add the `DATABASE_URL` entry to it. The example points to the local Compose service at `127.0.0.1:55432`.

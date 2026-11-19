@@ -1,0 +1,15 @@
+{
+  "path": ["."],
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+    "**/coverage/**",
+    "**/.habit-hooks/**"
+  ],
+  "format": ["typescript", "tsx", "javascript"],
+  "threshold": 0,
+  "minLines": 10,
+  "minTokens": 100,
+  "mode": "weak"
+}
