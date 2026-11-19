@@ -1,0 +1,7 @@
+name: shared
+spec: ../../docs/specs/shared-logging.md
+behavior:
+  - test/acceptance/logging/logging.feature
+interface:
+  - ../../docs/specs/shared-logging/logging.tsp
+dependencyRules: ../../docs/specs/shared-logging/dependencies.json

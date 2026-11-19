@@ -25,6 +25,12 @@ jobs:
       - name: Test collector storage
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run check:collector-storage
+      - name: Test shared logging
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bun run check:shared-logging
+      - name: Lint workspace
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bun run lint
       - name: Run workspace tests
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run test

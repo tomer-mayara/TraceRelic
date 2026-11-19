@@ -1,0 +1,20 @@
+{
+  "extends": "../../../.dependency-cruiser.collector.json",
+  "forbidden": [
+    {
+      "name": "shared-logging-is-independent-of-apps",
+      "severity": "error",
+      "from": { "path": "^packages/shared/src/logging/" },
+      "to": { "path": "^apps/", "reachable": true }
+    },
+    {
+      "name": "only-the-shared-logger-imports-tslog",
+      "severity": "error",
+      "from": {
+        "path": "^(apps|packages)/[^/]+/(src|scripts)/",
+        "pathNot": "^packages/shared/src/logging/logger\\.ts$"
+      },
+      "to": { "path": "(^|/)tslog(/|$)" }
+    }
+  ]
+}
