@@ -1,9 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { Ajv2020 } from "ajv/dist/2020.js";
-import { fullFormats } from "ajv-formats/dist/formats.js";
+import { isRecordedTimestamp } from "#src/recorded-timestamp";
 import type {
   Batch, Checkpoint, CollectorStorage, CommitResult, Coverage, Message, SessionKey, SessionView, StreamKey, Usage,
-} from "../storage/collector-storage.js";
+} from "../../src/storage/collector-storage.ts";
 
 function encodeSessionKey(key: SessionKey): string {
   return JSON.stringify([key.harness, key.sessionId]);
@@ -27,10 +26,8 @@ function hasValidCounts(usage: Usage): boolean {
     && reasoning <= usage.outputTokens;
 }
 
-const validTimestamp = new Ajv2020({ formats: fullFormats }).compile({ type: "string", format: "date-time" });
-
 function hasValidIdentity(record: Message | Usage): boolean {
-  return record.id.length > 0 && validTimestamp(record.at);
+  return record.id.length > 0 && isRecordedTimestamp(record.at);
 }
 
 function definedFields<T extends object>(fields: T): T {

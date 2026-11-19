@@ -12,6 +12,31 @@ rule, contract, or collaboration with a focused test. Apply red–green–refact
 3. **Refactor.** With the test green, simplify the code while preserving the
    behavior. Rerun the affected tests after each refactor.
 
+## Test locations
+
+Place each component's `test/` directory beside its `src/` directory. Every test
+must live in the subdirectory for its type.
+
+| Test type | Required directory |
+| --- | --- |
+| Unit | `test/unit/` |
+| Integration | `test/integration/` |
+| Interface | `test/interface/` |
+| Acceptance | `test/acceptance/` |
+
+For example, unit tests for `apps/collector/src/history/` belong in
+`apps/collector/test/unit/history/`. Keep step definitions with their suites.
+Name Node test files `*.test.ts`.
+
+All test fixtures must live under `test/fixtures/`, including shared fixture
+code, mock adapters, and fixture data. For example, place the collector's
+rollout fixture at `apps/collector/test/fixtures/codex-rollout-fixture.ts`.
+Production code must never import or call test fixtures.
+
+Acceptance suites that span components may use a higher-level `test/acceptance/` directory.
+For example, a repository-wide scenario can live at
+`test/acceptance/collector-api.test.ts` with its fixtures under `test/fixtures/`.
+
 ## Test Levels
 
 - **Acceptance:** The user or caller's outcome through the same entry point used in production.
@@ -62,7 +87,8 @@ For a refactor of untested code, first capture its current behavior in a passing
 
 ## Implementation and verification
 
-- Write all code in TypeScript, including tests and scripts. Use precise types
+- Write all code in TypeScript, including tests and scripts. Use the source
+  file's TypeScript extension in relative imports and re-exports. Use precise types
   for inputs, state, and results. Start with `unknown` for unverified input and
   narrow it before use.
 - Strongly prefer classes over standalone functions. Group related state and
@@ -74,6 +100,6 @@ For a refactor of untested code, first capture its current behavior in a passing
 - If a constraint changes, update the plan and its artifact before implementing
   the revised behavior.
 
-Place TypeScript tests beside the code they exercise as `*.test.ts`. Run
-`bun run test`, `bun run lint`, and the checks named in the plan on the combined
-change. See the [repository checks](../../README.md#run-the-checks).
+Include new test locations in type checking, compilation, and the relevant test
+runner. Run `bun run test`, `bun run lint`, and the checks named in the plan on
+the combined change. See the [repository checks](../../README.md#run-the-checks).

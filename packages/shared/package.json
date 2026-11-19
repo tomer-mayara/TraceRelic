@@ -6,5 +6,7 @@
   "exports": {
     ".": { "types": "./src/index.ts", "import": "./dist/index.js" }
   },
-  "scripts": { "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc" }
+  "scripts": {
+    "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc"
+  }
 }

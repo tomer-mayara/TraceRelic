@@ -7,10 +7,25 @@
       "to": { "path": "(^apps/api/|(^|/)(@supabase/|pg(/|$)))" }
     },
     {
-      "name": "collector-runtime-excludes-test-fixtures",
+      "name": "production-excludes-test-code",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/", "pathNot": "(^|/)testing/|\\.test\\.ts$" },
-      "to": { "path": "^apps/collector/src/testing/" }
+      "from": { "path": "^(apps|packages)/[^/]+/(src|scripts)/" },
+      "to": {
+        "path": ["^(dist/)?test/", "^(apps|packages)/[^/]+/(dist/)?test/"],
+        "reachable": true
+      }
+    },
+    {
+      "name": "history-receives-global-config",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/history/" },
+      "to": { "path": "^apps/collector/src/config/global-config-loader\\.ts$", "reachable": true }
+    },
+    {
+      "name": "local-history-is-independent-of-storage",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/history/" },
+      "to": { "path": "^apps/collector/src/storage/|(^|/)(better-sqlite3|node:sqlite)(/|$)" }
     },
     {
       "name": "storage-port-is-independent",
@@ -21,6 +36,10 @@
   ],
   "options": {
     "doNotFollow": { "path": "node_modules" },
+    "enhancedResolveOptions": {
+      "exportsFields": ["exports"],
+      "conditionNames": ["types", "import", "node", "default"]
+    },
     "tsPreCompilationDeps": true,
     "tsConfig": { "fileName": "tsconfig.json" }
   }

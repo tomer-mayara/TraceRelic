@@ -1,11 +1,9 @@
 import "@typespec/json-schema";
+import "./session-key.tsp";
 using TypeSpec.JsonSchema;
 
 @jsonSchema
 namespace TraceRelic.Collector;
-
-@minLength(1)
-scalar Identifier extends string;
 
 @minValue(0)
 @maxValue(9007199254740991)
@@ -14,15 +12,9 @@ scalar Count extends integer;
 @minValue(1)
 scalar Revision extends Count;
 
-union Harness { "codex", "claude" }
 union Role { "user", "assistant" }
 union Coverage { "unknown", "partial", "reported" }
 union CommitResult { "committed", "conflict", "invalid" }
-
-model SessionKey {
-  harness: Harness;
-  sessionId: Identifier;
-}
 
 model StreamKey extends SessionKey {
   streamId: Identifier;

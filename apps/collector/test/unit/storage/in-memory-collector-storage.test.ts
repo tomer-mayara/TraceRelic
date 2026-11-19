@@ -1,26 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Batch, Message, StreamKey, Usage } from "../storage/collector-storage.js";
-import { InMemoryCollectorStorage } from "./in-memory-collector-storage.js";
-
-const source: StreamKey = { harness: "claude", sessionId: "chat-1", streamId: "main-v1" };
-const planning: Message = {
-  id: "m1", at: "2026-01-01T00:00:00Z", role: "user", text: "Plan the search feature",
-};
-
-function batch(expectedOffset: number, fields: Partial<Batch> = {}): Batch {
-  return {
-    source, expectedOffset, checkpoint: { offset: expectedOffset + 10, parserState: "{}" },
-    messages: [], usage: [], ...fields,
-  };
-}
-
-function request(fields: Partial<Usage> = {}): Usage {
-  return {
-    id: "req-1/msg-1", revision: 1, at: planning.at,
-    inputTokens: 40, outputTokens: 2, ...fields,
-  };
-}
+import type { Batch, Usage } from "../../../src/storage/collector-storage.ts";
+import { batch, planning, request, source } from "../../fixtures/collector-storage-fixture.ts";
+import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
 test("a planning chat preserves its message and has unknown usage", async () => {
   const store = new InMemoryCollectorStorage();
