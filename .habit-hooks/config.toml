@@ -1,0 +1,21 @@
+plugins = ["typescript", "generic"]
+files = [
+  "**/*.ts",
+  "**/*.tsx",
+  "**/scripts/**/*.mjs",
+  "!**/node_modules/**",
+  "!**/dist/**",
+  "!**/build/**",
+  "!**/coverage/**",
+]
+
+[sensors.eslint]
+args = ["--config", ".habit-hooks/eslint.config.mjs"]
+
+# ESLint counts code lines and applies the test and script limits.
+[sensors.line-count]
+disabled = true
+
+# Follow the reference policy, which permits self-explanatory code.
+[sensors.comment]
+disabled = true

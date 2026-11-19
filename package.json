@@ -1,0 +1,29 @@
+{
+  "name": "tracerelic",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.4",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "lint": "oxlint apps/collector/src apps/api/src apps/api/scripts packages/shared/src",
+    "habit-hooks": "uvx --from 'habit-hooks[typescript]==1.5.0' habit-hooks",
+    "typecheck": "tsrs --noEmit",
+    "build": "bun run typecheck && bun run --filter '@tracerelic/*' compile",
+    "test": "bun run build && node --enable-source-maps --test \"{apps,packages}/*/dist/**/*.test.js\"",
+    "db:check": "node --env-file=.env apps/api/scripts/check-db.mjs"
+  },
+  "devDependencies": {
+    "@swc/cli": "0.8.2",
+    "@swc/core": "1.16.22",
+    "@types/node": "26.6.6",
+    "@typescript-eslint/eslint-plugin": "8.72.1",
+    "@typescript-eslint/parser": "8.72.1",
+    "eslint": "10.14.0",
+    "jscpd": "5.4.2",
+    "knip": "6.44.1",
+    "oxlint": "1.94.0",
+    "ts-morph": "28.0.0",
+    "tsrs": "7.1.0-beta.tsrs3",
+    "typescript": "npm:@typescript/typescript6@6.0.2"
+  }
+}
