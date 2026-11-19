@@ -1,0 +1,18 @@
+services:
+  db:
+    image: postgres:18.7
+    environment:
+      POSTGRES_DB: feature_tokens
+      POSTGRES_USER: tracker
+      POSTGRES_PASSWORD: tracker_local
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "tracker", "-d", "feature_tokens"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  pgdata:
