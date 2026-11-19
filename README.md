@@ -30,8 +30,6 @@ ESLint checks TypeScript, TSX, and workspace `.mjs` scripts. Function limits are
 
 Knip's two root exceptions cover Habit Hooks tooling. The generic plugin launches `jscpd`, and the TypeScript plugin declares `ts-morph` as a prerequisite. ESLint's parser uses the TypeScript 6 JavaScript API. `bun run lint` runs Oxlint, and `bun run typecheck` uses `tsrs`.
 
-On the initial scaffold, the scan exits with status 1 because the API declares `@tracerelic/shared` and `node-pg-migrate` before it uses them. Both findings are visible in the scan.
-
 ## Connect to PostgreSQL
 
 From a fresh checkout, copy `.env.example` to `.env`. If you already have a `.env` file, add the `DATABASE_URL` entry to it. The example points to the local Compose service at `127.0.0.1:55432`.
