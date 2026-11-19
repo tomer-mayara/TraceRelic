@@ -230,6 +230,13 @@ Feature: Use adjacent history windows
 2. **Interface.** Read an unfinished final line. The first query omits it. Append the newline and repeat the query twice. Each later result contains the record once in source order.
 3. **Interface.** Give the reader a regular file as its configured root. The call reports the filesystem error. This distinguishes a failed read from a successful empty result.
 
+| LC-00c constraint | Decision and check |
+| --- | --- |
+| Behavior | Both providers assign a midnight record to the day that starts at that instant. Run the [adjacent-window scenario](../../apps/collector/test/interface/history/history-windows.feature) with `bun run check:collector-history`. Run `bun run test` for empty windows and reads before and after a writer finishes a line. |
+| Observability | A successful empty read returns an empty list. Invalid dates raise `RangeError`. A regular file used as a provider root raises a filesystem error. The shared interface tests check each outcome on both readers. |
+| Architecture | Each query reads the provider files independently of storage. The existing [dependency rules](../../.dependency-cruiser.collector.json) cover both readers. Run `bun run check:collector-deps`. |
+| Interface | The [history contract](local-collector/history.tsp) specifies equal endpoints and the newline that completes a record. The [collector manifest](../../apps/collector/component.yaml) includes the two-provider scenario in the existing history check. |
+
 ### Fixture-backed collector
 
 #### LC-01 · Read a Codex planning chat

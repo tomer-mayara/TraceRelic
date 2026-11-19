@@ -77,11 +77,3 @@ test("skips prompt history, tool-result files, and unrelated files inside the su
   const reader: LocalLLMHistory = new LocalLLMHistoryClaude(new GlobalConfig(join(fixture.home, "codex"), fixture.home));
   assert.deepEqual(await reader.readLocalHistory(start, end), []);
 });
-
-test("reports the filesystem error for a Claude root that is a regular file", async t => {
-  const fixture = await Claude.create();
-  t.after(() => fixture.close());
-  const file = await fixture.write("-work-one", "h1", []);
-  const reader: LocalLLMHistory = new LocalLLMHistoryClaude(new GlobalConfig(fixture.home, file));
-  await assert.rejects(reader.readLocalHistory(start, end), { code: "ENOTDIR" });
-});

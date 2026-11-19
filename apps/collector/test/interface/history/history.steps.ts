@@ -8,6 +8,7 @@ import { GlobalConfig, globalConfigFileSchema } from "@tracerelic/collector/conf
 import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type LocalHistoryEntry, type LocalLLMHistory } from "@tracerelic/collector/history";
 import { ClaudeProjectFixture } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
+import { HistoryWindowFixture } from "../../fixtures/history-window-fixture.ts";
 
 const schemaFile = new URL(
   "../../dist/collector-history/history.schema.json", import.meta.resolve("@tracerelic/collector/package.json"),
@@ -32,9 +33,10 @@ BeforeAll(function () {
 });
 
 class HistoryScenario {
-  fixture!: Rollout | ClaudeProjectFixture;
+  fixture!: Rollout | ClaudeProjectFixture | HistoryWindowFixture;
   reader!: LocalLLMHistory;
   entries!: readonly LocalHistoryEntry[];
+  firstDay!: readonly LocalHistoryEntry[];
   messages = new Map<string, object>();
 
   expectMessages(sessions: Record<string, string[]>): void {
@@ -99,4 +101,33 @@ Then("I get only {string} for {string} and {string} for {string}", function (
   this: HistoryScenario, first: string, firstSession: string, second: string, secondSession: string,
 ) {
   this.expectMessages({ [firstSession]: [first], [secondSession]: [second] });
+});
+
+Given("a {} transcript records {string} at {string}", async function (
+  this: HistoryScenario, provider: string, text: string, timestamp: string,
+) {
+  assert(provider === "Codex" || provider === "Claude Code");
+  this.fixture = await HistoryWindowFixture.create(provider);
+  this.reader = this.fixture.reader();
+  const record = this.fixture.message(timestamp, text);
+  this.messages.set(text, record);
+  await this.fixture.write([record]);
+});
+
+const february1 = new Date("2026-02-01T00:00:00Z");
+const february2 = new Date("2026-02-02T00:00:00Z");
+const february3 = new Date("2026-02-03T00:00:00Z");
+
+When("I read February 1 UTC and February 2 UTC as separate one-day windows", async function (this: HistoryScenario) {
+  this.firstDay = await this.reader.readLocalHistory(february1, february2);
+  this.entries = await this.reader.readLocalHistory(february2, february3);
+});
+
+Then("only the February 2 result contains {string}", function (this: HistoryScenario, text: string) {
+  assert.deepEqual(this.firstDay, []);
+  assert.deepEqual(this.entries.map(entry => entry.record), [this.messages.get(text)]);
+});
+
+Then("reading the two days together returns that record once", async function (this: HistoryScenario) {
+  assert.deepEqual(await this.reader.readLocalHistory(february1, february3), this.entries);
 });

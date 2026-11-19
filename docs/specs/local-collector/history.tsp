@@ -22,7 +22,8 @@ model LocalHistoryEntry extends SessionKey {
 }
 
 interface LocalLLMHistory {
-  /** Read complete records from the inclusive start to the exclusive end, in file order per source.
+  /** Read each source anew, in file order, from the inclusive start to the exclusive end.
+   * Equal endpoints return an empty list. A final record becomes readable after its newline.
    * Invalid or reversed dates raise RangeError. File read errors propagate to the caller. */
   readLocalHistory(fromDate: utcDateTime, toDate: utcDateTime): LocalHistoryEntry[];
 }

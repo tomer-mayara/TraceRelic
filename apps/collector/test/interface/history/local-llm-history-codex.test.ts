@@ -114,24 +114,6 @@ test("includes a leap second in the window ending at UTC midnight", async t => {
   assert.deepEqual(await reader.readLocalHistory(midnight, new Date(midnight.getTime() + 1)), []);
 });
 
-test("rejects invalid or reversed date windows", async t => {
-  const fixture = await Rollout.create();
-  t.after(() => fixture.close());
-  const reader: LocalLLMHistory = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
-  const invalid = new Date(NaN);
-  await assert.rejects(reader.readLocalHistory(invalid, end), RangeError);
-  await assert.rejects(reader.readLocalHistory(start, invalid), RangeError);
-  await assert.rejects(reader.readLocalHistory(end, start), RangeError);
-});
-
-test("reports a filesystem error when a regular file is configured as the root", async t => {
-  const fixture = await Rollout.create();
-  t.after(() => fixture.close());
-  const file = await fixture.write([Rollout.header("c1")]);
-  const reader: LocalLLMHistory = new LocalLLMHistoryCodex(new GlobalConfig(file));
-  await assert.rejects(reader.readLocalHistory(start, end), { code: "ENOTDIR" });
-});
-
 test("keeps the rollout session ID when it contains an older copied header", async t => {
   const fixture = await Rollout.create();
   t.after(() => fixture.close());

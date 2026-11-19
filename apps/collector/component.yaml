@@ -4,6 +4,7 @@ behavior:
   - test/acceptance/storage/storage.feature
   - test/interface/history/codex-history.feature
   - test/interface/history/claude-history.feature
+  - test/interface/history/history-windows.feature
   - test/acceptance/config/local-config.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp
