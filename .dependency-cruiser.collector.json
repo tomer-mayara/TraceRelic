@@ -1,0 +1,27 @@
+{
+  "forbidden": [
+    {
+      "name": "collector-uses-storage-port",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/" },
+      "to": { "path": "(^apps/api/|(^|/)(@supabase/|pg(/|$)))" }
+    },
+    {
+      "name": "collector-runtime-excludes-test-fixtures",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/", "pathNot": "(^|/)testing/|\\.test\\.ts$" },
+      "to": { "path": "^apps/collector/src/testing/" }
+    },
+    {
+      "name": "storage-port-is-independent",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/storage/collector-storage\\.ts$" },
+      "to": { "path": "^apps/" }
+    }
+  ],
+  "options": {
+    "doNotFollow": { "path": "node_modules" },
+    "tsPreCompilationDeps": true,
+    "tsConfig": { "fileName": "tsconfig.json" }
+  }
+}

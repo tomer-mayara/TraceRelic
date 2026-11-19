@@ -2,10 +2,18 @@
   "name": "@tracerelic/collector",
   "private": true,
   "type": "module",
-  "scripts": { "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc" },
+  "scripts": {
+    "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc",
+    "check:storage-scenarios": "cucumber-js ../../docs/specs/local-collector/storage.feature --import ./dist/testing/storage.steps.js --format summary"
+  },
   "dependencies": {
     "@tracerelic/shared": "workspace:*",
     "better-sqlite3": "13.2.0"
   },
-  "devDependencies": { "@types/better-sqlite3": "9.6.0" }
+  "devDependencies": {
+    "@cucumber/cucumber": "13.3.0",
+    "@types/better-sqlite3": "9.6.0",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
+  }
 }

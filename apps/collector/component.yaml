@@ -1,0 +1,7 @@
+name: local-collector
+spec: ../../docs/specs/local-collector.md
+behavior: ../../docs/specs/local-collector/storage.feature
+interface: ../../docs/specs/local-collector/storage.tsp
+dependencyRules: ../../.dependency-cruiser.collector.json
+storagePort: src/storage/collector-storage.ts
+storageFixture: src/testing/in-memory-collector-storage.ts
