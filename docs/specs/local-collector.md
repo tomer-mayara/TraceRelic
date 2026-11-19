@@ -1,130 +1,520 @@
 # TraceRelic local transcript collector
 
-**Engineering handoff · Phase 1**
+A developer can read a saved Codex or Claude Code chat and see how many tokens it used. A planning chat counts even if it never edits a file. Show the measured total, the text, and any known gap. Keep enough evidence to link a turn to a feature or pull request later.
 
-A developer can ask “What did this chat use?” and see its captured conversation and measured token total, even when the chat never edited a file. Collect locally persisted Codex and Claude Code sessions from the developer's machine. Keep request-level usage so a later feature can attribute part of a session to a PR.
-
-**Storage decision.** The TraceRelic API owns durable storage remotely. Supabase Postgres is a candidate. The collector talks to a TraceRelic-owned interface. For development, inject the in-memory storage fixture supplied with this spec. The fixture models an acknowledged remote write and runs with synthetic data, without credentials, Docker, or network access. The collector, HTTP transport, and production database adapter described below are engineering work to follow.
+**First delivery.** Build one local scanner. Test it against the existing in-memory storage fixture. **Remote delivery.** Send the same records to the TraceRelic API. The API owns the database. Supabase Postgres is a candidate. Pricing, PR detection, and feature attribution come later.
 
 ## First end-to-end scenario to implement
 
 ```gherkin
-Scenario: Reopening two planning chats preserves their measured usage
-  Given a Codex chat with cumulative token totals of 120, 120, and 200
-  And a Claude Code chat with one request using 40 input tokens
-  And that request reports 2 output tokens and later 91
-  When the collector scans twice and restarts against the same storage
-  Then the Codex session shows 200 tokens and the Claude session shows 131
-  And each original chat message appears once
+@two_chats
+Feature: Read token use for a planning chat
+  Scenario: A restart preserves both chats and picks up new work
+    Given a Codex planning chat has cumulative totals of 120, 120 and 200
+    And one Claude request has 40 input tokens and reports 2 then 91 output tokens
+    When I scan twice and restart the collector against the same storage
+    Then the totals are 200 for Codex and 131 for Claude
+    When I append a 30-token Codex call and scan again
+    Then the totals are 230 for Codex and 131 for Claude
+    And each original text block appears once in its chat
 ```
 
-## Components and data flow
+## What to read
 
-| Owner | Responsibility |
+**Codex.** Under `CODEX_HOME` (default `~/.codex`), find `rollout-*.jsonl` in `sessions/` and `archived_sessions/`. Read the ID from `session_meta.payload.id` or `session_id` in the same payload. A move to the archive keeps the same source. [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-advanced) · [Rollout discovery](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/streams/agents/codex.rs#L96-L125)
+
+**Claude Code.** Under `CLAUDE_CONFIG_DIR` (default `~/.claude`), read `projects/<project>/<session>.jsonl` and `projects/<project>/<session>/subagents/agent-*.jsonl`. Read `sessionId`. For a subagent, also read its agent ID from the record or filename. Orphaned and superseded transcripts are earlier copies. Use them to recover identifiable records in the same session. Skip tool-result files and prompt history. [Claude directory layout](https://code.claude.com/docs/en/claude-directory) · [Subagent files](https://code.claude.com/docs/en/sub-agents)
+
+An explicit collector root takes precedence over the provider setting. Map selected projects, sessions, or a whole provider root to the destination workspace. A provider home can contain chats for more than one workspace. A selected chat can have no Git metadata.
+
+**Session identity.** Use the workspace, provider (`codex` or `claude`), and native session ID. If a Claude child repeats its parent's ID, encode the parent and agent IDs as a distinct child key.
+
+**Source identity.** Also identify the installation and logical transcript. The configuration or credential supplies a stable installation ID. Two installations that read the same chat have separate read positions and share one session. A path can change when a file moves.
+
+**Chat text.** Keep the original text, role, and recorded time for each user or assistant block. For Codex, read visible chat messages and handle formats with paired `response_item` and `event_msg` copies. Keep one copy. For Claude, accept both a plain `message.content` string and an array of typed blocks. A tool-only response can carry usage. Read usage even when there is no chat text to save. Exclude tool output, system instructions, injected environment data, hidden reasoning, and attachments from the conversation. [Codex message fixture](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/tests/fixtures/codex-session-simple.jsonl) · [Claude message fixture](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/tests/fixtures/example-claude-code.jsonl)
+
+**Message order.** Within a source, order blocks by record number and block index. Keep the first verified position on replay. Equal timestamps across independent sources establish no order.
+
+**Repository context.** Store the turn or request ID, working directory, repository and branch that the transcript gives for the record. Leave missing fields unknown. For a session's branch hint, use the most recent recorded branch. Replaying an old turn cannot replace it. Chat text can suggest a PR. To verify that it opened, a later phase can capture a Git host event or a successful tool result with the PR ID.
+
+## How to count tokens
+
+Sum inclusive input and output over the latest accepted measurements owned by the session. Give each measurement a stable ID. Record whether it covers one provider call or an interval between two snapshots. Assign a turn or model only when the evidence identifies it. Count an explicit zero. A missing measurement has no numeric value.
+
+| Stored measurements | Known gap | Session view |
+| --- | --- | --- |
+| None | Either | `unknown`, total `null` |
+| At least one | No | `reported`, sum of measured tokens |
+| At least one | Yes | `partial`, sum of the known tokens |
+
+`reported` describes the records TraceRelic could read. A chat the provider never saved is outside that coverage. The fixture keeps a gap once recorded. A later scan can add verified measurements. Clearing a recorded gap requires a full repair in a later phase.
+
+### Codex
+
+Read `event_msg` records of type `token_count`. Use `turn_context` for the model when available. `info.total_token_usage` is cumulative. `info.last_token_usage` describes the last call. Cached input is part of input. Reasoning output is part of output. If only a cache breakdown is unclear, keep the reliable input and output and leave the breakdown unknown. An empty `info` on a rate-limit update adds no measurement. [Codex token-count fixture](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/tests/fixtures/codex-session-token-count.jsonl)
+
+1. Start at zero only for a verified fresh session. For a file that starts mid-session, keep independently identified calls. Use the first reliable snapshot as the baseline and flag the unknown earlier range. Save the baseline with the checkpoint.
+2. Compare cumulative input and output with the previous baseline. An identical snapshot adds nothing. Subtract any identified calls already counted in that interval. Apply the same check to comparable breakdowns.
+3. Record the last call if it belongs to this change and has not already been counted. Record any remaining difference as an interval. If only cumulative counts exist, store just the interval.
+4. A last-call-only report needs evidence that it is a new call. Two calls can report equal amounts. If counters fall or measurements overlap in an unknown way, keep the independently verified calls. Flag the gap and start a new baseline.
+
+**Example.** Cumulative usage moves from 120 to 200. The last call used 30. The session gained 80 tokens. Attribute 30 to that call and 50 to the interval. If 20 of those 50 were already recorded from an identified call, add only the other 30 to the interval. The final total is 200 in both cases.
+
+Two copies can describe the same interval at different levels of detail. Keep the start and end counters from the same verified history. When a second copy identifies calls inside an accepted interval, replace just that interval with its parts in one write. Their input and output must sum to the original counts. Ignore a later replay of the coarse interval. If the histories cannot be matched, flag the overlap and omit the disputed addition.
+
+### Claude Code
+
+Read `message.usage` on assistant records. Add `input_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens` to get inclusive input. Add `output_tokens` once. Cache-write durations partition the write count. Use their sum if the flat field is absent and the breakdown is complete. For advisor use, the top-level counts include executor iterations. Add each separate `advisor_message` iteration once under its own stable ID. An unsupported breakdown gets a diagnostic. [Claude cache fields](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) · [Advisor usage](https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool#usage-and-billing)
+
+Group updates by `message.id` and `requestId`. If one is missing, match the other only when it identifies one call. Keep the same call ID when the missing field appears later. Use the transcript row's `uuid` and the block index for chat text. One model request can produce several rows.
+
+Compare whole reports for the same call. A provider completion signal takes priority over a provisional report, even when the final count is lower. Among provisional reports with the same fields, accept an update if no count falls and at least one rises. Accept an added breakdown when the known counts agree. Ignore a repeated or older report.
+
+If neither report has priority, keep any independently confirmed measurement. Withhold a disputed provisional measurement from the total and mark a gap. Replaying either disputed report must give the same result. On a correction, read the current stored measurement, keep its original call ID, time and order, and increase its revision once.
+
+### Replays, forks and subagents
+
+Prefer native record IDs. Without one, use the record's stable fields and its occurrence in the verified source history. Include the block index for text. This preserves two identical prompts at different positions. An offset or occurrence count can change after a rewrite. Reuse a fallback ID only where the old and new histories can be matched. Keep accepted records and flag an ambiguous range.
+
+Keep child text in the child chat. Charge each call only to the session that made it. For Codex, use the child's own session header. Match the inherited prefix at the fork point before counting the child. For Claude, check both ordinary forks and subagents. A fork can remap transcript UUIDs. Use provider call IDs or a verified copy boundary. Check available, selected parent files even if discovery finds the child first. Save the earliest uncertain position and parent ID so a later scan can revisit it when new evidence arrives. When ownership cannot be established, keep the chat text and report the gap. Count only calls with a known owner. [Codex fork evidence](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/token_usage/codex.rs#L569-L589) · [Claude session forks](https://platform.claude.com/cookbook/claude-agent-sdk-05-building-a-session-browser)
+
+## Scan and storage
+
+Use one scan operation under `apps/collector`. The command `scan --once` runs it once. The scheduled collector calls it at startup and at each interval. Each provider adapter reads its own format. The scanner sends batches through `CollectorStorage`. Tests inject the fixture. In remote mode the scanner uses a scoped TraceRelic credential over HTTPS. Only `apps/api` connects to the database.
+
+1. Discover the selected files. Open each file, identify its source and record its current end. Load its checkpoint. This gives the next unread byte, parser state, parser version and digest of the accepted bytes.
+2. Verify the accepted prefix before resuming a changed or reopened file. Stream the check once per file per scan. A matching tail can hide a change in the middle. Resume a verified append or archive move at the saved byte. On truncation, a changed prefix, or an older state the parser can rebuild, replay from zero. Use the same replay when new parent evidence resolves an earlier range. Keep accepted history. Pause and report a state that needs a newer parser.
+3. Read complete, newline-terminated UTF-8 records up to the end recorded in step 1. Leave an unfinished line for the next scan. For a malformed complete line, record the source and byte range, flag any possible usage gap, and continue. If a file is replaced or truncated during a read, discard the pending batch and reload the checkpoint.
+4. Save records, parser state and checkpoint in one write. On `conflict` or a lost reply, reload the stored version and checkpoint before retrying. On `invalid`, leave the checkpoint in place, report the rejected range, and continue with other files. A one-time scan reports pending work and returns. The scheduled collector retries with a delay. Neither mode needs a local transcript database.
+
+### Existing fixture and planned changes
+
+Today, `readCheckpoint(source)` returns an offset and parser state, or `null`. `commit(batch)` compares `expectedOffset` and requires the next offset to advance. `readSession(key)` returns the stored messages, latest usage per ID, metadata, total and coverage. A fixture instance represents one workspace. Keep that instance alive when a test restarts the scanner. [Storage interface](../../apps/collector/src/storage/collector-storage.ts) · [In-memory fixture](../../apps/collector/src/testing/in-memory-collector-storage.ts) · [Existing contract](local-collector/storage.tsp)
+
+Keep the existing outcomes `committed`, `conflict` and `invalid`. Require RFC 3339 timestamps and nonnegative safe integer counts, including the session total. Cache reads and writes are disjoint parts of inclusive input. Reasoning is part of output. An identical message is safe to replay. Conflicting content under an immutable message ID rejects the batch. A higher usage revision replaces the prior observation. Equal revisions must agree. An invalid batch changes nothing.
+
+| Ticket | Contract change to make before implementing the behavior |
 | --- | --- |
-| Local collector | Discover files, read completed JSONL records, interpret them with the matching adapter, and submit normalized batches. Start with a single `scan --once` entry point. Startup scans and periodic scans can call the same operation. |
-| Codex and Claude adapters | Extract session identity, optional repository context, original message blocks and measured usage. Each adapter owns its file conventions, accounting rules and serialized parser state. |
-| TraceRelic API | Authenticate the collector, bind it to one workspace, validate each batch and apply it atomically. Serve the acknowledged checkpoint and the session view. The collector receives a scoped TraceRelic credential. Database credentials belong on the server. |
-| Storage fixture | Supply the same asynchronous port for one isolated workspace per instance. Keep the instance alive to simulate restarting the collector against the same remote store. A new instance starts empty. |
+| LC-01 | Add optional source order, block index, turn or request ID, and recorded context. Support earlier records that lack these fields. |
+| LC-03, LC-06 | Keep one current checkpoint per installation and logical source. Return the session version even for a new source. Start a new session at version zero. Normal appends advance the offset. Only an explicit reset can rewind it. |
+| LC-04, LC-05 | Distinguish calls from intervals. Support atomic replacement of a verified interval by its parts. Keep a call's final or provisional status when known. Exclude a disputed measurement from the total until evidence resolves it. Older measurements with no type establish no call-to-turn link. |
+| LC-10, LC-11 | Where a provider call ID is reliable across sessions, store one workspace-wide owner for that call. A confirmed replay adds nothing. If later evidence changes the owner, move the single measurement and update both session versions together. Leave uncertain calls unassigned unless an owner is already proven. |
+| LC-12 | List the sources previously acknowledged for the installation and selected roots. Save source presence at the existing byte with the same version check. Track the highest complete byte known to exist when available. Repeating the same status is harmless. |
 
-Implement the scanner under `apps/collector/src`. Put scheduling in `collector.ts`, byte reading in `transcripts/jsonl-reader.ts`, and provider rules in `providers/codex.ts` and `providers/claude-code.ts`. The included `storage/collector-storage.ts` defines the port that `testing/in-memory-collector-storage.ts` implements for tests. Put the future remote client in the collector and the ingestion handler and database adapter in `apps/api`. Generate shared wire models from the TypeSpec contract when both applications consume it.
+An offset tells the reader where to start. A version tells storage whether a writer is stale. Each writer reads the session version before looking up existing records. Storage checks that version, applies the batch, and increases the version in one transaction. On conflict, reread both the checkpoint and the affected records. This protects a correction from another source in the same session. It also rejects a delayed write after a rewritten file reaches byte 420 a second time.
 
-The only durable inputs on the workstation for this phase are the transcripts the harnesses already write. The accepted read position and parser state live with the remote records. When the service is unavailable, leave the position at its last acknowledgement and catch up from the files on reconnect. This covers outages while the source files are retained. If a previously observed source disappears first, report a coverage gap with its last known position. Coverage starts with files the collector observes. An ephemeral chat or a file removed before discovery leaves no local transcript to recover.
-
-## Discover and read
-
-1. Accept configurable roots. Codex defaults to `~/.codex`, with `CODEX_HOME` as the override. Recursively find `rollout-*.jsonl` in `sessions/` and `archived_sessions/`. Claude Code defaults to `~/.claude/projects/` and resolves `projects/` relative to `CLAUDE_CONFIG_DIR` when set. Include nested subagent transcripts.
-2. Use the harness and its native session ID as the session key, scoped by the authenticated workspace. Read the Codex ID from `session_meta.payload` (`id` or `session_id`) and the Claude ID from `sessionId`. If a Claude subagent repeats the parent's session ID, derive a child session key from the parent ID and the native agent ID, using a reserved, unambiguous encoding. Capture observed working directory, repository, branch and parent identifiers when present. Missing metadata is valid. The latest observed branch is a session hint. Later PR attribution needs the branch observed at the time of the turn.
-3. Identify a logical stream by its native identity and an ordered generation, independently of its path. Moving a rollout into the archive preserves the stream identity. Look up generation zero, verify the saved content anchor, and seek to the acknowledged byte offset. On truncation, a replaced prefix, or an unsupported parser-state version, try successive generation keys until a checkpoint matches or a new generation starts at zero. Reconciliation uses stable record IDs. This lookup also works after a process restart. Save the adapter version, provider state and a prefix digest in the checkpoint. Use a boundary sample on routine appends and verify the committed prefix on suspected rewrites.
-4. Process bounded batches of complete newline-terminated UTF-8 records in file order. Leave an unfinished last line for the next scan. Ignore recognized bookkeeping records. For a malformed completed line or an unsupported usage shape, record a diagnostic with the stream and offset, mark any affected usage incomplete, and continue with the next line. Log counts and identifiers. Keep conversation text in the transcript record.
-5. Send the batch and resulting checkpoint in one commit. After a timeout or disconnection, back off, re-read the checkpoint and resume there. This also handles a lost acknowledgement after a successful write. On `invalid`, report the source and byte range and pause that stream for diagnosis while other streams progress. A filesystem watcher, if added, only triggers the same scan.
-
-## Convert transcripts into records
-
-**Messages.** Keep the original user and assistant text blocks with an ID, timestamp and role, including planning and discussion. Codex `response_item` messages and Claude `message.content` are starting points. Pick one representation if a harness mirrors a message in multiple event types. Preserve separate blocks even if they share a model request. The phase-one message shape covers conversation text. Tool output, hidden reasoning, system instructions and binary attachments are outside it. A later PR detector that needs evidence such as a tool invocation of `gh pr create` will also need a tool-event record or Git-host event.
-
-**Codex.** Read the current model from `turn_context` when available. Read usage from `event_msg` with payload type `token_count`. Keep the prior `info.total_token_usage` snapshot in the parser state. Ignore an identical cumulative snapshot. When it advances, take `info.last_token_usage` if present, otherwise subtract the previous counters. At a verified fresh session start the baseline is zero. If only per-call counts exist, use a stable source identity for the observation. A recognized rate-limit update with empty `info` adds no usage. An unexplained counter decrease or an unresolved inherited baseline creates a gap. Resume measuring at a known boundary.
-
-For example, cumulative totals of 15,569, 33,105 and 33,105 contribute 15,569, 17,536 and 0. Codex `input_tokens` includes cached input. Its `output_tokens` includes reasoning output. [Codex local configuration](https://learn.chatgpt.com/docs/config-file/config-advanced) · [Git AI Codex accounting implementation](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/token_usage/codex.rs#L500-L555)
-
-**Claude Code.** Read assistant `message.usage`. Identify a request using `message.id` and `requestId` when present. Its text may span multiple transcript records, and its usage may be corrected later. Keep the most complete authoritative observation. Calculate normalized input by adding `input_tokens`, `cache_read_input_tokens` and `cache_creation_input_tokens`. For example, 10 ordinary input tokens, 25 cache reads and 5 cache writes yield 40 input tokens. If output snapshots for that request show 2 followed by 91, its final contribution is **131 tokens**. Detailed cache-write durations partition the cache-creation count. [Claude session format](https://platform.claude.com/cookbook/claude-agent-sdk-05-building-a-session-browser) · [Claude token field definitions](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) · [Transcript fixture with repeated request IDs](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/tests/fixtures/example-claude-code.jsonl)
-
-**Ownership and replay.** Count a model call in its originating session. Record the parent link for forks and subagents. A resumed or forked transcript can copy earlier calls. Use the original Claude message/request identities, including matched parent message IDs for known subagent replays. For Codex match inherited usage against the parent prefix before counting new calls. Give a child stream a distinct identity even if its file repeats the parent session ID. When ownership is ambiguous, preserve the text, flag a gap and omit the uncertain charge. Direct session totals sum only owned usage. A future parent rollup can include distinct child calls.
-
-**Stable identities.** Prefer a native message or block ID and provider call ID. Otherwise derive a deterministic ID from the canonical stream and logical source record (the native ordinal when available, or a fingerprint plus its occurrence within the canonical stream). Two identical prompts at different positions are two messages. Keep IDs across archive moves, retries and rescans. A usage correction keeps its ID. Assign a positive revision ordered by the authoritative observations of that call, reproducible on replay. An earlier partial observation keeps its original revision.
-
-## Remote storage contract and fixture
-
-Each storage instance or authenticated request is bound to one workspace. The session key is `(harness, sessionId)`, with harness values `codex` and `claude`. The cursor key adds `streamId`, which identifies the stream generation. Identifiers are nonempty strings. Message and usage timestamps use RFC 3339. Record IDs are unique per session and record kind. The adapter resolves cross-session ownership before storage.
-
-| Operation | Result |
-| --- | --- |
-| `readCheckpoint(source)` | The next unread byte offset and opaque, versioned parser-state string, or `null` before the first acknowledged write. The initial expected offset is 0. |
-| `commit(batch)` | `committed`, `conflict` or `invalid`. A successful write stores the session, messages, usage and new checkpoint together. A transport failure may leave the caller uncertain whether the commit succeeded. |
-| `readSession(key)` | Returns `null` before the session exists. Otherwise returns a detached view with metadata, messages, latest usage per ID, coverage and observed total. Callers order records by timestamp and ID when displaying a timeline. |
-
-The batch has `source`, `expectedOffset`, `checkpoint`, `messages` and `usage`. Messages carry `id`, `at`, `role` (user or assistant) and `text`. Each usage observation carries `id`, `revision`, `at`, input and output counts, and an optional model and breakdown. Optional metadata fields `cwd`, `repository`, `branch` and `parentSessionId` patch the last observed values. A batch may carry only session metadata and its checkpoint, with empty message and usage arrays. Optional `hasGap: true` marks an unresolved usage gap for the session. A completed repair or full rebuild can re-establish coverage in a later phase.
-
-The future HTTP boundary decodes incoming JSON against the wire schema. The fixture accepts typed batches and checks identifiers, timestamps, counts and update rules. Its read methods return independent copies, so mutating a test input or result cannot change an earlier commit.
-
-- **Atomicity and retries.** Compare `expectedOffset` with the stored offset before writing. On `conflict` from a stale or repeated batch, reload the authoritative checkpoint. Only one simultaneous writer at that offset can commit. A valid next offset strictly advances. Invalid content rejects the entire batch, including its checkpoint.
-- **Record updates.** Replaying identical content under the same message ID is idempotent. Different content under that ID is invalid. A higher usage revision replaces the full observation. An older revision is ignored. An equal revision is idempotent for identical data and invalid for different data.
-- **Counts.** Input and output are inclusive nonnegative safe integers. Cache-read and cache-write counts are optional, disjoint subsets of input. Reasoning tokens are an optional subset of output. The observed total sums input plus output over the latest owned observations. A recorded zero is a measured zero. Zero observations produce `null` and `unknown`. When observations exist, use `partial` if a gap was recorded and `reported` otherwise. A partial total is the sum of the known observations.
-
-For the future PostgreSQL adapter, include the authenticated workspace in the unique keys for sessions, stream checkpoints, messages and usage. Use one database transaction for the checkpoint comparison and all record updates, including the first write to a stream. Return `committed` only after the transaction succeeds. The fixture's same-offset race test is an acceptance test for that adapter as well.
-
-### Synthetic batch example
-
-```json
-{
-  "source": { "harness": "claude", "sessionId": "chat-1", "streamId": "main-v1" },
-  "expectedOffset": 0,
-  "checkpoint": { "offset": 420, "parserState": "{\"version\":1}" },
-  "messages": [
-    { "id": "m1", "role": "user", "at": "2026-01-01T00:00:00Z", "text": "Plan the search feature" }
-  ],
-  "usage": [
-    { "id": "req1/msg1", "revision": 1, "at": "2026-01-01T00:00:01Z",
-      "inputTokens": 40, "outputTokens": 2, "cacheReadTokens": 25, "cacheWriteTokens": 5 }
-  ]
-}
-```
-
-This batch returns `committed` and an observed total of 42. Retrying it returns `conflict` and the checkpoint remains 420. A subsequent batch starting at 420 can submit revision 2 with 91 output tokens. The resulting total is 131. Both transcript adapters submit normalized data through this port.
-
-In a TypeScript test beside the fixture, pass the example above to `checkFirstUpload` as a `Batch`.
-
-```ts
-import assert from "node:assert/strict";
-import type { Batch, CollectorStorage } from "../storage/collector-storage.js";
-import { InMemoryCollectorStorage } from "./in-memory-collector-storage.js";
-
-async function checkFirstUpload(batch: Batch) {
-  const remote: CollectorStorage = new InMemoryCollectorStorage();
-  assert.equal(await remote.commit(batch), "committed");
-  assert.equal(await remote.commit(batch), "conflict");
-  assert.equal((await remote.readSession(batch.source))?.observedTotalTokens, 42);
-}
-```
+**If a file disappears.** First check its possible active and archive locations. A failed directory read does not establish that a file was removed. Report a confirmed missing source once, with its last accepted byte. If the collector had seen more complete bytes, flag the gap and keep the known total. If storage had accepted everything seen, keep the measured coverage and report the missing source separately. A later sighting restores presence. During an outage the running scanner can report a file it saw before the first upload. After a restart, only acknowledged sources can be identified if the files are gone.
 
 ## Delivery and verification
 
-| Component | Behavior | Observability | Architecture | Interface |
-| --- | --- | --- | --- | --- |
-| Collector and adapters (planned) | A planning session appears once after two scans, a restart and an archive move. A new turn adds only its measured usage. | Count discovered sessions, rejected or unsupported lines, incomplete usage, cursor conflicts and oldest pending source age. | The coordinator depends on file-reading, provider and storage interfaces. Each adapter owns its native format. | Native JSONL is external. Verify both adapters against synthetic provider fixtures with known messages and counts. |
-| Storage port and fixture (included) | Verify a chat with unknown usage, a lost acknowledgement, a corrected request, and an atomic rejection. | Tests inspect outcomes, stored records and checkpoints. This in-process fixture introduces no production service objective. | Test code injects the fixture through the collector’s storage port. The API owns the future database adapter. | The TypeSpec operations below define the input, output and logical errors. The fixture implements them asynchronously. |
-| Remote service (planned) | Run the same storage contract cases against the API in an isolated workspace, including competing writers and workspace separation. | Measure commit success, latency, retry age and rejected batches before setting a production SLO. | Only the service owns database connections. An adapter may use Supabase Postgres or another transactional store. | Bind workspace from the credential. Specify HTTP authentication, transport errors and versioning in TypeSpec when the remote transport is introduced. [Supabase database](https://supabase.com/docs/guides/database/overview) |
+Use synthetic files in a temporary directory. Run the scanner against the fixture without credentials, a network connection, or a database. For API tests, start a local server with two test credentials and one fixture instance per workspace. Use a disposable database for the durable adapter tests.
 
-**Collector acceptance tests.** Run the opening scenario with a temporary transcript directory and the supplied fixture. Extend it by appending a call after restart and checking the exact increase. Add cases for a split UTF-8 line, unknown usage, a truncated or archived file, a fork that replays history, a child agent and a lost acknowledgement. Use synthetic content throughout.
+Track new sessions, rejected lines and batches, known gaps, version conflicts, and the age of the oldest pending source. Log identifiers and byte ranges. Keep chat text in the stored conversation. At the API, measure commit outcomes and latency. Set a production service objective after measurements exist.
 
-**Engineering artifacts and checks.** The [storage scenarios](local-collector/storage.feature), [TypeSpec contract](local-collector/storage.tsp), [dependency rules](../../.dependency-cruiser.collector.json) and [component manifest](../../apps/collector/component.yaml) accompany the [storage port](../../apps/collector/src/storage/collector-storage.ts) and [in-memory fixture](../../apps/collector/src/testing/in-memory-collector-storage.ts). Run the handoff checks from the repository root with Node 26.13.1 and Bun 1.4.4.
+Use the repository's pinned Node and Bun versions. Run the checks below from the repository root. The storage check builds the project, compiles TypeSpec, checks dependency rules, and runs the four implemented storage scenarios. Keep those behaviors when updating the test steps for the revised interface. When the client and API share generated models, check in CI that they match TypeSpec. [Storage scenarios](local-collector/storage.feature) · [Component manifest](../../apps/collector/component.yaml) · [Dependency rules](../../.dependency-cruiser.collector.json) · [Repository checks](../../README.md#run-the-checks)
 
 ```sh
 bun install --frozen-lockfile
 bun run check:collector-storage
-bun run lint
 bun run test
+bun run lint
 bun run habit-hooks --all
 ```
 
-Use the storage check as a required CI check before merging the fixture. It exercises the scenarios, checks dependency boundaries, and compiles TypeSpec to JSON Schema. The steps type-check against the handwritten TypeScript port and validate serialized values against the emitted schema. When the HTTP client and server introduce generated wire types, CI should regenerate them, detect drift, and run the same storage cases against the server. Production release work adds the JSONL readers, scanner and remote transport in that order. Pricing, feature or PR attribution and semantic analysis consume these records in later phases.
+## Tickets
+
+LC-00a through LC-00c deliver local history reads by date. LC-01 through LC-05 connect the readers to the storage fixture and report totals for ordinary chats. LC-06 through LC-13 cover recovery, child sessions and scheduled scans. LC-14 through LC-17 deliver remote storage.
+
+1. Put the ticket scenario in a Cucumber `.feature` file. Run it through the public entry point used by callers. Bind the steps before recording the first failing assertion. LC-00a starts with the reader method. LC-01 adds the command scenarios and binds `@two_chats`. Make that cross-provider check required once LC-04 and LC-05 both pass.
+2. Before coding, record the behavior, operational signal, dependency rule and interface affected by the ticket. Update the relevant TypeSpec, component manifest and dependency checks. [Feature planning](../engineering-guidelines/new-feature-planning.md)
+3. Take one numbered test at a time. Run it and see it fail for the stated reason. Make the smallest change that passes it. Refactor while it passes. Rerun the supporting tests and the acceptance scenario. A ticket is done when its scenario and previously delivered cases pass. Keep a case that already passes as a regression test. [Test levels and TDD](../engineering-guidelines/coding-principles.md)
+
+### Local chat history by date
+
+`LocalLLMHistory` is an abstract class that declares `readLocalHistory(fromDate: Date, toDate: Date)`. Its concrete subclasses are `LocalLLMHistoryCodex` and `LocalLLMHistoryClaude`. Share the date filter. Each subclass reads its provider's file format.
+
+The method returns a promise of a read-only list. Each entry identifies the provider (`harness`), session, source file and original line number. It includes the recorded timestamp and parsed provider record. Keep original message content and usage fields. LC-01 and LC-02 select visible chat text. LC-04 and LC-05 calculate token totals.
+
+Include each complete record whose timestamp is **at or after** `fromDate` and **before** `toDate`. Compare instants, including any UTC offset. A session can start before the range and still contain matching records. Read earlier metadata as needed to identify the session. Keep file order within each source. Each call reads the local files independently of storage or sync checkpoints.
+
+The scenarios in these three tickets are interface tests. Bind each `When` step to the public method on a real subclass held as a `LocalLLMHistory`. Give each test its own temporary provider root with synthetic JSONL files. Use the same date assertions for both subclasses. [Transcript locations and formats](#what-to-read)
+
+#### LC-00a · Read a Codex chat by date
+
+```gherkin
+@lc00a
+Feature: Read local Codex history
+  Scenario: A chat continues past the day its rollout was created
+    Given the Codex rollout for "c1" starts on January 31 and contains these messages
+      | recorded at              | text         |
+      | 2026-01-31T23:59:59.999Z | Earlier      |
+      | 2026-02-01T00:00:00.000Z | Plan search  |
+      | 2026-02-01T12:00:00.000Z | Use an index |
+      | 2026-02-02T00:00:00.000Z | Next day     |
+    When I read history from "2026-02-01T00:00:00Z" to "2026-02-02T00:00:00Z"
+    Then I get only "Plan search" and "Use an index" in that order for "codex/c1"
+```
+
+**Needs** synthetic Codex files. **First failure** The date query misses a matching message in the January rollout or includes the message at the end of the range.
+
+1. **Interface.** Start with one `session_meta` header and one `response_item` message. Call `LocalLLMHistoryCodex` through the abstract type. Assert the session ID, recorded time and original payload.
+2. **Interface.** Run the four-row example in an active rollout and then in the archive. Put the file's modification time outside the range. Include an in-range `token_count` record in a separate case and check that its provider fields survive.
+
+#### LC-00b · Read Claude Code chats through the same interface
+
+```gherkin
+@lc00b
+Feature: Read local Claude Code history
+  Scenario: Two selected projects have messages in the same hour
+    Given Claude Code project transcripts contain these records on February 1, 2026 UTC
+      | session | time     | role      | text         |
+      | h1      | 09:59:59 | user      | Earlier      |
+      | h1      | 10:00:00 | user      | Plan search  |
+      | h2      | 10:30:00 | assistant | Use an index |
+      | h2      | 11:00:00 | user      | Later        |
+    When I read history from "2026-02-01T10:00:00Z" to "2026-02-01T11:00:00Z"
+    Then I get only "Plan search" for "claude/h1" and "Use an index" for "claude/h2"
+```
+
+**Needs** LC-00a. **First failure** The Claude reader misses a project or attributes its record to the wrong session.
+
+1. **Interface.** Run the LC-00a date assertions against `LocalLLMHistoryClaude` with native Claude fixtures. Check a plain user string and an assistant row with content blocks and `message.usage`.
+2. **Interface.** Read two project files through one configured Claude root. Add a nested subagent file that repeats its parent's `sessionId`. Check that the child has its own session key.
+
+#### LC-00c · Check date boundaries and repeat reads for both providers
+
+```gherkin
+@lc00c
+Feature: Use adjacent history windows
+  Scenario Outline: A midnight message belongs to one day
+    Given a <provider> transcript records "Midnight" at "2026-02-01T19:00:00-05:00"
+    When I read February 1 UTC and February 2 UTC as separate one-day windows
+    Then only the February 2 result contains "Midnight"
+    And reading the two days together returns that record once
+
+    Examples:
+      | provider    |
+      | Codex       |
+      | Claude Code |
+```
+
+**Needs** LC-00a and LC-00b. **First failure** Adjacent windows lose or duplicate their shared boundary record.
+
+1. **Interface.** Run the same cases on both readers. An empty root, a range with no matches, and equal endpoints each return an empty list. An invalid `Date` at either end or a reversed range rejects with `RangeError`.
+2. **Interface.** Read an unfinished final line. The first query omits it. Append the newline and repeat the query twice. Each later result contains the record once in source order.
+3. **Interface.** Give the reader a regular file as its configured root. The call reports the filesystem error. This distinguishes a failed read from a successful empty result.
+
+### Fixture-backed collector
+
+#### LC-01 · Read a Codex planning chat
+
+```gherkin
+@lc01
+Feature: Import visible Codex chat text
+  Scenario: A chat has no edits or token counts
+    Given a selected Codex session contains the prompt "Plan search" and the reply "Start with ranking"
+    When I scan its root once
+    Then its session contains both messages in source order with their roles and recorded times
+    And its token total is null with unknown coverage
+```
+
+**Needs** LC-00c and the storage fixture. **First failure** The session is absent after the scan.
+
+1. **Interface.** Put rollouts in active, archive and unselected locations. Check root precedence and workspace selection. Discover only the selected sources.
+2. **Unit.** Give two blocks the same timestamp and mirror a message in both event formats. Keep the original order and one visible copy. Check a missing branch and a later branch switch.
+3. **Integration.** Reuse the Codex reader's discovery and decoding in the real `scan --once` handler. Read the stored chat through `readSession`.
+
+#### LC-02 · Read Claude Code text blocks
+
+```gherkin
+@lc02
+Feature: Preserve Claude Code conversations
+  Scenario: Two turns contain the same prompt
+    Given a Claude session contains "Why?" twice and one assistant response has two text blocks
+    When I scan its project twice
+    Then both prompts appear and both answer blocks appear once in their original order
+```
+
+**Needs** LC-01. **First failure** The Claude text is missing or the two prompts collapse into one.
+
+1. **Unit.** Decode a plain string and a block array. Use the row UUID and block position when present. Test identical prompts, tool results and images separately.
+2. **Integration.** Scan mixed roots with equal Codex and Claude session IDs. Read two separate sessions. Verify an orphaned copy does not create a third session.
+
+#### LC-03 · Resume at a complete record
+
+```gherkin
+@lc03
+Feature: Resume a growing file
+  Scenario: The writer stops inside a UTF-8 character
+    Given one line is complete and the next ends between the two bytes of "é" in "café"
+    When I scan once, finish the second line and scan with a fresh collector
+    Then the first scan stores only the first message
+    And the second scan stores "café" once and acknowledges its ending newline
+```
+
+**Needs** LC-01. **First failure** The scanner advances past incomplete bytes or loses the second message.
+
+1. **Interface.** Read across both a batch boundary and a multibyte character. Return completed lines and the next unread byte. Read a large valid record in chunks and allow it to occupy a batch by itself.
+2. **Interface.** Update the storage contract and fixture. If two writers use the same version, only the first write succeeds. A new source in an existing session must see that session's current version.
+3. **Integration.** Restart against the same fixture. Restore the parser state and byte offset saved with the first batch.
+
+#### LC-04 · Reconcile Codex token counts
+
+```gherkin
+@lc04
+Feature: Account for each measured Codex token once
+  Scenario: A cumulative update covers more than the last call
+    Given the last cumulative total was 120 and a later identified call of 20 was already counted
+    When the total reaches 200 and the last call reports 30
+    Then the session total is 200
+    And the new measurements are the last call of 30 and an interval of 30
+
+  Scenario: A second copy gives more detail about the same 200 tokens
+    Given one installation recorded a verified interval of 200 tokens
+    When another copy splits it into 120 and 80 and I scan both copies again
+    Then the session still shows 200 tokens and the two parts account for the whole interval
+```
+
+**Needs** LC-03. **First failure** Counting just the last call gives 170. Adding the full change again gives 220.
+
+1. **Unit.** Test repeated totals, cumulative-only counts, and a separate last-call report followed by a cumulative report. Use the rules in [Codex](#codex). Check inclusive input, cache and reasoning fields, an explicit zero, and empty usage.
+2. **Integration.** Restart between the 20-token call and the next snapshot. Preserve the baseline and the calls already counted. Leave the interval's turn and model unset if they are unknown.
+3. **Integration.** Import the coarse and detailed copies in both orders. Replace an interval and add its parts together. A failed replacement keeps the original total.
+
+#### LC-05 · Apply Claude usage corrections
+
+```gherkin
+@lc05
+Feature: Keep one measurement per Claude request
+  Scenario: A tool-only row updates an earlier text response
+    Given a request uses 10 ordinary, 25 cache-read and 5 cache-write input tokens
+    And its text row reports 2 output tokens and its later tool row reports 91
+    When I scan both rows and replay the earlier report
+    Then the session has one request with 40 input tokens and 91 output tokens
+    And the session total is 131
+```
+
+**Needs** LC-02, LC-03. **First failure** The request stays at 42 or contributes both reports.
+
+1. **Unit.** Test the two reports in both arrival orders, an explicit final correction downward, and conflicting provisional counts. Select an entire report. Check the cache-duration breakdown and an advisor iteration without adding executor iterations twice.
+2. **Integration.** Separate the reports with a restart. Have two collectors propose different updates from the same stored version. Reload the winner on conflict and apply the comparison again.
+
+#### LC-06 · Recover after a move or rewrite
+
+```gherkin
+@lc06
+Feature: Recover a changed transcript
+  Scenario: A rewritten file reaches the same byte offset
+    Given a writer holds the old checkpoint at byte 420 for a 120-token call
+    And a replacement file contains that identified call and a new 30-token call
+    When a fresh collector accepts the new file through byte 420 and the old writer submits its batch
+    Then the old writer receives a conflict and the session still has two calls totaling 150
+```
+
+**Needs** LC-03, LC-04. **First failure** Storage accepts the old writer's batch because the offsets match.
+
+1. **Interface.** Move a rollout into the archive. Reuse its checkpoint. Change bytes in the middle of a same-length copy with an identical tail. Verify the saved prefix before accepting it.
+2. **Integration.** Exercise truncation, a reset from an older parser, and an unsupported newer state. Replay verified IDs from zero or pause as specified. Test a rewrite that removes one of two identical, unidentified records. Preserve known history and flag the ambiguous match.
+
+#### LC-07 · Keep reading after a bad usage record
+
+```gherkin
+@lc07
+Feature: Preserve known data across a gap
+  Scenario: Good records follow a damaged line
+    Given a session has a known 70-token call followed by a malformed complete line
+    When I read the next message "Continue" and a distinct 20-token call
+    Then "Continue" is present and the partial total is 90
+    And the report identifies the damaged byte range
+```
+
+**Needs** LC-03, LC-04. **First failure** The later records disappear or the session shows full reported coverage.
+
+1. **Unit.** Test a counter reset, unsupported usage, an unfinished line and known bookkeeping. Flag only a possible loss of usage. Resume from the next reliable baseline.
+2. **Integration.** Commit the gap with the known records. Check `unknown` before any measurement, `partial` afterward, and a diagnostic with no message text.
+
+#### LC-08 · Retry a write after a lost connection
+
+```gherkin
+@lc08
+Feature: Sync after a lost connection
+  Scenario Outline: The collector loses its connection during a 30-token upload
+    Given storage holds a 120-token call and the source contains one more call of 30
+    When the connection drops <moment> and I scan again after reconnecting
+    Then I can read two calls totaling 150 and the checkpoint is at the end of the new call
+
+    Examples:
+      | moment                |
+      | before storage writes |
+      | after storage writes  |
+```
+
+**Needs** LC-03, LC-04. **First failure** A retained call is lost or counted twice.
+
+1. **Unit.** Simulate a timeout and a version conflict. Discard unconfirmed parser state and read the stored checkpoint. Use a test clock for retry delays.
+2. **Integration.** Drop the request, then drop only the reply. Reuse both cases for the HTTP client in LC-15.
+
+#### LC-09 · Isolate a rejected batch
+
+```gherkin
+@lc09
+Feature: Continue scanning other sources
+  Scenario: One stream reuses a message ID for different text
+    Given source A changes the stored text "Original" under the same ID and source B has a 12-token call
+    When I scan both sources
+    Then A keeps "Original" and its previous checkpoint
+    And B shows 12 tokens and the scan identifies A's rejected range
+```
+
+**Needs** LC-03, LC-08. **First failure** A rejected batch advances A or blocks B.
+
+1. **Unit.** Return `invalid` for A. Stop that file for this scan and report its byte range. Avoid an immediate retry of the same batch.
+2. **Integration.** Use the fixture's real rejection. Verify that accepted messages, usage and metadata in A survive and that B commits.
+
+#### LC-10 · Count a Codex fork's own work
+
+```gherkin
+@lc10
+Feature: Separate parent and child usage
+  Scenario: The parent continues after the fork
+    Given a Codex parent had 200 tokens at the fork and now has 260
+    And the child copied the prefix of 200 and its next cumulative total is 225
+    When I discover the child before the archived parent and scan twice
+    Then the parent shows 260 and the linked child shows 25
+```
+
+**Needs** LC-04, LC-06, LC-07. **First failure** The child gets the copied 200 tokens or loses its own 25.
+
+1. **Unit.** Compare the fork prefix. Test both an inherited counter and a verified fresh child counter. A missing or cyclic parent link cannot establish ownership.
+2. **Integration.** Read the child first, then the parent. Repeat with the parent initially unavailable. Keep child text and independently identified calls. Revisit the uncertain range when the parent becomes available.
+
+#### LC-11 · Count Claude fork and subagent calls once
+
+```gherkin
+@lc11
+Feature: Keep one owner for each Claude call
+  Scenario Outline: A child inherits a 100-token parent call
+    Given a Claude parent used 100 tokens and its <child> copies that call
+    And the child makes a separate 25-token call
+    When I collect both transcripts in either order
+    Then the parent shows 100 and the linked child shows 25
+
+    Examples:
+      | child                           |
+      | fork with new transcript UUIDs  |
+      | subagent with the parent ID     |
+```
+
+**Needs** LC-02, LC-05, LC-07. **First failure** Both sessions claim the inherited call, or the child disappears into its parent.
+
+1. **Unit.** Use two native agent IDs under the same parent. Check a copied model message with a changed request ID and two genuinely separate requests. Only a verified parent match establishes a replay.
+2. **Integration.** Collect the copies from two installations. Enforce one owner for a confirmed provider call in the workspace. Test late evidence of its origin and a copy whose origin cannot be proven.
+
+#### LC-12 · Report a missing source
+
+```gherkin
+@lc12
+Feature: Explain what was lost when a file disappears
+  Scenario Outline: A fresh collector confirms that a known source is missing
+    Given this installation acknowledged 70 tokens through byte 420 and saw complete data through <end>
+    When a fresh collector successfully scans all possible locations twice and the file is absent
+    Then it reports one missing source at 420 and the total stays 70 with <coverage> coverage
+
+    Examples:
+      | end | coverage |
+      | 420 | reported |
+      | 500 | partial  |
+```
+
+**Needs** LC-06, LC-07, LC-08. **First failure** A fresh collector cannot name the missing file, or a normal file removal makes a known total partial.
+
+1. **Interface.** List acknowledged sources for just this installation and selection. Record a change of presence at the same offset. Reject a stale version.
+2. **Integration.** Test an archive move, an unreadable root, a change in workspace selection, a returning file and a second installation. None of these alone proves data loss.
+
+#### LC-13 · Run the scanner on a schedule
+
+```gherkin
+@lc13
+Feature: Pick up a chat created after startup
+  Scenario: A planning chat appears between scans
+    Given the startup scan finished and a new planning chat appears before the next interval
+    When the next interval elapses
+    Then the chat is readable and the scan reports one new session
+```
+
+**Needs** LC-03, LC-08, LC-09. **First failure** The chat stays unread until someone runs another command.
+
+1. **Unit.** Use a test clock for startup, a slow scan and shutdown. Allow one active scan per collector. Track pending age until storage accepts the work.
+2. **Integration.** Use the regular scan handler for both commands. At this milestone run LC-01 through LC-13 and `@two_chats` against temporary files and the fixture.
+
+### Remote service and durable storage
+
+#### LC-14 · Bind the API to a workspace
+
+```gherkin
+@lc14
+Feature: Keep workspace data separate
+  Scenario: Two credentials request the same session ID
+    Given workspace A has a 130-token session and workspace B is empty
+    When each workspace requests that session through the API
+    Then A reads 130 and B sees no session
+
+  Scenario: A credential has expired
+    Given a new session has no stored checkpoint
+    When a collector submits it with an expired credential
+    Then the API returns an authentication error and stores nothing
+```
+
+**Needs** LC-11, LC-12 and the storage contract. **First failure** The API cannot return the right result for each credential.
+
+1. **Interface.** Define versioned HTTP operations, authentication and responses in TypeSpec. Test missing credentials, malformed JSON and typed storage outcomes. Derive workspace and installation from the verified credential.
+2. **Integration.** Run the same storage cases through a local API and test credentials. A workspace in the request body cannot give access to another workspace's session or inventory.
+
+#### LC-15 · Sync through the HTTP client
+
+```gherkin
+@lc15
+Feature: Resume a remote upload
+  Scenario: The server accepts a call but the reply is lost
+    Given the API holds a 120-token call and accepts another 30 before the connection drops
+    When I restart the collector and sync to the same API
+    Then an authenticated read returns two calls totaling 150 and the checkpoint covers both
+```
+
+**Needs** LC-08, LC-09, LC-14. **First failure** A restarted client cannot recover the accepted checkpoint over HTTP.
+
+1. **Interface.** Exercise the client with a local test transport. Map timeouts and rate limits to delayed retries. Surface invalid credentials to the caller and invalid batches to the affected source.
+2. **Integration.** Run the LC-08 lost-reply case across a real loopback connection. Restart only the scanner. Read the result through the API.
+
+#### LC-16 · Keep accepted data across API restarts
+
+```gherkin
+@lc16
+Feature: Read stored data after a server restart
+  Scenario: Two workspaces share a native session ID
+    Given A stored that ID with 120 tokens at byte 420 and B stored it with 9 tokens at byte 70
+    When the API restarts with a new connection to the same database
+    Then A still reads 120 at byte 420 and B reads 9 at byte 70
+```
+
+**Needs** LC-14 and a database choice. **First failure** A new server loses or mixes the two sessions.
+
+1. **Interface.** Write the restart and LC-17 race scenarios before building the adapter. Run server-owned migrations in a disposable database. Use workspace-scoped keys for sessions and records. Scope source checkpoints by installation as well.
+2. **Integration.** After restart, compare the text, order, latest correction, coverage, ownership and source status to the fixture. Use one storage contract suite for both adapters.
+
+#### LC-17 · Make competing writes atomic
+
+```gherkin
+@lc17
+Feature: Apply a whole batch once
+  Scenario: Two workers attempt the first write to one source
+    Given two workers read version zero and prepare different first batches for the same source
+    When they submit their batches on independent database connections
+    Then exactly one receives "committed" and one receives "conflict"
+    And a new reader sees only the winner's records and checkpoint
+```
+
+**Needs** LC-16. **First failure** Two workers win, or part of a failed batch becomes visible.
+
+1. **Interface.** Enforce the session version check and all updates in one transaction, including the first insert. Repeat with two different sources in one session. After the loser reloads, both distinct calls must survive.
+2. **Integration.** Force a failure after writing a record. Check rollback of text, usage, ownership, source state and version. Retry once from the old checkpoint. Run the fixture contract and `@two_chats` through the real client, API and database before release.
