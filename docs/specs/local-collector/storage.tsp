@@ -25,9 +25,24 @@ model StreamKey extends SessionKey {
   installationId?: Identifier;
 }
 
+/** Lowercase SHA-256 of the exact bytes from zero to the checkpoint offset. */
+@pattern("^[0-9a-f]{64}$")
+scalar PrefixDigest extends string;
+
+model VerifiedPrefix {
+  offset: Count;
+  prefixDigest: PrefixDigest;
+}
+
 model Checkpoint {
   offset: Count;
   parserState: string;
+  /** Older checkpoints can lack this evidence. After it is saved, each write supplies a digest.
+   * A parser-only upgrade at the same byte preserves the accepted digest. */
+  prefixDigest?: PrefixDigest;
+  /** While a fallback decision depends on bytes beyond this checkpoint, verify those bytes
+   * again on restart. Drop this bound once the checkpoint reaches it. */
+  replayThrough?: VerifiedPrefix;
 }
 
 model CheckpointSnapshot {
@@ -94,7 +109,7 @@ model ClaudeUsageReport extends TokenCounts {
   iterationId?: Identifier;
 }
 
-union UsageDiagnosticCode { "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration" }
+union UsageDiagnosticCode { "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration", "ambiguous-transcript-replay" }
 
 model UsageDiagnostic {
   code: UsageDiagnosticCode;
@@ -162,6 +177,9 @@ model Batch {
   /** Upgrade an accepted text-only checkpoint at the same offset to add usage for its prefix.
    * Supply empty messages and metadata. Compare the exact previous parser state, version and offset. */
   upgradeFromParserState?: string;
+  /** Replay from byte zero after a rewrite or truncation. Match the entire accepted checkpoint
+   * as well as the session version. Keep accepted records and require a new prefix digest. */
+  resetFrom?: Checkpoint;
   hasGap?: boolean;
 }
 

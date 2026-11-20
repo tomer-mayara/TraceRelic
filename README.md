@@ -43,7 +43,9 @@ bun run collector scan --once --config ./tracerelic.config.json --project .
 
 Use `--project <directory>` to select sessions whose recorded working directory is that directory or a descendant. For Claude Code, you can also select the exact transcript directory under `projects/`. Repeat either option to include more sessions. Omit both options to scan all configured roots.
 
-The standalone command uses memory for one invocation. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state and next byte together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
+The standalone command uses memory for one invocation. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state, next byte and prefix digest together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
+
+An append or Codex archive move resumes after the scanner verifies the accepted bytes. A shortened or rewritten transcript is read from the beginning. If repeated rows have no native ID and their individual matches are uncertain, the scanner keeps the original messages and records the affected source lines in `usageDiagnostics`.
 
 Set an optional `installationId` in the configuration when multiple installations scan into one workspace. Each installation keeps its own read position and shares the session's messages and version. Claude rows with a UUID can recover text from an earlier transcript copy. Repeated prompts within a conversation keep their separate positions.
 

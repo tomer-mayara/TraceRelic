@@ -5,6 +5,7 @@ export type Identifier = string;
 export type Count = number;
 export type Revision = Count;
 export type SourceOrder = Count;
+export type PrefixDigest = string;
 export type Role = "user" | "assistant";
 export type Coverage = "unknown" | "partial" | "reported";
 export type CommitResult = "committed" | "conflict" | "invalid";
@@ -19,9 +20,16 @@ export interface StreamKey extends SessionKey {
   installationId?: Identifier;
 }
 
+export interface VerifiedPrefix {
+  offset: Count;
+  prefixDigest: PrefixDigest;
+}
+
 export interface Checkpoint {
   offset: Count;
   parserState: string;
+  prefixDigest?: PrefixDigest;
+  replayThrough?: VerifiedPrefix;
 }
 
 export interface CheckpointSnapshot {
@@ -80,7 +88,7 @@ export interface ClaudeUsageReport extends TokenCounts, CacheWriteDurations {
 }
 
 export type UsageDiagnosticCode = "invalid-claude-usage" | "unidentified-claude-call"
-  | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration";
+  | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration" | "ambiguous-transcript-replay";
 
 export interface UsageDiagnostic {
   code: UsageDiagnosticCode;
@@ -132,6 +140,7 @@ export interface Batch {
   usageAnchors?: UsageAnchor[];
   usageWindows?: UsageWindow[];
   upgradeFromParserState?: string;
+  resetFrom?: Checkpoint;
   hasGap?: boolean;
 }
 

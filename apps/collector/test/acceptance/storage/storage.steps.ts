@@ -58,6 +58,14 @@ setWorldConstructor(StorageScenario);
 BeforeAll(function () {
   const { batch } = new StorageScenario();
   checkWireValue("Batch", batch);
+  const prefixDigest = "d".repeat(64);
+  checkWireValue("Batch", {
+    ...batch, resetFrom: batch.checkpoint, checkpoint: {
+      ...batch.checkpoint, prefixDigest, replayThrough: { offset: batch.checkpoint.offset + 10, prefixDigest },
+    },
+    usageDiagnostics: [{ code: "ambiguous-transcript-replay", sourceOrder: 1 }],
+  });
+  checkWireValue("CheckpointSnapshot", { version: 1, checkpoint: { ...batch.checkpoint, prefixDigest } });
   for (const field of ["expectedVersion", "expectedOffset"] as const) {
     const incomplete: Partial<Batch> = { ...batch };
     delete incomplete[field];
@@ -73,6 +81,9 @@ BeforeAll(function () {
     [{ expectedVersion: 0.5 }, "/expectedVersion"],
     [{ expectedVersion: Number.MAX_SAFE_INTEGER + 1 }, "/expectedVersion"],
     [{ expectedOffset: -1 }, "/expectedOffset"],
+    [{ checkpoint: { ...batch.checkpoint, prefixDigest: "x".repeat(64) } }, "/checkpoint/prefixDigest"],
+    [{ checkpoint: { ...batch.checkpoint, replayThrough: { offset: -1, prefixDigest } } }, "/checkpoint/replayThrough/offset"],
+    [{ resetFrom: { ...batch.checkpoint, prefixDigest: "abc" } }, "/resetFrom/prefixDigest"],
     [{ source: { ...batch.source, installationId: "" } }, "/source/installationId"],
     [{ messages: [{ ...message, sourceOrder: 0 }] }, "/messages/0/sourceOrder"],
     [{ messages: [{ ...message, sourceOrder: Number.MAX_SAFE_INTEGER + 1 }] }, "/messages/0/sourceOrder"],

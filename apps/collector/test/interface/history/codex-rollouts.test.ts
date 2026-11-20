@@ -59,7 +59,7 @@ test("reads Codex batches from the specified byte and physical line, with a larg
 
   const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
   const [source] = await Array.fromAsync(reader.discoverSources());
-  const { readBatches: _readBatches, ...info } = source;
+  const { readBatches: _readBatches, prefixDigests: _prefixDigests, ...info } = source;
   assert.deepEqual(info, { sourceFile, sessionId: "one", previousCopy: false, fileSize: (await stat(sourceFile)).size });
   const throughPair = { offset: start.offset + budget, lineNumber: 4 };
   const throughLarge = { offset: throughPair.offset + Buffer.byteLength(large), lineNumber: 5 };

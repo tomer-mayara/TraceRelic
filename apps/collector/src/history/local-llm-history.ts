@@ -40,6 +40,12 @@ export interface ReadPosition {
 export interface RecordBatch<Entry> {
   readonly entries: Entry[];
   readonly next: ReadPosition;
+  readonly prefixDigest: string;
+}
+
+export interface VerifiedPrefix {
+  readonly offset: number;
+  readonly prefixDigest: string;
 }
 
 interface TranscriptSourceInfo {
@@ -50,6 +56,7 @@ interface TranscriptSourceInfo {
 }
 
 export interface TranscriptSource<Entry> extends TranscriptSourceInfo {
+  prefixDigests(offsets: readonly number[]): Promise<readonly VerifiedPrefix[]>;
   readBatches(position: ReadPosition, maxBatchBytes?: number, endOffset?: number): AsyncIterable<RecordBatch<Entry>>;
 }
 
@@ -64,6 +71,7 @@ interface SelectedFile<H extends LocalHistoryEntry["harness"]> extends Pick<Tran
 }
 const beginning: ReadPosition = { offset: 0, lineNumber: 0 };
 const defaultBatchBytes = 256 * 1024;
+const newline = Buffer.from([0x0a]);
 
 export abstract class LocalLLMHistory {
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
@@ -117,6 +125,7 @@ export abstract class LocalLLMHistory {
     const { file, sessionId, previousCopy } = source;
     return {
       sessionId, previousCopy, sourceFile: file.sourceFile, fileSize: file.fileSize,
+      prefixDigests: offsets => file.prefixDigests(offsets),
       readBatches: (position, maxBatchBytes = defaultBatchBytes, endOffset = file.fileSize) =>
         this.readBatches(source, position, maxBatchBytes, endOffset),
     };
@@ -139,6 +148,11 @@ export abstract class LocalLLMHistory {
       throw new RangeError("Expected nonnegative byte and line positions");
     }
     const { file, harness, sessionId } = source;
+    if (position.offset >= Math.min(file.fileSize, endOffset)) {
+      await file.verifyPath();
+      return;
+    }
+    const hash = await file.startBatch(position.offset);
     let entries: TranscriptEntry<H>[] = [];
     let next = position;
     let batchStart = position.offset;
@@ -146,12 +160,13 @@ export abstract class LocalLLMHistory {
       const offset = next.offset + line.length + 1;
       if (next.offset > batchStart && offset - batchStart > maxBatchBytes) {
         await file.verifyPath();
-        yield { entries, next };
+        yield { entries, next, prefixDigest: file.finishBatch(next.offset, hash) };
         entries = [];
         batchStart = next.offset;
       }
       const lineNumber = next.lineNumber + 1;
       next = { offset, lineNumber };
+      hash.update(line).update(newline);
       const record = this.decode(line);
       if (record && source.matches(record, lineNumber)) {
         const { timestamp } = record;
@@ -160,13 +175,13 @@ export abstract class LocalLLMHistory {
       }
       if (offset - batchStart >= maxBatchBytes) {
         await file.verifyPath();
-        yield { entries, next };
+        yield { entries, next, prefixDigest: file.finishBatch(next.offset, hash) };
         entries = [];
         batchStart = offset;
       }
     }
     await file.verifyPath();
-    if (next.offset > batchStart) yield { entries, next };
+    if (next.offset > batchStart) yield { entries, next, prefixDigest: file.finishBatch(next.offset, hash) };
   }
 
   protected inspectFile<T>(sourceFile: string, inspect: (records: AsyncIterable<DecodedRecord>) => Promise<T>) {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { appendFile, copyFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -146,6 +147,7 @@ test("captures the discovered file size and resumes Claude after malformed lines
       lineNumber: 3, endOffset: finalPosition.offset,
     }],
     next: finalPosition,
+    prefixDigest: createHash("sha256").update(JSON.stringify(first) + "\n").update(broken).update(suffix).digest("hex"),
   }]);
   assert.deepEqual(await Array.fromAsync(updated.readBatches(finalPosition)), []);
 });

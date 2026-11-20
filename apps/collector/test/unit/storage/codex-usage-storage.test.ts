@@ -113,6 +113,55 @@ test("a second copy cannot double-charge a separate call inside an already publi
   assert.equal(detailed?.coverage, "reported");
 });
 
+test("a last-only report following a rewrite can overlap the same stream's earlier anonymous interval", async () => {
+  const store = new InMemoryCollectorStorage();
+  const coarse = codexWindow(0, 200, codexMeasurement("coarse", "interval", 200));
+  const checkpoint = { offset: 10, parserState: "old", prefixDigest: "a".repeat(64) };
+  assert.equal(await store.commit(batch(0, 0, { source: codexSource, usageWindows: [coarse], checkpoint })), "committed");
+  const replacement = { offset: 5, parserState: "replacement", prefixDigest: "b".repeat(64) };
+  assert.equal(await store.commit(batch(1, 10, { source: codexSource, resetFrom: checkpoint, checkpoint: replacement })), "committed");
+  const call = { ...codexMeasurement("request", "call", 20), requestId: "request" };
+  const anchor = { usageId: call.id, historyId: coarse.historyId };
+  assert.equal(await store.commit(batch(2, 5, {
+    source: codexSource, checkpoint: { ...replacement, offset: 15, prefixDigest: "c".repeat(64) }, usage: [call], usageAnchors: [anchor],
+  })), "committed");
+  assert.deepEqual((await store.readSession(codexSource))?.usage, coarse.parts);
+  const tail = codexMeasurement("tail", "interval", 180);
+  assert.equal(await store.commit(batch(3, 15, {
+    source: codexSource, checkpoint: { ...replacement, offset: 25, prefixDigest: "d".repeat(64) },
+    usageWindows: [codexWindow(0, 200, call, tail)],
+  })), "committed");
+  const view = await store.readSession(codexSource);
+  assert.deepEqual(view?.usage, [call, tail]);
+  assert.equal(view.observedTotalTokens, 200);
+});
+
+test("a rewritten coarse total cannot withdraw a previously published native call", async () => {
+  const store = new InMemoryCollectorStorage();
+  const coarse = codexWindow(0, 30, codexMeasurement("anonymous", "interval", 30));
+  const call = { ...codexMeasurement("request", "call", 120), requestId: "request" };
+  const checkpoint = { offset: 100, parserState: "old", prefixDigest: "a".repeat(64) };
+  assert.equal(await store.commit(batch(0, 0, {
+    source: codexSource, checkpoint, usage: [call], usageAnchors: [{ usageId: call.id, historyId: coarse.historyId }],
+  })), "committed");
+  const replacement = { offset: 10, parserState: "replacement", prefixDigest: "b".repeat(64) };
+  assert.equal(await store.commit(batch(1, 100, { source: codexSource, resetFrom: checkpoint, checkpoint: replacement })), "committed");
+  assert.equal(await store.commit(batch(2, 10, {
+    source: codexSource, checkpoint: { ...replacement, offset: 20, prefixDigest: "c".repeat(64) }, usageWindows: [coarse],
+  })), "committed");
+  const view = await store.readSession(codexSource);
+  assert.deepEqual(view?.usage, [call]);
+  assert.equal(view.observedTotalTokens, 120);
+  assert.equal(view.coverage, "partial");
+  assert.equal(await store.commit(batch(3, 20, {
+    source: codexSource, checkpoint: { ...replacement, offset: 30, prefixDigest: "d".repeat(64) },
+    usageWindows: [codexWindow(30, 150, call)],
+  })), "committed");
+  const resolved = await store.readSession(codexSource);
+  assert.deepEqual(resolved?.usage, [call, ...coarse.parts]);
+  assert.equal(resolved.observedTotalTokens, 150);
+});
+
 test("each anchor needs a valid history and an identified call in the same batch", async () => {
   const store = new InMemoryCollectorStorage();
   const call = codexMeasurement("call", "call", 10);

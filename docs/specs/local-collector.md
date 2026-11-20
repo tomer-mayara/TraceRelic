@@ -400,6 +400,23 @@ Feature: Recover a changed transcript
 1. **Interface.** Move a rollout into the archive. Reuse its checkpoint. Change bytes in the middle of a same-length copy with an identical tail. Verify the saved prefix before accepting it.
 2. **Integration.** Exercise truncation, a reset from an older parser, and an unsupported newer state. Replay verified IDs from zero or pause as specified. Test a rewrite that removes one of two identical, unidentified records. Preserve known history and flag the ambiguous match.
 
+| LC-06 constraint | Decision and check |
+| --- | --- |
+| Behavior | Verify every accepted byte before a fresh scan resumes an append or archive move. Replay a changed or shortened transcript from its start. The [rewrite scenario](../../apps/collector/test/acceptance/scan/recover-changed-transcript.feature) covers a stale write at byte 420. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | The checkpoint reports the accepted byte, SHA-256 digest and session version. The session retains accepted records and records a coverage gap when identical rows cannot be matched. An unsupported parser state reports its source and byte and keeps its checkpoint. Check the saved checkpoint, session view and error in `bun run test`. Existing service objectives apply. |
+| Architecture | History streams the raw prefix once for the saved positions in one physical file. The scanner decides whether to resume or rebuild. Storage accepts an explicit reset in the same transaction as the new records and checkpoint. The [collector dependency rules](../../.dependency-cruiser.collector.json) cover these boundaries. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) supplies raw prefix digests and records fallback occurrence bounds for later appends. The [storage contract](local-collector/storage.tsp) accepts an optional digest for compatibility and an explicit reset that compares the previous checkpoint. Normal writes advance the source. Run `bun run check:collector-history`, `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+If a replacement keeps only some of several identical rows without native IDs, retain the accepted rows. Record `ambiguous-transcript-replay` at the affected source line. Reserve the accepted IDs so an identical row appended after recovery receives a new ID.
+
+When the scanner counts repeated rows ahead of a replay batch, save the last byte and digest used for that decision until the scanner has accepted that byte. A restart verifies both positions in one pass. A change in the pending bytes requires a fresh replay.
+
+Use parser state version 3 when resuming requires these matching decisions. Earlier parsers pause on that version. Ordinary checkpoints continue to use the version 2 decoder.
+
+A Codex call in a replacement can overlap a cumulative interval accepted from the earlier file. Compare the two histories as separate copies. Keep the accepted interval until the replacement establishes where the call belongs.
+
+Discovery needs a complete record that identifies the session. If truncation removes that record, keep the accepted history and checkpoint. Verify the file again when a complete identifying record returns.
+
 #### LC-07 · Keep reading after a bad usage record
 
 ```gherkin

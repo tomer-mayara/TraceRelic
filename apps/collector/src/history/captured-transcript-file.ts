@@ -1,3 +1,4 @@
+import { createHash, type Hash } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 
@@ -10,9 +11,12 @@ export class TranscriptChangedError extends Error {
 
 export class CapturedTranscriptFile {
   readonly fileSize: number;
+  private readonly beginning = { offset: 0, hash: createHash("sha256") };
+  private readonly verified = new Map<number, Hash>([[0, this.beginning.hash]]);
+  private latestBatch?: { offset: number; hash: Hash };
 
-  private constructor(readonly sourceFile: string, private readonly identity: BigIntStats) {
-    this.fileSize = Number(identity.size);
+  private constructor(readonly sourceFile: string, private observed: BigIntStats) {
+    this.fileSize = Number(observed.size);
     if (!Number.isSafeInteger(this.fileSize)) throw new RangeError(`Transcript exceeds the supported byte range: ${sourceFile}`);
   }
 
@@ -29,12 +33,71 @@ export class CapturedTranscriptFile {
   }
 
   async *chunks(start: number, end: number): AsyncGenerator<Buffer> {
-    const handle = await open(this.sourceFile, "r").catch(error => this.rethrowMissing(error));
+    const handle = await this.openVerified();
     try {
-      this.verify(await handle.stat({ bigint: true }));
       yield* this.readRange(handle, start, Math.min(end, this.fileSize));
     } finally {
       await handle.close();
+    }
+  }
+
+  async prefixDigests(offsets: readonly number[]): Promise<{ offset: number; prefixDigest: string }[]> {
+    if (offsets.some(offset => !Number.isSafeInteger(offset) || offset < 0 || offset > this.fileSize)) {
+      throw new RangeError("Expected a byte position within the captured transcript");
+    }
+    const missing = [...new Set(offsets)].filter(offset => !this.verified.has(offset)).sort((a, b) => a - b);
+    if (missing.length) {
+      const { offset: start, hash } = this.hashBefore(missing[0]);
+      let position = start;
+      const handle = await this.openVerified();
+      try {
+        const snapshots = new Map<number, Hash>();
+        for (const offset of missing) {
+          for await (const chunk of this.readRange(handle, position, offset)) hash.update(chunk);
+          snapshots.set(offset, hash.copy());
+          position = offset;
+        }
+        await this.verifyPath();
+        for (const [offset, snapshot] of snapshots) this.verified.set(offset, snapshot);
+      } finally {
+        await handle.close();
+      }
+    } else await this.verifyPath();
+    return offsets.map(offset => ({ offset, prefixDigest: this.hashBefore(offset).hash.digest("hex") }));
+  }
+
+  async startBatch(offset: number): Promise<Hash> {
+    const { offset: start, hash } = this.hashBefore(offset);
+    if (start < offset) {
+      for await (const chunk of this.chunks(start, offset)) hash.update(chunk);
+    }
+    return hash;
+  }
+
+  finishBatch(offset: number, hash: Hash): string {
+    // Another reader can start at this boundary while the current reader is suspended.
+    this.latestBatch = { offset, hash: hash.copy() };
+    return hash.copy().digest("hex");
+  }
+
+  private hashBefore(end: number): { offset: number; hash: Hash } {
+    const exact = this.verified.get(end);
+    if (exact) return { offset: end, hash: exact.copy() };
+    let closest = this.latestBatch && this.latestBatch.offset <= end ? this.latestBatch : this.beginning;
+    for (const [offset, hash] of this.verified) {
+      if (offset <= end && offset > closest.offset) closest = { offset, hash };
+    }
+    return { offset: closest.offset, hash: closest.hash.copy() };
+  }
+
+  private async openVerified(): Promise<FileHandle> {
+    const handle = await open(this.sourceFile, "r").catch(error => this.rethrowMissing(error));
+    try {
+      this.verify(await handle.stat({ bigint: true }));
+      return handle;
+    } catch (error) {
+      await handle.close();
+      throw error;
     }
   }
 
@@ -43,9 +106,12 @@ export class CapturedTranscriptFile {
   }
 
   private verify(current: BigIntStats): void {
-    if (current.dev !== this.identity.dev || current.ino !== this.identity.ino || current.size < this.identity.size) {
+    const saved = this.observed;
+    const touched = current.mtimeNs !== saved.mtimeNs || current.ctimeNs !== saved.ctimeNs;
+    if (current.dev !== saved.dev || current.ino !== saved.ino || current.size < saved.size || (current.size === saved.size && touched)) {
       throw new TranscriptChangedError(this.sourceFile);
     }
+    this.observed = current;
   }
 
   private rethrowMissing(error: unknown): never {

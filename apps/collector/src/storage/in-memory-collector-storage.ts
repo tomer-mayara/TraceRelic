@@ -5,7 +5,7 @@ import type {
   Message, Metadata, SessionKey, SessionView, SourceUsageDiagnostic, StreamKey, Usage, UsageAnchor,
 } from "./collector-storage.ts";
 import { ClaudeUsageLedger } from "./claude-usage-ledger.ts";
-import { isCount, isIdentifier, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
+import { isCount, isIdentifier, isNativeCodexCall, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
 import { UsageWindows } from "./usage-windows.ts";
 
 function encodeSessionKey(key: SessionKey): string {
@@ -128,10 +128,11 @@ function mergeUsage(previous: readonly Usage[], incoming: readonly Usage[], code
 
 interface StoredAnchor {
   source: StreamKey;
+  generation: number;
   anchor: UsageAnchor;
 }
 
-function mergeAnchors(previous: Map<string, StoredAnchor[]> | undefined, batch: Batch, stream: string) {
+function mergeAnchors(previous: Map<string, StoredAnchor[]> | undefined, batch: Batch, stream: string, generation: number) {
   const anchors = new Map(previous);
   if (!batch.usageAnchors?.length) return anchors;
   const calls = new Set(batch.usage.filter(record => record?.kind === "call").map(record => record.id));
@@ -139,8 +140,9 @@ function mergeAnchors(previous: Map<string, StoredAnchor[]> | undefined, batch: 
     if (!isRecord(anchor) || !isIdentifier(anchor.usageId) || !calls.has(anchor.usageId) || !isIdentifier(anchor.historyId)
       || (anchor.after !== undefined && !isTokenCounts(anchor.after))) return null;
     const known = anchors.get(anchor.usageId) ?? [];
-    if (known.some(entry => encodeStreamKey(entry.source) === stream && isDeepStrictEqual(entry.anchor, anchor))) continue;
-    anchors.set(anchor.usageId, [...known, { source: batch.source, anchor }]);
+    if (known.some(entry => entry.generation === generation && encodeStreamKey(entry.source) === stream
+      && isDeepStrictEqual(entry.anchor, anchor))) continue;
+    anchors.set(anchor.usageId, [...known, { source: batch.source, generation, anchor }]);
   }
   return anchors;
 }
@@ -153,11 +155,24 @@ interface StoredUsage {
   order?: ReadonlySet<string>;
 }
 
-function mergeRecordedUsage(previous: StoredSession | undefined, batch: Batch, stream: string) {
+function previousNativeAnchors(previous: StoredSession | undefined, stream: string, generation: number): StoredAnchor[] {
+  if (!generation || !previous?.measurements.anchors.size) return [];
+  const accepted: StoredAnchor[] = [];
+  for (const call of previous.view.usage) {
+    if (!isNativeCodexCall(call)) continue;
+    for (const entry of previous.measurements.anchors.get(call.id) ?? []) {
+      if (entry.generation < generation && encodeStreamKey(entry.source) === stream) accepted.push(entry);
+    }
+  }
+  return accepted;
+}
+
+function mergeRecordedUsage(previous: StoredSession | undefined, batch: Batch, stream: string, generation: number) {
   if (!Array.isArray(batch.usage) || (batch.usageWindows !== undefined && !Array.isArray(batch.usageWindows))
     || (batch.usageAnchors !== undefined && !Array.isArray(batch.usageAnchors))) return null;
-  const anchors = mergeAnchors(previous?.measurements.anchors, batch, stream);
-  const windows = UsageWindows.merge(previous?.measurements.windows, batch.usageWindows ?? [], batch.source);
+  const anchors = mergeAnchors(previous?.measurements.anchors, batch, stream, generation);
+  const retained = batch.usageWindows?.length ? previousNativeAnchors(previous, stream, generation) : [];
+  const windows = UsageWindows.merge(previous?.measurements.windows, batch.usageWindows ?? [], batch.source, generation, retained);
   if (!anchors || !windows) return null;
   const parts = windows.measurements;
   const activeIds = new Set(parts.map(part => part.id));
@@ -165,7 +180,7 @@ function mergeRecordedUsage(previous: StoredSession | undefined, batch: Batch, s
   const standalone = mergeUsage(previous?.measurements.standalone ?? [], batch.usage, codexCalls);
   if (!standalone) return null;
   const visible = standalone.filter(call => activeIds.has(call.id)
-    || !anchors.get(call.id)?.some(({ anchor, source }) => windows.mayCover(anchor, source)));
+    || !anchors.get(call.id)?.some(entry => windows.mayCover(entry.anchor, entry.source, entry.generation)));
   // Carry forward the first time and position only for IDs that survived this transaction.
   const incoming = [...visible, ...parts];
   const ids = new Set(incoming.map(record => record.id));
@@ -194,10 +209,10 @@ function combineClaudeUsage(previous: StoredSession | undefined, ordinary: Usage
   return { order, usage };
 }
 
-function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, stream: string) {
+function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, stream: string, generation: number) {
   const reports = batch.claudeUsageReports;
   if (reports !== undefined && !Array.isArray(reports)) return null;
-  const recorded = mergeRecordedUsage(previous, batch, stream);
+  const recorded = mergeRecordedUsage(previous, batch, stream, generation);
   if (!recorded) return null;
   const stored: StoredUsage = recorded.stored;
   let usage = recorded.usage;
@@ -276,7 +291,7 @@ function mergeBranches(
 
 interface StoredSession {
   version: number;
-  checkpoints: Map<string, Checkpoint>;
+  checkpoints: Map<string, { checkpoint: Checkpoint; generation: number }>;
   view: Omit<SessionView, "messages">;
   messages: Map<string, StoredMessage>;
   measurements: StoredUsage;
@@ -289,7 +304,7 @@ function coverage(records: number, hasGap: boolean): Coverage {
   return hasGap ? "partial" : "reported";
 }
 
-const diagnosticCodes = new Set(["invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration"]);
+const claudeDiagnosticCodes = new Set(["invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration"]);
 
 function diagnosticKey(value: SourceUsageDiagnostic): string {
   return JSON.stringify([value.streamId, value.installationId, value.sourceOrder, value.code]);
@@ -300,11 +315,12 @@ function mergeDiagnostics(previous: SourceUsageDiagnostic[] | undefined, batch: 
   if (incoming === undefined) return previous;
   if (!Array.isArray(incoming)) return null;
   if (!incoming.length) return previous;
-  if (batch.source.harness !== "claude") return null;
   const diagnostics = new Map(previous?.map(value => [diagnosticKey(value), value]));
   const { streamId, installationId } = batch.source;
   for (const entry of incoming) {
-    if (!isRecord(entry) || !isRecordNumber(entry.sourceOrder) || !diagnosticCodes.has(entry.code)) return null;
+    if (!isRecord(entry) || !isRecordNumber(entry.sourceOrder)) return null;
+    if (entry.code !== "ambiguous-transcript-replay"
+      && (batch.source.harness !== "claude" || !claudeDiagnosticCodes.has(entry.code))) return null;
     const value = { streamId, ...(installationId !== undefined && { installationId }), sourceOrder: entry.sourceOrder, code: entry.code };
     diagnostics.set(diagnosticKey(value), value);
   }
@@ -312,12 +328,13 @@ function mergeDiagnostics(previous: SourceUsageDiagnostic[] | undefined, batch: 
 }
 
 function mergeSessionRecords(
-  previous: StoredSession | undefined, batch: Batch, stream: string,
+  previous: StoredSession | undefined, batch: Batch, stream: string, generation: number,
 ): Omit<StoredSession, "version" | "checkpoints"> | null {
   if (!hasValidMetadata(batch.metadata) || !Array.isArray(batch.messages)) return null;
   const messages = mergeMessages(previous?.messages, batch.messages, stream);
-  const measurements = mergeMeasurements(previous, batch, stream);
-  const branches = mergeBranches(previous?.branches, batch, stream);
+  const measurements = mergeMeasurements(previous, batch, stream, generation);
+  // Physical line numbers establish branch order only within one version of a transcript.
+  const branches = mergeBranches(previous?.branches, batch, JSON.stringify([stream, generation]));
   const usageDiagnostics = mergeDiagnostics(previous?.view.usageDiagnostics, batch);
   if (!messages || !measurements || branches === null || usageDiagnostics === null) return null;
   const { usage, total, stored } = measurements;
@@ -363,15 +380,50 @@ function upgradesParser(harness: Harness, current: Checkpoint, next: Checkpoint)
   return before !== null && state.lineNumber === before.lineNumber && isDeepStrictEqual(chat, before.decoder);
 }
 
-function checkpointFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
+const emptyPrefixDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+function isPrefixDigest(value: unknown): boolean {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+}
+
+function isCheckpoint(value: unknown): value is Checkpoint {
+  if (!isRecord(value) || !isCount(value.offset) || typeof value.parserState !== "string") return false;
+  const { prefixDigest, replayThrough } = value;
+  if (prefixDigest === undefined) return replayThrough === undefined;
+  if (!isPrefixDigest(prefixDigest) || (value.offset === 0 && prefixDigest !== emptyPrefixDigest)) return false;
+  return replayThrough === undefined || (isRecord(replayThrough) && isCount(replayThrough.offset)
+    && replayThrough.offset > value.offset && isPrefixDigest(replayThrough.prefixDigest));
+}
+
+function preservesReplayBound(current: Checkpoint | undefined, next: Checkpoint): boolean {
+  const bound = current?.replayThrough;
+  if (!bound || next.offset < bound.offset) return isDeepStrictEqual(next.replayThrough, bound);
+  return next.replayThrough === undefined && (next.offset > bound.offset || next.prefixDigest === bound.prefixDigest);
+}
+
+function resetFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
+  const { checkpoint, resetFrom, upgradeFromParserState } = batch;
+  if (!current || !isCheckpoint(resetFrom) || checkpoint.prefixDigest === undefined || upgradeFromParserState !== undefined) return "invalid";
+  if (!isDeepStrictEqual(definedFields(resetFrom), definedFields(current))) return "conflict";
+}
+
+function upgradeFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
   const { checkpoint, upgradeFromParserState } = batch;
-  if (!isRecord(checkpoint) || !isCount(checkpoint.offset) || typeof checkpoint.parserState !== "string") return "invalid";
-  if (upgradeFromParserState === undefined) return checkpoint.offset > (current?.offset ?? 0) ? undefined : "invalid";
   if (!current || checkpoint.offset !== current.offset || typeof upgradeFromParserState !== "string") return "invalid";
   if (current.parserState !== upgradeFromParserState) return "conflict";
+  if (current.prefixDigest !== undefined && checkpoint.prefixDigest !== current.prefixDigest) return "invalid";
   if (batch.messages?.length || batch.branchObservation !== undefined
     || Object.values(batch.metadata ?? {}).some(value => value !== undefined)) return "invalid";
   if (!upgradesParser(batch.source.harness, current, checkpoint)) return "invalid";
+}
+
+function checkpointFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
+  const { checkpoint } = batch;
+  if (!isCheckpoint(checkpoint) || (current?.prefixDigest !== undefined && checkpoint.prefixDigest === undefined)) return "invalid";
+  if (batch.resetFrom !== undefined) return resetFailure(batch, current);
+  if (!preservesReplayBound(current, checkpoint)) return "invalid";
+  if (batch.upgradeFromParserState !== undefined) return upgradeFailure(batch, current);
+  return checkpoint.offset > (current?.offset ?? 0) ? undefined : "invalid";
 }
 
 export class InMemoryCollectorStorage implements CollectorStorage {
@@ -379,7 +431,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
 
   async readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot> {
     const session = this.sessions.get(encodeSessionKey(source));
-    const checkpoint = session?.checkpoints.get(encodeStreamKey(source)) ?? null;
+    const checkpoint = session?.checkpoints.get(encodeStreamKey(source))?.checkpoint ?? null;
     return { version: session?.version ?? 0, checkpoint: structuredClone(checkpoint) };
   }
 
@@ -399,16 +451,18 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const previous = this.sessions.get(session);
     const currentVersion = previous?.version ?? 0;
     const current = previous?.checkpoints.get(stream);
-    if (expectedVersion !== currentVersion || expectedOffset !== (current?.offset ?? 0)) return "conflict";
+    if (expectedVersion !== currentVersion || expectedOffset !== (current?.checkpoint.offset ?? 0)) return "conflict";
     const version = currentVersion + 1;
     if (!isCount(version)) return "invalid";
-    const failure = checkpointFailure(batch, current);
+    const failure = checkpointFailure(batch, current?.checkpoint);
     if (failure) return failure;
     const incoming = structuredClone(batch);
-    const records = mergeSessionRecords(previous, incoming, stream);
+    // A rewritten file can describe the same counters through a different set of reports.
+    const generation = incoming.resetFrom ? version : current?.generation ?? 0;
+    const records = mergeSessionRecords(previous, incoming, stream, generation);
     if (!records) return "invalid";
     const checkpoints = new Map(previous?.checkpoints);
-    checkpoints.set(stream, incoming.checkpoint);
+    checkpoints.set(stream, { checkpoint: incoming.checkpoint, generation });
     this.sessions.set(session, { version, checkpoints, ...records });
     return "committed";
   }

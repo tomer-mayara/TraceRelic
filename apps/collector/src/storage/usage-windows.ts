@@ -265,13 +265,13 @@ class CounterHistory {
   }
 }
 
-function streamIdentity(source: StreamKey): string {
-  return JSON.stringify([source.streamId, source.installationId ?? null]);
+function streamIdentity(source: StreamKey, generation: number): string {
+  return JSON.stringify([source.streamId, source.installationId ?? null, generation]);
 }
 
 function lineage(historyId: string, source: string): string {
   // The decoder names a reset as a new epoch under its original history. An
-  // unverified origin belongs only to its physical stream and installation.
+  // unverified origin belongs only to the transcript generation that supplied it.
   const base = historyId.split(":reset:", 1)[0];
   return JSON.stringify(base.startsWith("unverified:") ? [base, source] : [base]);
 }
@@ -294,7 +294,7 @@ function matchesHistory(state: WindowState, id: string, stream: string): boolean
     && (state.histories.has(id) || canStartEpoch(id, state.latestEpoch, state.epochsByStream.get(stream)));
 }
 
-function retainUnmatchedCalls(state: WindowState, parts: Usage[]): void {
+function retainUnmatchedCalls(state: WindowState, parts: readonly Usage[]): void {
   state.hasGap = true;
   for (const part of parts.filter(isNativeCodexCall)) {
     const known = state.unmatchedCalls.get(part.id);
@@ -303,16 +303,30 @@ function retainUnmatchedCalls(state: WindowState, parts: Usage[]): void {
   }
 }
 
+interface AnchoredCall {
+  source: StreamKey;
+  generation: number;
+  anchor: UsageAnchor;
+}
+
+function copyState(previous?: WindowState): WindowState {
+  return {
+    histories: new Map(previous?.histories), epochsByStream: new Map(previous?.epochsByStream),
+    unmatchedCalls: new Map(previous?.unmatchedCalls), hasGap: previous?.hasGap ?? false,
+    origin: previous?.origin, latestEpoch: previous?.latestEpoch,
+  };
+}
+
 export class UsageWindows {
   readonly measurements: readonly Usage[];
-  private readonly state: WindowState;
-
-  private constructor(state: WindowState) {
-    this.state = state;
-    const published = [...state.histories.values()].flatMap(history => history.measurements());
-    if (state.unmatchedCalls.size && !published.some(unidentifiedTokens)) {
+  private constructor(
+    private readonly state: WindowState, private readonly visible: WindowState = state,
+    private readonly pendingCalls: readonly AnchoredCall[] = [],
+  ) {
+    const published = [...visible.histories.values()].flatMap(history => history.measurements());
+    if (visible.unmatchedCalls.size && !published.some(unidentifiedTokens)) {
       const ids = new Set(published.map(part => part.id));
-      for (const call of state.unmatchedCalls.values()) if (!ids.has(call.id)) published.push(call);
+      for (const call of visible.unmatchedCalls.values()) if (!ids.has(call.id)) published.push(call);
     }
     this.measurements = published;
   }
@@ -321,17 +335,15 @@ export class UsageWindows {
     return this.state.hasGap;
   }
 
-  static merge(previous: UsageWindows | undefined, incoming: readonly UsageWindow[], source: StreamKey): UsageWindows | null {
+  static merge(
+    previous: UsageWindows | undefined, incoming: readonly UsageWindow[], source: StreamKey, generation = 0,
+    acceptedCalls: readonly AnchoredCall[] = [],
+  ): UsageWindows | null {
     if (!Array.isArray(incoming)) return null;
     if (!incoming.length && previous) return previous;
-    const before = previous?.state;
-    const state: WindowState = {
-      histories: new Map(before?.histories), epochsByStream: new Map(before?.epochsByStream),
-      unmatchedCalls: new Map(before?.unmatchedCalls), hasGap: before?.hasGap ?? false,
-      origin: before?.origin, latestEpoch: before?.latestEpoch,
-    };
+    const state = copyState(previous?.state);
     const writing = new Set<string>();
-    const stream = streamIdentity(source);
+    const stream = streamIdentity(source, generation);
     for (const window of incoming) {
       if (!isWindow(window)) return null;
       const id = window.historyId;
@@ -350,13 +362,33 @@ export class UsageWindows {
       if (history.add(structuredClone(window), stream)) state.epochsByStream.set(stream, id);
       else state.hasGap = true;
     }
-    return new UsageWindows(state);
+    const next = new UsageWindows(state);
+    return next.preserveAcceptedCalls(previous, acceptedCalls);
   }
 
-  mayCover(anchor: UsageAnchor, source: StreamKey): boolean {
-    const stream = streamIdentity(source);
-    const { histories } = this.state;
-    if (!matchesHistory(this.state, anchor.historyId, stream)) {
+  private preserveAcceptedCalls(previous: UsageWindows | undefined, accepted: readonly AnchoredCall[]): UsageWindows {
+    const recorded = previous?.pendingCalls ?? [];
+    if (!accepted.length && !recorded.length) return this;
+    const measured = new Set(this.measurements.filter(isNativeCodexCall).map(call => call.id));
+    const pending = new Map<string, AnchoredCall>();
+    for (const call of [...recorded, ...accepted]) {
+      const { source, generation, anchor } = call;
+      if (!measured.has(anchor.usageId) && this.mayCover(anchor, source, generation)) {
+        pending.set(JSON.stringify([streamIdentity(source, generation), anchor]), call);
+      }
+    }
+    if (!pending.size) return this;
+    // Retain the proposed counters for a later partition. Publishing them now would hide a known native call.
+    this.state.hasGap = true;
+    const visible = copyState(previous?.visible);
+    retainUnmatchedCalls(visible, this.measurements);
+    return new UsageWindows(this.state, visible, [...pending.values()]);
+  }
+
+  mayCover(anchor: UsageAnchor, source: StreamKey, generation = 0): boolean {
+    const stream = streamIdentity(source, generation);
+    const { histories } = this.visible;
+    if (!matchesHistory(this.visible, anchor.historyId, stream)) {
       return [...histories.values()].some(history => history.coarseEnd() !== null);
     }
     const end = histories.get(anchor.historyId)?.coarseEnd(stream);

@@ -63,7 +63,7 @@ export class CodexChat implements ChatParser<ChatEntry> {
   }
 
   async prepareLookahead(
-    first: readonly ChatEntry[], tail: AsyncIterable<RecordBatch<ChatEntry>>, acceptedLine: number,
+    first: readonly ChatEntry[], tail: AsyncIterable<Pick<RecordBatch<ChatEntry>, "entries">>, acceptedLine: number,
   ): Promise<void> {
     // Only matcher state participates in this pass. Anonymous IDs are assigned when the owning batch is decoded.
     const probe = new CodexChat(new TextOccurrences());

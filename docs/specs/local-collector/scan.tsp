@@ -43,10 +43,19 @@ model ReadPosition {
 
 /** JSON stored in Checkpoint.parserState after a batch. The provider owns the decoder fields. */
 model ParserCheckpointState {
-  /** Version 2 covers accepted usage for both providers. Codex also saves its cumulative counter state. */
-  version: 1 | 2;
-  lineNumber: SourceOrder;
+  /** Version 2 includes usage for both providers. Version 3 also reserves fallback IDs across a rewrite. */
+  version: 1 | 2 | 3;
+  /** Zero only at the beginning of an empty source. */
+  lineNumber: Count;
   decoder: Record<unknown>;
+  /** For each disputed text fingerprint, keep its old ID range and its count in the replacement.
+   * These bounds keep later identical appends distinct after a restart. */
+  replayOccurrences?: Record<ReplayOccurrences>;
+}
+
+model ReplayOccurrences {
+  accepted: SourceOrder;
+  replayed: Count;
 }
 
 model TranscriptSourceInfo {
@@ -59,6 +68,7 @@ model TranscriptSourceInfo {
 model RecordBatch<Entry> {
   entries: Entry[];
   next: ReadPosition;
+  prefixDigest: PrefixDigest;
 }
 
 model CodexRecordBatch is RecordBatch<CodexRolloutEntry>;
@@ -68,6 +78,8 @@ model ClaudeRecordBatch is RecordBatch<ClaudeTranscriptEntry>;
  * A record larger than the batch budget occupies its own batch. If the file is
  * replaced or truncated during reading, report the source path and discard the pending batch. */
 interface SourceBatches<Entry> {
+  /** Hash the captured file through the requested byte positions in one streaming pass. */
+  prefixDigests(offsets: Count[]): VerifiedPrefix[];
   readBatches(position: ReadPosition, maxBatchBytes?: SourceOrder, endOffset?: Count): RecordBatch<Entry>[];
 }
 
