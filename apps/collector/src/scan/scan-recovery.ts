@@ -43,7 +43,7 @@ export class ScanRecovery {
   private lastRecoveryOffset = -1;
 
   constructor(
-    private readonly storage: CollectorStorage,
+    private readonly storage: Pick<CollectorStorage, "commit" | "readCheckpoint">,
     private readonly transcript: Pick<TranscriptSource<unknown>, "fileSize" | "prefixDigests">,
   ) {}
 

@@ -65,6 +65,8 @@ export class RewriteScanFixture {
     let held: Batch | undefined;
     const delayed = new Error("Batch held for delivery");
     await assert.rejects(this.scan({
+      listSources: scope => this.storage.listSources(scope),
+      recordPresence: update => this.storage.recordPresence(update),
       readCheckpoint: key => this.storage.readCheckpoint(key),
       readSession: key => this.storage.readSession(key),
       commit: async batch => {

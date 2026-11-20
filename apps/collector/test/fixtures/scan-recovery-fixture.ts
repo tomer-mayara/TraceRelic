@@ -18,7 +18,6 @@ export class ScanRecoveryFixture {
       if (this.outcome instanceof Error) throw this.outcome;
       return this.outcome;
     },
-    readSession: async () => { throw new Error("Unexpected session read"); },
   }, {
     fileSize: 100,
     prefixDigests: async offsets => {

@@ -1,5 +1,6 @@
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
+import { type DirectoryListing, listDirectory, TranscriptDirectories } from "./transcript-directories.ts";
 import {
   LocalLLMHistory, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry, type TranscriptSource,
 } from "./local-llm-history.ts";
@@ -46,16 +47,24 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
     }
   }
 
-  private async *rolloutFiles(): AsyncGenerator<string> {
+  confirmedAbsent(paths: readonly string[]): Promise<string[]> {
+    return TranscriptDirectories.absent(this.config.codexPath, paths, list => this.rolloutNames(list));
+  }
+
+  private async *rolloutNames(list: DirectoryListing) {
+    for await (const path of this.rolloutFiles(list)) yield basename(path);
+  }
+
+  private async *rolloutFiles(list = listDirectory): AsyncGenerator<string> {
     for (const name of ["sessions", "archived_sessions"]) {
-      yield* this.rolloutsIn(join(this.config.codexPath, name));
+      yield* this.rolloutsIn(join(this.config.codexPath, name), list, true);
     }
   }
 
-  private async *rolloutsIn(directory: string): AsyncGenerator<string> {
-    for (const entry of await this.listDirectoryIfPresent(directory)) {
+  private async *rolloutsIn(directory: string, list: DirectoryListing, optional = false): AsyncGenerator<string> {
+    for (const entry of await list(directory, optional)) {
       const path = join(directory, entry.name);
-      if (entry.isDirectory()) yield* this.rolloutsIn(path);
+      if (entry.isDirectory()) yield* this.rolloutsIn(path, list);
       else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) yield path;
     }
   }
@@ -69,7 +78,7 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
     });
     if (!header || !this.selected(selection, header.sessionId, header.cwd)) return;
     const source = this.transcriptSource({
-      harness: "codex", sessionId: header.sessionId, file, previousCopy: false,
+      harness: "codex", sessionId: header.sessionId, file, previousCopy: false, selectionCwd: this.workingDirectory(header.cwd),
       blankPrefixHeaderEnd: header.blankPrefixHeaderEnd,
       matches: (_record, lineNumber) => lineNumber >= header.lineNumber,
     });

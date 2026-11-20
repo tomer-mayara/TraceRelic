@@ -26,6 +26,54 @@ model StreamKey extends SessionKey {
   installationId?: Identifier;
 }
 
+/** Information used to match the original discovery selection. */
+model SourceLocation {
+  root: Identifier;
+  /** The Codex rollout basename or the Claude path relative to its configured root. */
+  path: Identifier;
+  cwd?: Identifier;
+  projectDir?: Identifier;
+  /** An earlier Claude copy can also be selected through its current file's working directory. */
+  currentFileCwd?: Identifier;
+}
+
+model SourceObservation {
+  location: SourceLocation;
+  /** Last newline seen in this captured generation, including bytes beyond this batch. */
+  observedEnd: Count;
+}
+
+model SourceScope {
+  harness: Harness;
+  root: Identifier;
+  installationId?: Identifier;
+  sessionIds?: Identifier[];
+  projectPaths?: string[];
+}
+
+union SourcePresence { "present", "missing" }
+
+model AcknowledgedSource extends SourceObservation {
+  source: StreamKey;
+  version: Count;
+  acceptedOffset: Count;
+  presence: SourcePresence;
+}
+
+model PresenceWrite extends SourceObservation {
+  source: StreamKey;
+  expectedVersion: Count;
+  expectedOffset: Count;
+  presence: SourcePresence;
+}
+
+model MissingSource {
+  status: "missing";
+  source: StreamKey;
+  acceptedOffset: Count;
+  observedEnd: Count;
+}
+
 /** Lowercase SHA-256 of the exact bytes from zero to the checkpoint offset. */
 @pattern("^[0-9a-f]{64}$")
 scalar PrefixDigest extends string;
@@ -239,6 +287,7 @@ model UsageAnchor {
 } })
 model Batch {
   source: StreamKey;
+  sourceObservation?: SourceObservation;
   expectedVersion: Count;
   expectedOffset: Count;
   checkpoint: Checkpoint;
@@ -288,12 +337,19 @@ model SessionView {
   usage: Usage[];
   /** Report the source, position and code once. Keep transcript content out of diagnostics. */
   usageDiagnostics?: SourceUsageDiagnostic[];
+  /** One entry for each currently missing acknowledged source. */
+  missingSources?: MissingSource[];
   coverage: Coverage;
   observedTotalTokens: Count | null;
 }
 
 /** A connection failure or timeout can interrupt any operation. */
 interface CollectorStorage {
+  /** Match the installation and configured root exactly. Apply session and project selections as alternatives. */
+  listSources(scope: SourceScope): AcknowledgedSource[];
+  /** Compare the session version and accepted byte. Preserve the checkpoint and accepted records.
+   * A repeat of the current state with the current version succeeds without advancing the version. */
+  recordPresence(update: PresenceWrite): CommitResult;
   /** Return the current session version even when this source has no checkpoint. */
   readCheckpoint(source: StreamKey): CheckpointSnapshot;
   /** A lost reply leaves the outcome unknown. Read the durable checkpoint and session version to recover. */

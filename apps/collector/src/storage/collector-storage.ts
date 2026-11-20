@@ -1,3 +1,4 @@
+import { isAbsolute, relative, sep } from "node:path";
 import type { harnesses } from "@tracerelic/shared";
 
 export type Harness = (typeof harnesses)[number];
@@ -18,6 +19,66 @@ export interface SessionKey {
 export interface StreamKey extends SessionKey {
   streamId: Identifier;
   installationId?: Identifier;
+}
+
+export interface SourceLocation {
+  root: string;
+  path: string;
+  cwd?: string;
+  projectDir?: string;
+  currentFileCwd?: string;
+}
+
+export interface SourceObservation {
+  location: SourceLocation;
+  observedEnd: Count;
+}
+
+export interface SourceScope {
+  harness: Harness;
+  root: string;
+  installationId?: string;
+  sessionIds?: readonly string[];
+  projectPaths?: readonly string[];
+}
+
+export type SourcePresence = "present" | "missing";
+
+export interface AcknowledgedSource extends SourceObservation {
+  source: StreamKey;
+  acceptedOffset: Count;
+  version: Count;
+  presence: SourcePresence;
+}
+
+export interface PresenceWrite extends SourceObservation {
+  source: StreamKey;
+  expectedOffset: Count;
+  expectedVersion: Count;
+  presence: SourcePresence;
+}
+
+export interface MissingSource {
+  status: "missing";
+  source: StreamKey;
+  acceptedOffset: Count;
+  observedEnd: Count;
+}
+
+/** Use the source's own discovery fields to match a session or project selection. */
+export function matchesSourceScope(scope: SourceScope, source: StreamKey, location: SourceLocation): boolean {
+  if (source.harness !== scope.harness || source.installationId !== scope.installationId || location.root !== scope.root) return false;
+  const { sessionIds = [], projectPaths = [] } = scope;
+  if ((!sessionIds.length && !projectPaths.length) || sessionIds.includes(source.sessionId)) return true;
+  return projectPaths.some(root => {
+    if (!root) return false;
+    if (location.projectDir && relative(root, location.projectDir) === "") return true;
+    return [location.cwd, location.currentFileCwd].some(cwd => {
+      if (!cwd) return false;
+      const path = relative(root, cwd);
+      return !isAbsolute(path) && path !== ".." && !path.startsWith(".." + sep);
+    });
+  });
 }
 
 export interface VerifiedPrefix {
@@ -167,6 +228,7 @@ export interface UsageAnchor {
 
 export interface Batch {
   source: StreamKey;
+  sourceObservation?: SourceObservation;
   expectedVersion: Count;
   expectedOffset: Count;
   checkpoint: Checkpoint;
@@ -192,11 +254,14 @@ export interface SessionView {
   messages: Message[];
   usage: Usage[];
   usageDiagnostics?: SourceUsageDiagnostic[];
+  missingSources?: MissingSource[];
   coverage: Coverage;
   observedTotalTokens: Count | null;
 }
 
 export interface CollectorStorage {
+  listSources(scope: SourceScope): Promise<AcknowledgedSource[]>;
+  recordPresence(update: PresenceWrite): Promise<CommitResult>;
   readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot>;
   commit(batch: Batch): Promise<CommitResult>;
   readSession(key: SessionKey): Promise<SessionView | null>;

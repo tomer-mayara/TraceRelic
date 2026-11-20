@@ -1,12 +1,13 @@
 import { CollectorCommand } from "./commands/collector-command.ts";
 import { ScanPendingError } from "./scan/scan-pending.ts";
-import { ScanRejectedError } from "./scan/scan-rejected.ts";
-import type { CollectorStorage } from "./storage/collector-storage.ts";
+import { ScanRejectedError, type RejectedBatch } from "./scan/scan-rejected.ts";
+import type { CollectorStorage, MissingSource } from "./storage/collector-storage.ts";
 import { InMemoryCollectorStorage } from "./storage/in-memory-collector-storage.ts";
 
 export async function runCollectorCli(args: string[], storage: CollectorStorage): Promise<number> {
   try {
-    const command = new CollectorCommand(storage, rejected => console.error(JSON.stringify(rejected)));
+    const report = (event: RejectedBatch | MissingSource) => console.error(JSON.stringify(event));
+    const command = new CollectorCommand(storage, report, report);
     console.log(JSON.stringify(await command.run(args)));
     return 0;
   } catch (error) {

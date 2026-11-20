@@ -10,6 +10,7 @@ import {
   claudeReport, codexMeasurement, codexParserState, codexSource, codexWindow, initialPlanningBatch, observation, prompt,
 } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
+import { inventoryScope, inventorySource, measuredSource, presence } from "../../fixtures/source-inventory-fixture.ts";
 
 const schemaFile = new URL(
   "../../dist/collector-storage/storage.schema.json", import.meta.resolve("@tracerelic/collector/package.json"),
@@ -54,6 +55,26 @@ class StorageScenario {
 }
 
 setWorldConstructor(StorageScenario);
+
+BeforeAll(async function () {
+  const store = new InMemoryCollectorStorage();
+  const batch = measuredSource(500);
+  const update = presence(1, "missing", 500);
+  checkWireValue("Batch", batch);
+  checkWireValue("SourceScope", inventoryScope);
+  checkWireValue("PresenceWrite", update);
+  assert.equal(await store.commit(batch), "committed");
+  const [source] = await store.listSources(inventoryScope);
+  checkWireValue("AcknowledgedSource", source);
+  assert.equal(await store.recordPresence(update), "committed");
+  const view = await store.readSession(inventorySource);
+  assert(view?.missingSources);
+  checkWireValue("MissingSource", view.missingSources[0]);
+  checkWireValue("SessionView", view);
+  for (const fields of [{ presence: "unknown" }, { expectedVersion: -1 }, { observedEnd: 0.5 }, { location: { path: "file" } }]) {
+    assert.equal(contract.validate("PresenceWrite.json", { ...update, ...fields }), false);
+  }
+});
 
 BeforeAll(function () {
   const { batch } = new StorageScenario();

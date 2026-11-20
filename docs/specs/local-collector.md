@@ -593,6 +593,19 @@ Feature: Explain what was lost when a file disappears
 1. **Interface.** List acknowledged sources for just this installation and selection. Record a change of presence at the same offset. Reject a stale version.
 2. **Integration.** Test an archive move, an unreadable root, a change in workspace selection, a returning file and a second installation. None of these alone proves data loss.
 
+| LC-12 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [missing source scenario](../../apps/collector/test/acceptance/scan/missing-source.feature) through `scan --once` with a fresh collector and shared storage. Report the disappearance once across both scans. Keep 70 tokens in both cases. Only the 80 known, unaccepted bytes make measured coverage partial. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | Emit one `missing` report per disappearance with the logical source, accepted byte and last known complete byte. The CLI writes the report to standard error and the selected session views to standard output. The session view lists currently missing sources separately from usage diagnostics. Check the output, a repeat scan and a returning file. Existing service objectives apply. |
+| Architecture | History verifies physical locations, including the Codex archive. The scanner compares those results with the selected installation's storage inventory. Storage owns presence, its version check and coverage. The running scanner can remember a sighting during an outage. The [dependency rules](../../.dependency-cruiser.collector.json) keep filesystem access in history. Run `bun run check:collector-deps`. |
+| Interface | The [storage contract](local-collector/storage.tsp) adds an observation to a normal batch, a scoped inventory and a presence write at the accepted byte. The [scan contract](local-collector/scan.tsp) exposes the last complete newline, source selection fields and a check for absence across possible locations. Verify the schemas, stale and repeated writes, and resume with `bun run check:collector-storage`, `bun run check:collector-history` and `bun run check:collector-scan`. |
+
+Check the configured provider root, installation and original project or session selection before reporting a disappearance. A previous Claude copy can match either its own working directory or the current transcript's working directory. An unreadable or unavailable root, a file with an unreadable header, and a move into the archive cannot prove loss. One successful search of all possible locations confirms absence. A repeat search keeps the same report and version. A later sighting restores presence, including when the file has no new bytes. Keep gaps from other sources and confirmed unaccepted bytes that have not been recovered.
+
+Capture the final newline within the file size seen at discovery. Store that position with the first accepted batch so a restart can distinguish a lost complete suffix from an unfinished line. A running collector can report a source that disappeared before its first upload at byte zero when storage previously confirmed an empty checkpoint. If even the first checkpoint read was unavailable, the pending report identifies the missing source until storage can confirm the accepted byte. A fresh collector can report only sources that storage can place in its selected roots.
+
+An earlier Claude copy can return after the current file was reported missing. Match its session, current filename and accepted prefix before restoring the current source from that copy. Keep the copy's own checkpoint. A backup with different accepted bytes cannot clear an earlier loss.
+
 #### LC-13 · Run the scanner on a schedule
 
 ```gherkin

@@ -4,7 +4,7 @@ import { GlobalConfigLoader } from "../config/global-config-loader.ts";
 import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type LocalHistoryEntry } from "../history/index.ts";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import { LocalCollector, type RejectedBatch } from "../scan/local-collector.ts";
-import type { CollectorStorage, SessionView } from "../storage/collector-storage.ts";
+import type { CollectorStorage, MissingSource, SessionView } from "../storage/collector-storage.ts";
 
 const usage = "Usage: collector history --config <file> --from <instant> --to <instant>\n"
   + "       collector scan --once --config <file> [--session <id>] [--project <directory>]";
@@ -17,7 +17,10 @@ function instant(option: "--from" | "--to", value: string | undefined): Date {
 }
 
 export class CollectorCommand {
-  constructor(private readonly storage: CollectorStorage, private readonly onRejected?: (batch: RejectedBatch) => void) {}
+  constructor(
+    private readonly storage: CollectorStorage, private readonly onRejected?: (batch: RejectedBatch) => void,
+    private readonly onMissing?: (source: MissingSource) => void,
+  ) {}
 
   async run(args: string[]): Promise<readonly SessionView[] | readonly LocalHistoryEntry[]> {
     const { values, positionals } = parseArgs({
@@ -44,6 +47,6 @@ export class CollectorCommand {
     }
     const selection = { sessionIds: values.session, projectPaths: values.project?.map(path => resolve(path)) };
     const config = await GlobalConfigLoader.load(values.config);
-    return new LocalCollector(config, this.storage, this.onRejected).scanOnce(selection);
+    return new LocalCollector(config, this.storage, this.onRejected, this.onMissing).scanOnce(selection);
   }
 }

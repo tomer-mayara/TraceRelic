@@ -14,6 +14,7 @@ export class CapturedTranscriptFile {
   private readonly beginning = { offset: 0, hash: createHash("sha256") };
   private readonly verified = new Map<number, Hash>([[0, this.beginning.hash]]);
   private latestBatch?: { offset: number; hash: Hash };
+  private finalNewline?: Promise<number>;
 
   private constructor(readonly sourceFile: string, private observed: BigIntStats) {
     this.fileSize = Number(observed.size);
@@ -36,6 +37,38 @@ export class CapturedTranscriptFile {
     const handle = await this.openVerified();
     try {
       yield* this.readRange(handle, start, Math.min(end, this.fileSize));
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async completeEnd(): Promise<number> {
+    this.finalNewline ??= this.findLastNewline();
+    const offset = await this.finalNewline;
+    await this.verifyPath();
+    return offset;
+  }
+
+  private async findLastNewline(): Promise<number> {
+    const handle = await this.openVerified();
+    try {
+      let end = this.fileSize;
+      // Most captures end at a newline. Read back in bounded chunks only for an unfinished suffix.
+      let size = 1;
+      while (end > 0) {
+        const start = Math.max(0, end - size);
+        let position = start;
+        let last = 0;
+        for await (const chunk of this.readRange(handle, start, end)) {
+          const index = chunk.lastIndexOf(0x0a);
+          if (index >= 0) last = position + index + 1;
+          position += chunk.length;
+        }
+        if (last) return last;
+        end = start;
+        size = 64 * 1024;
+      }
+      return 0;
     } finally {
       await handle.close();
     }

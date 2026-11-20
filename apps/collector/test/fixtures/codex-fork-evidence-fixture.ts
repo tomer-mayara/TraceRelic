@@ -59,6 +59,8 @@ export class ForkEvidenceSource implements TranscriptSource<CodexRolloutEntry> {
     }
   }
 
+  async completeEnd() { return this.fileSize; }
+
   async prefixDigests(offsets: readonly number[]) {
     return offsets.map(offset => ({ offset, prefixDigest: "a".repeat(64) }));
   }

@@ -1,6 +1,6 @@
-import { readdir } from "node:fs/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { join, relative } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
+import { type DirectoryListing, listDirectory, TranscriptDirectories } from "./transcript-directories.ts";
 import {
   LocalLLMHistory, type ClaudeSubagent, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry, type TranscriptSource,
 } from "./local-llm-history.ts";
@@ -15,6 +15,12 @@ interface TranscriptFile {
   sourceFile: string;
   projectDir: string;
   currentFile?: string;
+  subagent?: ClaudeSubagent;
+}
+
+interface SelectedSession {
+  selected?: boolean;
+  cwd?: string;
   subagent?: ClaudeSubagent;
 }
 
@@ -50,22 +56,24 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
 
   async *discoverSources(selection: ScanSelection = {}): AsyncGenerator<TranscriptSource<ClaudeTranscriptEntry>> {
     const previous: TranscriptFile[] = [];
-    const selectedFamilies = selection.projectPaths?.length ? new Set<string>() : undefined;
+    const currentCwds = new Map<string, string>();
     for await (const file of this.transcriptFiles(true)) {
       if (file.currentFile) previous.push(file);
-      else yield* this.discoverFile(file, selection, selectedFamilies);
+      else yield* this.discoverFile(file, selection, currentCwds);
     }
-    for (const file of previous) yield* this.discoverFile(file, selection, selectedFamilies);
+    for (const file of previous) yield* this.discoverFile(file, selection, currentCwds);
   }
 
   private async *discoverFile(
-    file: TranscriptFile, selection: ScanSelection, selectedFamilies?: Set<string>,
+    file: TranscriptFile, selection: ScanSelection, currentCwds: Map<string, string>,
   ): AsyncGenerator<TranscriptSource<ClaudeTranscriptEntry>> {
     const { sourceFile, currentFile } = file;
+    const currentFilePath = currentFile && this.config.claudePath ? relative(this.config.claudePath, currentFile) : undefined;
     const selectedProject = selection.projectPaths?.some(path => path.length > 0 && relative(path, file.projectDir) === "");
-    const requestedIds = selectedFamilies ? undefined : new Set(selection.sessionIds);
+    const requestedIds = selection.projectPaths?.length ? undefined : new Set(selection.sessionIds);
     // One file can contain several native IDs. Keep only each ID's selection by its first usable cwd.
-    const sessions = new Map<string, { selected?: boolean; subagent?: ClaudeSubagent }>();
+    const sessions = new Map<string, SelectedSession>();
+    let seekingCwd = false;
     const { file: captured } = await this.inspectFile(sourceFile, async records => {
       for await (const { record } of records) {
         const identity = this.identity(record, file.subagent);
@@ -73,32 +81,52 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
         const { sessionId, subagent } = identity;
         let session = sessions.get(sessionId);
         if (!session) {
-          const selected = selectedProject || this.selected(selection, sessionId, undefined)
-            || (currentFile && selectedFamilies?.has(`${currentFile}\0${sessionId}`));
-          if (!selected && !selectedFamilies) continue;
+          const inherited = currentFile ? currentCwds.get(`${currentFile}\0${sessionId}`) : undefined;
+          const selected = selectedProject || this.selected(selection, sessionId, inherited);
+          if (!selected && requestedIds) continue;
           session = { selected: selected ? true : undefined };
           sessions.set(sessionId, session);
         }
         session.subagent ??= subagent;
-        const { cwd } = record;
-        if (session.selected === undefined && typeof cwd === "string" && isAbsolute(cwd) && !cwd.includes("\0")) {
-          session.selected = this.selected(selection, sessionId, cwd);
-          if (session.selected && !currentFile) selectedFamilies?.add(`${sourceFile}\0${sessionId}`);
+        session.cwd ??= this.workingDirectory(record.cwd);
+        if (session.cwd && session.selected === undefined) {
+          session.selected = this.selected(selection, sessionId, session.cwd);
         }
         if (requestedIds?.size && sessions.size === requestedIds.size) {
           // A copied row can precede the native agent identity in a nested file.
-          if (!file.subagent || [...sessions.values()].every(item => item.subagent)) break;
+          const found = [...sessions.values()];
+          if (!file.subagent || found.every(item => item.subagent)) {
+            if (found.every(item => item.cwd)) break;
+            seekingCwd = true;
+          }
         }
       }
-    });
-    for (const [sessionId, { selected, subagent }] of sessions) {
-      if (selected) {
-        const source = this.transcriptSource({
-          harness: "claude", sessionId, file: captured, previousCopy: currentFile !== undefined,
-          matches: record => this.identity(record, file.subagent)?.sessionId === sessionId,
-        });
-        yield subagent ? { ...source, claudeSubagent: subagent } : source;
-      }
+    }, line => !seekingCwd || line.includes('"cwd"') || line.includes("\\u"));
+    for (const [sessionId, { selected, cwd, subagent }] of sessions) {
+      if (!currentFile && cwd) currentCwds.set(`${sourceFile}\0${sessionId}`, cwd);
+      if (!selected) continue;
+      const inherited = currentFile ? currentCwds.get(`${currentFile}\0${sessionId}`) : undefined;
+      const source = this.transcriptSource({
+        harness: "claude", sessionId, file: captured, previousCopy: currentFile !== undefined,
+        projectDir: file.projectDir, selectionCwd: cwd ?? inherited,
+        matches: record => this.identity(record, file.subagent)?.sessionId === sessionId,
+      });
+      yield { ...source, ...(subagent && { claudeSubagent: subagent }), ...(currentFilePath && { currentFilePath }),
+        ...(inherited && cwd && inherited !== cwd && { currentFileCwd: inherited }) };
+    }
+  }
+
+  confirmedAbsent(paths: readonly string[]): Promise<string[]> {
+    const root = this.config.claudePath;
+    return TranscriptDirectories.absent(root, paths, list => this.presencePaths(list));
+  }
+
+  private async *presencePaths(list: DirectoryListing) {
+    const root = this.config.claudePath;
+    if (!root) return;
+    for await (const file of this.transcriptFiles(true, list)) {
+      yield relative(root, file.sourceFile);
+      if (file.currentFile) yield relative(root, file.currentFile);
     }
   }
 
@@ -117,13 +145,13 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
     return { sessionId: nativeId, ...(linked && { subagent: { parentSessionId, agentId } }) };
   }
 
-  private async *transcriptFiles(scan: boolean): AsyncGenerator<TranscriptFile> {
+  private async *transcriptFiles(scan: boolean, list = listDirectory): AsyncGenerator<TranscriptFile> {
     if (this.config.claudePath === undefined) return;
     const projects = join(this.config.claudePath, "projects");
-    for (const project of await this.listDirectoryIfPresent(projects)) {
+    for (const project of await list(projects, true)) {
       if (!project.isDirectory()) continue;
       const projectDir = join(projects, project.name);
-      for (const entry of await readdir(projectDir, { withFileTypes: true })) {
+      for (const entry of await list(projectDir)) {
         const path = join(projectDir, entry.name);
         if (entry.isFile()) {
           const name = this.transcriptName(entry.name, scan);
@@ -131,7 +159,7 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
         }
         if (!entry.isDirectory()) continue;
         const agents = join(path, "subagents");
-        for (const file of await this.listDirectoryIfPresent(agents)) {
+        for (const file of await list(agents, true)) {
           if (!file.isFile()) continue;
           const name = this.transcriptName(file.name, scan);
           if (!name || !name.stem.startsWith("agent-") || name.stem.length <= "agent-".length) continue;

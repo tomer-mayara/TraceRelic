@@ -15,6 +15,7 @@ behavior:
   - test/acceptance/scan/isolate-rejected-batch.feature
   - test/acceptance/scan/codex-fork.feature
   - test/acceptance/scan/claude-fork.feature
+  - test/acceptance/scan/missing-source.feature
   - test/acceptance/scan/codex-token-counts.feature
   - test/acceptance/scan/claude-usage.feature
   - test/acceptance/scan/two-chats.feature

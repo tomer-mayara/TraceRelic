@@ -1,13 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecordedTimestamp, recordedInstant } from "../recorded-timestamp.ts";
 import type {
-  Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage,
-  Message, Metadata, SessionKey, SessionView, StreamKey, Usage, UsageAnchor,
+  AcknowledgedSource, Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage,
+  Message, Metadata, MissingSource, PresenceWrite, SessionKey, SessionView, SourceScope, StreamKey, Usage, UsageAnchor,
 } from "./collector-storage.ts";
 import { checkpointFailure } from "./checkpoint-validation.ts";
 import { ClaudeCallOwners } from "./claude-call-owners.ts";
 import { ClaudeUsageLedger } from "./claude-usage-ledger.ts";
 import { CodexCallOwners } from "./codex-call-owners.ts";
+import { StoredSource } from "./source-inventory.ts";
 import { SourceUsageDiagnostics } from "./source-usage-diagnostics.ts";
 import { definedFields, isCount, isIdentifier, isNativeCodexCall, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
 import { UsageWindows } from "./usage-windows.ts";
@@ -20,6 +21,14 @@ function encodeStreamKey(source: StreamKey): string {
   const parts = [source.harness, source.sessionId, source.streamId];
   if (source.installationId !== undefined) parts.push(source.installationId);
   return JSON.stringify(parts);
+}
+
+function hasValidPosition(write: Pick<Batch, "source" | "expectedVersion" | "expectedOffset">): boolean {
+  const source = write?.source;
+  return isRecord(source) && (source.harness === "codex" || source.harness === "claude")
+    && isIdentifier(source.sessionId) && isIdentifier(source.streamId)
+    && (source.installationId === undefined || isIdentifier(source.installationId))
+    && isCount(write.expectedVersion) && isCount(write.expectedOffset);
 }
 
 function isRecordNumber(value: number): boolean {
@@ -323,7 +332,7 @@ function mergeBranches(
 
 interface StoredSession {
   version: number;
-  checkpoints: Map<string, { checkpoint: Checkpoint; generation: number }>;
+  checkpoints: Map<string, StoredSource>;
   view: Pick<SessionView, "key" | "metadata" | "usage" | "usageDiagnostics">;
   messages: Map<string, StoredMessage>;
   measurements: StoredUsage;
@@ -367,6 +376,36 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   private readonly codexOwners = new CodexCallOwners();
   private claudeOwners = new ClaudeCallOwners();
 
+  async listSources(scope: SourceScope): Promise<AcknowledgedSource[]> {
+    const selected: AcknowledgedSource[] = [];
+    for (const session of this.sessions.values()) {
+      if (session.view.key.harness !== scope.harness) continue;
+      for (const stream of session.checkpoints.values()) {
+        const source = stream.selected(scope, session.version);
+        if (source) selected.push(source);
+      }
+    }
+    return structuredClone(selected);
+  }
+
+  async recordPresence(update: PresenceWrite): Promise<CommitResult> {
+    if (!hasValidPosition(update)) return "invalid";
+    const key = encodeSessionKey(update.source);
+    const stream = encodeStreamKey(update.source);
+    const session = this.sessions.get(key);
+    const current = session?.checkpoints.get(stream);
+    if (!current || !session) return "invalid";
+    if (session.version !== update.expectedVersion || current.checkpoint.offset !== update.expectedOffset) return "conflict";
+    const next = current.record(update);
+    if (!next) return "invalid";
+    if (next === current) return "committed";
+    const version = session.version + 1;
+    if (!isCount(version)) return "invalid";
+    const checkpoints = new Map(session.checkpoints).set(stream, next);
+    this.sessions.set(key, { ...session, version, checkpoints });
+    return "committed";
+  }
+
   async readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot> {
     const session = this.sessions.get(encodeSessionKey(source));
     const checkpoint = session?.checkpoints.get(encodeStreamKey(source))?.checkpoint ?? null;
@@ -378,9 +417,17 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     if (!stored) return null;
     const { usage, diagnostics, hasGap } = key.harness === "claude" ? this.claudeOwners.view(key.sessionId, stored.view.usage, stored.measurements.order)
       : { usage: this.codexOwners.visible(key.sessionId, stored.view.usage), diagnostics: [], hasGap: false };
+    let partial = stored.hasGap || hasGap === true || diagnostics.length > 0;
+    const missingSources: MissingSource[] = [];
+    for (const source of stored.checkpoints.values()) {
+      partial ||= source.hasGap;
+      const missing = source.missing();
+      if (missing) missingSources.push(missing);
+    }
     return structuredClone({ ...stored.view, usage, messages: orderedMessages(stored.messages),
-      coverage: coverage(usage.length, stored.hasGap || hasGap === true || diagnostics.length > 0), observedTotalTokens: usage.length ? totalTokens(usage) : null,
+      coverage: coverage(usage.length, partial), observedTotalTokens: usage.length ? totalTokens(usage) : null,
       ...(diagnostics.length && { usageDiagnostics: [...stored.view.usageDiagnostics ?? [], ...diagnostics] }),
+      ...(missingSources.length && { missingSources }),
     });
   }
 
@@ -436,10 +483,8 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   }
 
   async commit(batch: Batch): Promise<CommitResult> {
+    if (!hasValidPosition(batch)) return "invalid";
     const { source, expectedVersion, expectedOffset } = batch;
-    if (!isIdentifier(source.sessionId) || !isIdentifier(source.streamId)
-      || (source.installationId !== undefined && !isIdentifier(source.installationId))) return "invalid";
-    if (!isCount(expectedVersion) || !isCount(expectedOffset)) return "invalid";
     const session = encodeSessionKey(source);
     const stream = encodeStreamKey(source);
     // Compare both values and publish the complete session in one synchronous turn.
@@ -454,10 +499,12 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const incoming = structuredClone(batch);
     // A rewritten file can describe the same counters through a different set of reports.
     const generation = incoming.resetFrom ? version : current?.generation ?? 0;
+    const accepted = StoredSource.accept(current, incoming, generation);
+    if (!accepted) return "invalid";
     const records = mergeSessionRecords(previous, incoming, stream, generation);
     if (!records) return "invalid";
     const checkpoints = new Map(previous?.checkpoints);
-    checkpoints.set(stream, { checkpoint: incoming.checkpoint, generation });
+    checkpoints.set(stream, accepted);
     const next = { version, checkpoints, ...records };
     if (!this.publishOwnership(incoming, next, current?.checkpoint)) return "invalid";
     this.sessions.set(session, next);

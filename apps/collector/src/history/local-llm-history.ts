@@ -1,5 +1,4 @@
-import { createReadStream, type Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { createReadStream } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 import type { harnesses } from "@tracerelic/shared";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
@@ -70,9 +69,14 @@ interface TranscriptSourceInfo {
   readonly previousCopy: boolean;
   readonly codexForkHeader?: { readonly parentSessionId: string; readonly forkedAt?: string };
   readonly claudeSubagent?: ClaudeSubagent;
+  readonly selectionCwd?: string;
+  readonly projectDir?: string;
+  readonly currentFileCwd?: string;
+  readonly currentFilePath?: string;
 }
 
 export interface TranscriptSource<Entry> extends TranscriptSourceInfo {
+  completeEnd(): Promise<number>;
   prefixDigests(offsets: readonly number[]): Promise<readonly VerifiedPrefix[]>;
   readBatches(position: ReadPosition, maxBatchBytes?: number, endOffset?: number): AsyncIterable<RecordBatch<Entry>>;
 }
@@ -82,7 +86,7 @@ interface DecodedRecord extends Pick<LocalHistoryEntry, "lineNumber" | "record">
   readonly afterBlankPrefix?: true;
 }
 
-interface SelectedFile<H extends LocalHistoryEntry["harness"]> extends Pick<TranscriptSourceInfo, "sessionId" | "previousCopy"> {
+interface SelectedFile<H extends LocalHistoryEntry["harness"]> extends Pick<TranscriptSourceInfo, "sessionId" | "previousCopy" | "selectionCwd" | "projectDir"> {
   readonly file: CapturedTranscriptFile;
   readonly harness: H;
   readonly blankPrefixHeaderEnd?: number;
@@ -136,19 +140,16 @@ export abstract class LocalLLMHistory {
     };
   }
 
-  protected async listDirectoryIfPresent(path: string, recursive = false): Promise<Dirent[]> {
-    try {
-      return await readdir(path, { recursive, withFileTypes: true });
-    } catch (error) {
-      if (this.isRecord(error) && error.code === "ENOENT" && error.path === path) return [];
-      throw error;
-    }
+  protected workingDirectory(value: unknown): string | undefined {
+    if (typeof value === "string" && isAbsolute(value) && !value.includes("\0")) return value;
   }
 
   protected transcriptSource<H extends LocalHistoryEntry["harness"]>(source: SelectedFile<H>): TranscriptSource<TranscriptEntry<H>> {
-    const { file, sessionId, previousCopy } = source;
+    const { file, sessionId, previousCopy, selectionCwd, projectDir } = source;
     return {
       sessionId, previousCopy, sourceFile: file.sourceFile, fileSize: file.fileSize,
+      ...(selectionCwd && { selectionCwd }), ...(projectDir && { projectDir }),
+      completeEnd: () => file.completeEnd(),
       prefixDigests: offsets => file.prefixDigests(offsets),
       readBatches: (position, maxBatchBytes = defaultBatchBytes, endOffset = file.fileSize) =>
         this.readBatches(source, position, maxBatchBytes, endOffset),
@@ -214,22 +215,22 @@ export abstract class LocalLLMHistory {
     if (next.offset > batchStart) yield { ...records, next, prefixDigest: file.finishBatch(next.offset, hash) };
   }
 
-  protected inspectFile<T>(sourceFile: string, inspect: (records: AsyncIterable<DecodedRecord>) => Promise<T>) {
-    return CapturedTranscriptFile.inspect(sourceFile, chunks => inspect(this.decodeRecords(chunks)));
+  protected inspectFile<T>(sourceFile: string, inspect: (records: AsyncIterable<DecodedRecord>) => Promise<T>, include?: (line: Buffer) => boolean) {
+    return CapturedTranscriptFile.inspect(sourceFile, chunks => inspect(this.decodeRecords(chunks, include)));
   }
 
   protected readRecords(sourceFile: string): AsyncIterable<DecodedRecord> {
     return this.decodeRecords(createReadStream(sourceFile));
   }
 
-  private async *decodeRecords(chunks: AsyncIterable<Buffer>): AsyncGenerator<DecodedRecord> {
+  private async *decodeRecords(chunks: AsyncIterable<Buffer>, include?: (line: Buffer) => boolean): AsyncGenerator<DecodedRecord> {
     let lineNumber = 0;
     let offset = 0;
     let onlyBlanks = true;
     for await (const line of this.completeLines(chunks)) {
       lineNumber++;
       offset += line.length + 1;
-      const record = this.decode(line);
+      const record = !include || include(line) ? this.decode(line) : undefined;
       if (record) yield { lineNumber, endOffset: offset, record, ...(onlyBlanks && lineNumber > 1 && { afterBlankPrefix: true }) };
       if (onlyBlanks) onlyBlanks = !record && isBlankLine(line);
     }

@@ -1,18 +1,22 @@
-import { basename, relative } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
 import {
-  LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ScanSelection, type TranscriptSource,
+  LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ClaudeTranscriptEntry, type CodexRolloutEntry, type ScanSelection, type TranscriptSource,
 } from "../history/index.ts";
-import type { Batch, Checkpoint, CheckpointSnapshot, CollectorStorage, Harness, SessionView, StreamKey } from "../storage/collector-storage.ts";
+import type { AcknowledgedSource, Batch, Checkpoint, CheckpointSnapshot, CollectorStorage, Harness, MissingSource, SessionView, StreamKey } from "../storage/collector-storage.ts";
+import { ClaudeSourceCopy } from "./claude-source-copy.ts";
 import { ClaudeSessionParser } from "./claude-session-parser.ts";
 import { CodexForkSources } from "./codex-fork-sources.ts";
 import type { DecodedChat } from "./decoded-chat.ts";
 import { ScanRecovery, checkpointPrefixes, readStorage, verifiedCheckpoint, type ScanRestart } from "./scan-recovery.ts";
 import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
+import { ScanPendingError } from "./scan-pending.ts";
+import { SourcePresenceScan, type RestoreCopy, type RestoredSource } from "./source-presence.ts";
+import { sourceId, SourceSighting, SourceSightings } from "./source-sightings.ts";
 import { TranscriptCursor, type ParserFormat, type SourceLine } from "./transcript-cursor.ts";
 
 export { ScanPendingError, type PendingScan } from "./scan-pending.ts";
 export { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
+export type { MissingSource } from "../storage/collector-storage.ts";
 
 interface TranscriptResult {
   hasStoredSession: boolean;
@@ -20,6 +24,7 @@ interface TranscriptResult {
 }
 
 type SelectParser<Entry> = (source: TranscriptSource<Entry>, checkpoint: Checkpoint | null) => ParserFormat<Entry> | Promise<ParserFormat<Entry>>;
+type SelectedSessions = Map<string, { source: StreamKey; required: boolean }>;
 
 function preparePreviousCopy(chat: DecodedChat, known: SessionView | null, offset: number): boolean {
   if (!offset && !known && !chat.messages.length && !Object.keys(chat.metadata).length
@@ -49,48 +54,70 @@ async function* files<Entry>(harness: Harness, transcripts: AsyncIterable<Transc
 }
 
 export class LocalCollector {
+  private readonly sightings: SourceSightings;
+
   constructor(
     private readonly config: GlobalConfig, private readonly storage: CollectorStorage,
     private readonly onRejection?: (report: RejectedBatch) => void,
-  ) {}
+    onMissing?: (report: MissingSource) => void,
+  ) { this.sightings = new SourceSightings(storage, onMissing); }
 
   async scanOnce(selection: ScanSelection = {}): Promise<SessionView[]> {
+    const { codexPath, claudePath, installationId } = this.config;
     const codex = new LocalLLMHistoryCodex(this.config);
-    const rejections: RejectedBatch[] = [];
-    const sources = new CodexForkSources(codex.discoverSources(selection));
-    const codexViews = await this.scanProvider("codex", sources.sources(), (source, checkpoint) => sources.format(source, checkpoint), rejections);
     const claude = new LocalLLMHistoryClaude(this.config);
-    const claudeViews = await this.scanProvider("claude", claude.discoverSources(selection),
-      source => ClaudeSessionParser.forSource(source.previousCopy, source.claudeSubagent), rejections);
-    const sessions = [...codexViews, ...claudeViews];
+    const codexPresence = new SourcePresenceScan<CodexRolloutEntry>({ ...selection, harness: "codex", root: codexPath, installationId }, codex, this.sightings);
+    const claudePresence = claudePath && new SourcePresenceScan<ClaudeTranscriptEntry>({ ...selection, harness: "claude", root: claudePath, installationId }, claude, this.sightings);
+    const rejections: RejectedBatch[] = [];
+    const sessions: SessionView[] = [];
+    try {
+      const sources = new CodexForkSources(codex.discoverSources(selection));
+      const selected = await this.scanProvider(codexPresence, sources.sources(), (source, checkpoint) => sources.format(source, checkpoint), rejections);
+      const selectedClaude = claudePresence && await this.scanProvider(claudePresence, claude.discoverSources(selection),
+        source => ClaudeSessionParser.forSource(source.previousCopy, source.claudeSubagent), rejections);
+      sessions.push(...await this.views(codexPresence, selected));
+      if (claudePresence && selectedClaude) sessions.push(...await this.views(claudePresence, selectedClaude,
+        (known, copy) => this.importClaudeCopy(known, copy, rejections)));
+    } catch (error) {
+      if (error instanceof ScanPendingError && error.pending.reason === "storage-unavailable") {
+        const codexPending = await codexPresence.reportWhileOffline();
+        const claudePending = claudePresence ? await claudePresence.reportWhileOffline() : undefined;
+        const pending = codexPending ?? claudePending;
+        if (error.pending.scope && pending) throw new ScanPendingError("storage-unavailable", pending);
+      }
+      throw error;
+    }
     if (rejections.length) throw new ScanRejectedError(sessions, rejections);
     return sessions;
   }
 
   private async scanProvider<Entry extends SourceLine>(
-    harness: Harness, transcripts: AsyncIterable<TranscriptSource<Entry>>,
+    presence: SourcePresenceScan<Entry>, transcripts: AsyncIterable<TranscriptSource<Entry>>,
     selectParser: SelectParser<Entry>, rejections: RejectedBatch[],
-  ): Promise<SessionView[]> {
-    const sessions = new Map<string, { source: StreamKey; required: boolean }>();
+  ): Promise<SelectedSessions> {
+    const sessions: SelectedSessions = new Map();
     const rejectedStreams = new Set<string>();
-    for await (const group of files(harness, transcripts)) {
-      const sources = group.map(transcript => ({ transcript, source: this.streamKey(harness, transcript) }))
-        .filter(({ source }) => !rejectedStreams.size || !rejectedStreams.has(JSON.stringify(source)));
-      if (!sources.length) continue;
-      const snapshots = await Promise.all(sources.map(({ source }) => readStorage(source, () => this.storage.readCheckpoint(source))));
+    for await (const group of files(presence.scope.harness, transcripts)) {
       const file = group[0];
+      const end = await file.completeEnd();
+      const sources = group.map(transcript => ({ transcript, sighting: presence.capture(transcript, end) }))
+        .filter(({ sighting }) => !rejectedStreams.has(sourceId(sighting.source)));
+      if (!sources.length) continue;
+      const snapshots = await Promise.all(sources.map(({ sighting }) => readStorage(sighting.source, () => sighting.readCheckpoint())));
       const prefixes = snapshots.flatMap(({ checkpoint }) => checkpointPrefixes(checkpoint));
       const offsets = new Set(prefixes.map(prefix => prefix.offset).filter(offset => offset <= file.fileSize));
       const verified = offsets.size ? await file.prefixDigests([...offsets]) : [];
       const digests = new Map(verified.map(({ offset, prefixDigest }) => [offset, prefixDigest]));
       let stopped = false;
-      for (const [i, { source, transcript }] of sources.entries()) {
+      for (const [i, { sighting, transcript }] of sources.entries()) {
+        const { source } = sighting;
         // After a rejection, other sessions in this file can still have data from earlier scans.
         const result: TranscriptResult = stopped ? { hasStoredSession: snapshots[i].version > 0 }
-          : await this.importTranscript(source, transcript, selectParser, snapshots[i], digests);
+          : await this.importTranscript(sighting, transcript, selectParser, snapshots[i], digests);
+        if (stopped) sighting.rejected = true;
         if (result.rejection) {
           stopped = true;
-          rejectedStreams.add(JSON.stringify(source));
+          rejectedStreams.add(sourceId(source));
           rejections.push(result.rejection);
           this.onRejection?.(result.rejection);
         }
@@ -99,33 +126,49 @@ export class LocalCollector {
         }
       }
     }
+    return sessions;
+  }
+
+  private async views<Entry>(presence: SourcePresenceScan<Entry>, sessions: SelectedSessions, restore?: RestoreCopy<Entry>): Promise<SessionView[]> {
+    for (const source of await presence.finish(restore)) sessions.set(source.sessionId, { source, required: true });
     const views: SessionView[] = [];
-    for (const [sessionId, { source, required }] of sessions) {
-      const view = await readStorage(source, () => this.storage.readSession({ harness, sessionId }));
+    for (const { source, required } of sessions.values()) {
+      const view = await readStorage(source, () => this.storage.readSession({ harness: source.harness, sessionId: source.sessionId }));
       if (view) views.push(view);
-      else if (required) throw new Error(`Storage has no session for ${harness}/${sessionId} after scan`);
+      else if (required) throw new Error(`Storage has no session for ${source.harness}/${source.sessionId} after scan`);
     }
     return views;
   }
 
-  private streamKey(harness: Harness, { sessionId, sourceFile }: TranscriptSource<unknown>): StreamKey {
-    const { codexPath, claudePath, installationId } = this.config;
-    let streamId = sourceFile;
-    if (harness === "codex") {
-      const name = basename(sourceFile);
-      streamId = installationId ? name : JSON.stringify([codexPath, name]);
-    } else if (installationId && claudePath) {
-      streamId = relative(claudePath, sourceFile);
+  private async importClaudeCopy(known: AcknowledgedSource, copy: TranscriptSource<ClaudeTranscriptEntry>,
+    rejections: RejectedBatch[]): Promise<RestoredSource | undefined> {
+    const recovery = new ClaudeSourceCopy(copy);
+    const sighting = new SourceSighting(known.source, { location: known.location, observedEnd: await copy.completeEnd() }, this.storage);
+    const checkpoint = () => readStorage(known.source, () => sighting.readCheckpoint());
+    const start = await checkpoint();
+    const digests = await recovery.verify(start.checkpoint);
+    if (!digests) return;
+    const result = await this.importTranscript(sighting, recovery.current(known.location),
+      () => ClaudeSessionParser.forSource(false, copy.claudeSubagent), start, digests);
+    if (result.rejection) {
+      rejections.push(result.rejection);
+      this.onRejection?.(result.rejection);
+      return;
     }
-    return { harness, sessionId, streamId, ...(installationId && { installationId }) };
+    return { sighting, verify: async version => {
+      const snapshot = await checkpoint();
+      return snapshot.version === version && !!await recovery.verify(snapshot.checkpoint);
+    } };
   }
 
   private async importTranscript<Entry extends SourceLine>(
-    source: StreamKey, transcript: TranscriptSource<Entry>, selectParser: SelectParser<Entry>,
+    sighting: SourceSighting, transcript: TranscriptSource<Entry>, selectParser: SelectParser<Entry>,
     start: CheckpointSnapshot, digests: ReadonlyMap<number, string>,
   ): Promise<TranscriptResult> {
-    const recovery = new ScanRecovery(this.storage, transcript);
+    const { source } = sighting;
+    const recovery = new ScanRecovery(sighting, transcript);
     let position: ScanRestart = start.checkpoint && !verifiedCheckpoint(start.checkpoint, digests) ? { ...start, reset: true } : start;
+    if (!position.reset && start.checkpoint) sighting.verifiedVersion = start.version;
     for (;;) {
       const accepted = position.reset ? null : position.checkpoint;
       const format = await selectParser(transcript, accepted);

@@ -68,6 +68,14 @@ model TranscriptSourceInfo {
   codexForkHeader?: CodexForkHeader;
   /** Native parent and agent of a selected Claude subagent transcript. */
   claudeSubagent?: ClaudeSubagent;
+  /** First working directory used for project selection, when available. */
+  selectionCwd?: string;
+  /** Exact Claude transcript project directory, when available. */
+  projectDir?: string;
+  /** A distinct working directory inherited from the current Claude transcript. */
+  currentFileCwd?: string;
+  /** For a named earlier Claude copy, the current transcript path relative to the configured root. */
+  currentFilePath?: Identifier;
 }
 
 model ClaudeSubagent {
@@ -108,18 +116,24 @@ model ClaudeRecordBatch is RecordBatch<ClaudeTranscriptEntry>;
  * A record larger than the batch budget occupies its own batch. If the file is
  * replaced or truncated during reading, report the source path and discard the pending batch. */
 interface SourceBatches<Entry extends {}> {
+  /** Byte immediately after the last newline within the captured file, or zero. */
+  completeEnd(): Count;
   /** Hash the captured file through the requested byte positions in one streaming pass. */
   prefixDigests(offsets: Count[]): VerifiedPrefix[];
   readBatches(position: ReadPosition, maxBatchBytes?: SourceOrder, endOffset?: Count): RecordBatch<Entry>[];
 }
 
 interface LocalLLMHistoryCodex extends LocalLLMHistory {
+  /** Check rollout basenames in the active and archive directories of an accessible root. */
+  confirmedAbsent(paths: Identifier[]): Identifier[];
   discoverSources(selection?: ScanSelection): TranscriptSourceInfo[];
   /** Yield one selected rollout at a time. Preserve undated metadata and source order. */
   readRollouts(selection?: ScanSelection): CodexRollout[];
 }
 
 interface LocalLLMHistoryClaude extends LocalLLMHistory {
+  /** Check transcript paths in the accessible Claude root, including possible earlier copies. */
+  confirmedAbsent(paths: Identifier[]): Identifier[];
   discoverSources(selection?: ScanSelection): TranscriptSourceInfo[];
   /** Yield complete records grouped by file and effective session ID.
    * Include earlier copies of a selected file for the same session.
@@ -128,10 +142,16 @@ interface LocalLLMHistoryClaude extends LocalLLMHistory {
 }
 
 /** A one-time scan could not confirm its work. An explicit new scan can retry immediately. */
+@TypeSpec.JsonSchema.extension("oneOf", #[#{ required: #["source"] }, #{ required: #["scope"] }])
+@TypeSpec.JsonSchema.extension("dependentSchemas", #{
+  scope: #{ `not`: #{ required: #["byteRange"] }, properties: #{ reason: #{ `const`: "storage-unavailable" } } }
+})
 model PendingScan {
   status: "pending";
   reason: "storage-unavailable" | "version-conflict";
-  source: StreamKey;
+  source?: StreamKey;
+  /** The selected inventory is unavailable before a particular source can be identified. */
+  scope?: SourceScope;
   /** Attempted transcript bytes, when a batch was available. */
   byteRange?: ByteRange;
   /** Earliest suggested time for an automatic retry. */
@@ -156,6 +176,7 @@ interface LocalCollector {
   /** Import complete records into the destination workspace. Return its selected sessions.
    * An unconfirmed write or unresolved version conflict raises a scan error carrying PendingScan.
    * Emit a RejectedBatch for each invalid commit. Stop that file and continue other files.
+   * Emit one MissingSource for each newly confirmed disappearance in the selection.
    * After scanning, raise a scan error carrying RejectedScan if any batch was rejected. */
   scanOnce(selection?: ScanSelection): SessionView[];
 }

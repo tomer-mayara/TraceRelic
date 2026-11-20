@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { stat } from "node:fs/promises";
-import type { Batch, CollectorStorage, SessionKey, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { Batch, CollectorStorage, PresenceWrite, SessionKey, SourceScope, StreamKey } from "../../src/storage/collector-storage.ts";
 import { RewriteScanFixture } from "./rewrite-scan-fixture.ts";
 
 export type DropMoment = "before storage writes" | "after storage writes";
@@ -44,6 +44,16 @@ export class DroppedConnection implements InterruptibleConnection {
   async readSession(key: SessionKey) {
     if (this.offline) this.fail();
     return this.storage.readSession(key);
+  }
+
+  async listSources(scope: SourceScope) {
+    if (this.offline) this.fail();
+    return this.storage.listSources(scope);
+  }
+
+  async recordPresence(update: PresenceWrite) {
+    if (this.offline) this.fail();
+    return this.storage.recordPresence(update);
   }
 
   async commit(batch: Batch) {
