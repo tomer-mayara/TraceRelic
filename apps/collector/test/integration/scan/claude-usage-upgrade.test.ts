@@ -3,6 +3,7 @@ import { appendFile } from "node:fs/promises";
 import { test } from "node:test";
 import type { Batch, StreamKey } from "../../../src/storage/collector-storage.ts";
 import { ClaudeProjectFixture } from "../../fixtures/claude-project-fixture.ts";
+import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 
 for (const saved of ["empty", "version 1"]) {
@@ -18,7 +19,7 @@ for (const saved of ["empty", "version 1"]) {
       source = batch.source;
       const state = JSON.parse(batch.checkpoint.parserState);
       const parserState = saved === "empty" ? "{}" : JSON.stringify({ ...state, version: 1 });
-      return commit({ ...batch, claudeUsageReports: [], usageDiagnostics: [], checkpoint: { ...batch.checkpoint, parserState } });
+      return commit(textOnlyBatch(batch, { offset: batch.checkpoint.offset, prefixDigest: batch.checkpoint.prefixDigest, parserState }));
     });
     await fixture.scan();
     older.mock.restore();

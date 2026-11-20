@@ -7,6 +7,8 @@ import { ClaudeUsageScanFixture } from "../../fixtures/claude-usage-scan-fixture
 import { CodexUsageScanFixture } from "../../fixtures/codex-usage-scan-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 import { scanContract as contract } from "../../fixtures/scan-contract.ts";
+import "./fork-totals.steps.ts";
+import "./claude-fork.steps.ts";
 import "./codex-fork.steps.ts";
 import "./isolate-rejected-batch.steps.ts";
 import "./recover-changed-transcript.steps.ts";

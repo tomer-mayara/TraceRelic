@@ -66,6 +66,13 @@ model TranscriptSourceInfo {
   previousCopy: boolean;
   /** Only the child's own native Codex header supplies this link. */
   codexForkHeader?: CodexForkHeader;
+  /** Native parent and agent of a selected Claude subagent transcript. */
+  claudeSubagent?: ClaudeSubagent;
+}
+
+model ClaudeSubagent {
+  parentSessionId: Identifier;
+  agentId: Identifier;
 }
 
 model CodexForkHeader {

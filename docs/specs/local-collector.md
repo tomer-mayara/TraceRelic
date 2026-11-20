@@ -559,6 +559,19 @@ Feature: Keep one owner for each Claude call
 1. **Unit.** Use two native agent IDs under the same parent. Check a copied model message with a changed request ID and two genuinely separate requests. Only a verified parent match establishes a replay.
 2. **Integration.** Collect the copies from two installations. Enforce one owner for a confirmed provider call in the workspace. Test late evidence of its origin and a copy whose origin cannot be proven.
 
+| LC-11 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [Claude fork and subagent scenarios](../../apps/collector/test/acceptance/scan/claude-fork.feature) through `scan --once` in both orders. Keep the copied chat text, charge the parent's 100 tokens once, and keep the child's own 25. Check two agents, remapped UUIDs, distinct requests, two installations and a late parent with `bun run check:collector-scan` and `bun run test`. |
+| Observability | Expose the linked parent in session metadata. While a copied call has no verified owner, return `unresolved-claude-fork` at the earliest affected line and byte range for its source. Count independently identified child work. Check the session view, coverage and diagnostic against the storage schema. Existing service objectives apply. |
+| Architecture | The history reader supplies the native subagent identity. The Claude decoder sends report origins through the storage port. Workspace storage compares accepted parent and child evidence across installations and updates affected session versions in one transaction. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds the subagent's parent and agent IDs. The [storage contract](local-collector/storage.tsp) adds optional native origin and position to a Claude report, a checkpoint marker and a version-checked backfill for older writers. Test older checkpoints, invalid writes and replay with `bun run check:collector-storage` and `bun run check:collector-scan`. |
+
+An ordinary fork records the source session and the original row UUID in `forkedFrom`. A nested subagent file can use the parent's session ID for several native agents. Keep each agent's chat under its own key. Preserve its copied text even when the row UUID or request ID changed. [Claude SDK fork transform](https://github.com/anthropics/claude-agent-sdk-python/blob/69846cdf82aef59add3b14a26b4f16d1ccee26ba/src/claude_agent_sdk/_internal/session_mutations.py#L405-L442)
+
+Compare the marked original row and its provider identity, or match the full native message and request IDs in the linked parent. A row that names the original can match a changed request ID when its model message ID agrees. Separate requests can share a model message ID. Text, token amounts and a parent link alone cannot establish a replay. Keep unresolved positions with their source and parent so a later parent-only scan can settle ownership. An earlier checkpoint can supply the same evidence from its accepted bytes. Repeated scans keep the stored versions and totals stable.
+
+Apply the Claude whole-report rules to all verified observations of the owner's call. A final report found only in a verified copy can correct the owner's provisional amount. Conflicting final amounts can leave that call without a measurement while its owner remains known. Match each report's native origin before using a single provider ID to fill in a missing field. Keep a separate, fully identified child request in the child's total even when a copied report shares its model message ID.
+
 #### LC-12 · Report a missing source
 
 ```gherkin

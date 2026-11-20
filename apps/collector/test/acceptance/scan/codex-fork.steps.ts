@@ -1,16 +1,20 @@
 import assert from "node:assert/strict";
-import { After, Before, Given, Then, When } from "@cucumber/cucumber";
+import { After, Before, Given, When } from "@cucumber/cucumber";
 import { CodexForkScanFixture } from "../../fixtures/codex-fork-scan-fixture.ts";
 import { scanContract } from "../../fixtures/scan-contract.ts";
+import type { ForkTotalsScenario } from "./fork-totals.steps.ts";
 
-interface ForkScenario {
+interface ForkScenario extends ForkTotalsScenario {
   fork: CodexForkScanFixture;
   seen: Awaited<ReturnType<CodexForkScanFixture["scan"]>>;
   progress: Awaited<ReturnType<CodexForkScanFixture["checkpoints"]>>;
   source: Awaited<ReturnType<CodexForkScanFixture["writeChild"]>>;
 }
 
-Before({ tags: "@lc10" }, async function (this: ForkScenario) { this.fork = await CodexForkScanFixture.create(); });
+Before({ tags: "@lc10" }, async function (this: ForkScenario) {
+  this.fork = await CodexForkScanFixture.create();
+  this.checkForkTotals = checkCodexTotals;
+});
 After({ tags: "@lc10" }, async function (this: ForkScenario) { await this.fork?.close(); });
 
 Given("a Codex parent had {int} tokens at the fork and now has {int}", async function (
@@ -35,9 +39,7 @@ When("I discover the child before the archived parent and scan twice", async fun
   assert.deepEqual(await this.fork.checkpoints(), this.progress);
 });
 
-Then("the parent shows {int} and the linked child shows {int}", function (
-  this: ForkScenario, parentTokens: number, childTokens: number,
-) {
+function checkCodexTotals(this: ForkScenario, parentTokens: number, childTokens: number) {
   assert.equal(this.seen.length, 2);
   const child = this.seen.find(view => view.key.sessionId === "child");
   const parent = this.seen.find(view => view.key.sessionId === "parent");
@@ -55,4 +57,4 @@ Then("the parent shows {int} and the linked child shows {int}", function (
   });
   for (const view of [parent, child]) assert(scanContract.validate("SessionView.json", view), scanContract.errorsText());
   assert(scanContract.validate("CheckpointSnapshot.json", this.progress.child), scanContract.errorsText());
-});
+}

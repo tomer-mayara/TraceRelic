@@ -31,6 +31,7 @@ export interface Checkpoint {
   prefixDigest?: PrefixDigest;
   replayThrough?: VerifiedPrefix;
   codexFork?: CodexForkCheckpoint;
+  claudeCallOrigins?: true;
 }
 
 export interface ForkPosition {
@@ -104,6 +105,16 @@ export interface ClaudeUsageReport extends TokenCounts, CacheWriteDurations {
   turnId?: Identifier;
   model?: string;
   iterationId?: Identifier;
+  origin?: ClaudeCallOrigin;
+}
+
+export interface ClaudeCallOrigin {
+  kind: "own" | "copy" | "subagent";
+  transcriptUuid?: Identifier;
+  parentSessionId?: Identifier;
+  parentMessageUuid?: Identifier;
+  sourceOrder: SourceOrder;
+  byteRange: ByteRange;
 }
 
 export interface ByteRange {
@@ -113,7 +124,8 @@ export interface ByteRange {
 
 export type UsageDiagnosticCode = "invalid-claude-usage" | "unidentified-claude-call"
   | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration" | "ambiguous-transcript-replay"
-  | "malformed-transcript-line" | "unsupported-codex-usage" | "codex-counter-reset" | "unresolved-codex-fork";
+  | "malformed-transcript-line" | "unsupported-codex-usage" | "codex-counter-reset" | "unresolved-codex-fork"
+  | "unresolved-claude-fork";
 
 export interface UsageDiagnostic {
   code: UsageDiagnosticCode;
@@ -164,6 +176,7 @@ export interface Batch {
   usage: Usage[];
   codexCallClaims?: CodexCallClaim[];
   reconcileCodexForkFrom?: Checkpoint;
+  backfillClaudeOriginsFrom?: Checkpoint;
   claudeUsageReports?: ClaudeUsageReport[];
   usageDiagnostics?: UsageDiagnostic[];
   usageAnchors?: UsageAnchor[];

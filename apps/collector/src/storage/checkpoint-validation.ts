@@ -59,8 +59,9 @@ function isForkCheckpoint(value: unknown): value is CodexForkCheckpoint {
 
 function isCheckpoint(value: unknown): value is Checkpoint {
   if (!isRecord(value) || !isCount(value.offset) || typeof value.parserState !== "string") return false;
-  const { prefixDigest, replayThrough, codexFork } = value;
+  const { prefixDigest, replayThrough, codexFork, claudeCallOrigins } = value;
   if (codexFork !== undefined && !isForkCheckpoint(codexFork)) return false;
+  if (claudeCallOrigins !== undefined && (claudeCallOrigins !== true || !isPrefixDigest(prefixDigest))) return false;
   if (prefixDigest === undefined) return replayThrough === undefined && codexFork === undefined;
   if (!isPrefixDigest(prefixDigest) || (value.offset === 0 && prefixDigest !== emptyPrefixDigest)) return false;
   return replayThrough === undefined || (isRecord(replayThrough) && isCount(replayThrough.offset)
@@ -89,28 +90,44 @@ function upgradeFailure(batch: Batch, current: Checkpoint | undefined): "invalid
   if (!upgradesParser(batch.source.harness, current, checkpoint)) return "invalid";
 }
 
-function forkCorrectionFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
-  const { checkpoint, reconcileCodexForkFrom, metadata } = batch;
-  if (!current || !isCheckpoint(reconcileCodexForkFrom) || !checkpoint.codexFork
+function backfillsClaudeOrigins(batch: Batch, current: Checkpoint): boolean {
+  const { checkpoint } = batch;
+  return checkpoint.claudeCallOrigins === true && current.claudeCallOrigins === undefined && batch.reconcileCodexForkFrom === undefined
+    && Array.isArray(batch.usage) && !batch.usage.length && !batch.usageWindows?.length && !batch.usageAnchors?.length
+    && (checkpoint.parserState === current.parserState || upgradesParser("claude", current, checkpoint));
+}
+
+/** A correction may update only usage and its parent link at the accepted byte. */
+function correctionFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
+  const { checkpoint, reconcileCodexForkFrom, backfillClaudeOriginsFrom, metadata } = batch;
+  const before = backfillClaudeOriginsFrom ?? reconcileCodexForkFrom;
+  if (!current || !isCheckpoint(before)
     || batch.resetFrom !== undefined || batch.upgradeFromParserState !== undefined) return "invalid";
-  if (!isDeepStrictEqual(definedFields(reconcileCodexForkFrom), definedFields(current))) return "conflict";
+  if (!isDeepStrictEqual(definedFields(before), definedFields(current))) return "conflict";
   if (checkpoint.offset !== current.offset || current.prefixDigest === undefined || checkpoint.prefixDigest !== current.prefixDigest
-    || !isDeepStrictEqual(checkpoint.replayThrough, current.replayThrough)
-    || isDeepStrictEqual(checkpoint.codexFork, current.codexFork)) return "invalid";
+    || !isDeepStrictEqual(checkpoint.replayThrough, current.replayThrough)) return "invalid";
   if (batch.messages?.length || batch.branchObservation !== undefined || (metadata &&
     Object.keys(definedFields(metadata)).some(key => key !== "parentSessionId"))) return "invalid";
+  if (backfillClaudeOriginsFrom !== undefined) return backfillsClaudeOrigins(batch, current) ? undefined : "invalid";
+  if (!checkpoint.codexFork || isDeepStrictEqual(checkpoint.codexFork, current.codexFork)) return "invalid";
+}
+
+function belongsToSource(batch: Batch): boolean {
+  const { checkpoint } = batch;
+  if (checkpoint.claudeCallOrigins && batch.source.harness !== "claude") return false;
+  const fork = checkpoint.codexFork;
+  return !fork || (batch.source.harness === "codex" && (!fork.inheritedThrough || fork.parentSessionId !== batch.source.sessionId)
+    && (batch.metadata?.parentSessionId === undefined || batch.metadata.parentSessionId === fork.parentSessionId));
 }
 
 export function checkpointFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
   const { checkpoint } = batch;
-  if (!isCheckpoint(checkpoint) || (current?.prefixDigest !== undefined && checkpoint.prefixDigest === undefined)) return "invalid";
-  const fork = checkpoint.codexFork;
-  if (fork && (batch.source.harness !== "codex" || (fork.inheritedThrough && fork.parentSessionId === batch.source.sessionId)
-    || (batch.metadata?.parentSessionId !== undefined && batch.metadata.parentSessionId !== fork.parentSessionId))) return "invalid";
-  if (batch.reconcileCodexForkFrom !== undefined) return forkCorrectionFailure(batch, current);
+  if (!isCheckpoint(checkpoint) || !belongsToSource(batch) || (current?.prefixDigest !== undefined && checkpoint.prefixDigest === undefined)) return "invalid";
+  if (batch.reconcileCodexForkFrom !== undefined || batch.backfillClaudeOriginsFrom !== undefined) return correctionFailure(batch, current);
   if (batch.resetFrom !== undefined) return resetFailure(batch, current);
-  if (current?.codexFork?.inheritedThrough && !isDeepStrictEqual(fork, current.codexFork)) return "invalid";
+  if (current?.codexFork?.inheritedThrough && !isDeepStrictEqual(checkpoint.codexFork, current.codexFork)) return "invalid";
   if (!preservesReplayBound(current, checkpoint)) return "invalid";
   if (batch.upgradeFromParserState !== undefined) return upgradeFailure(batch, current);
+  if (current && (current.offset > 0 || current.claudeCallOrigins) && checkpoint.claudeCallOrigins !== current.claudeCallOrigins) return "invalid";
   return checkpoint.offset > (current?.offset ?? 0) ? undefined : "invalid";
 }

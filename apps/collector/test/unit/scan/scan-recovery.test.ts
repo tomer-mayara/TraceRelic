@@ -79,3 +79,13 @@ test("omitting empty optional checkpoint fields on the wire cannot confirm an un
   f.timeoutAfter(2, f.saved);
   await assert.rejects(f.recovery.commit(batch(1, 10), previous, 10), ScanPendingError);
 });
+
+test("a lost Claude origin backfill reply requires the origin marker on the durable checkpoint", async () => {
+  const f = new ScanRecoveryFixture();
+  const next = { ...f.saved, claudeCallOrigins: true as const };
+  const correction = batch(1, 10, { checkpoint: next, backfillClaudeOriginsFrom: f.saved });
+  f.timeoutAfter(2, next);
+  assert.deepEqual(await f.recovery.commit(correction, f.saved, 0), f.winner);
+  f.timeoutAfter(3, f.saved);
+  await assert.rejects(f.recovery.commit({ ...correction, expectedVersion: 2 }, f.saved, 0), ScanPendingError);
+});

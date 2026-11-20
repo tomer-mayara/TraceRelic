@@ -35,6 +35,8 @@ model VerifiedPrefix {
   prefixDigest: PrefixDigest;
 }
 
+@extension("dependentRequired", #{ claudeCallOrigins: #["prefixDigest"] })
+@extension("not", #{ required: #["claudeCallOrigins", "codexFork"] })
 model Checkpoint {
   offset: Count;
   parserState: string;
@@ -46,6 +48,8 @@ model Checkpoint {
   replayThrough?: VerifiedPrefix;
   /** Decision for the captured Codex fork. Older checkpoints lack this field. */
   codexFork?: CodexForkCheckpoint;
+  /** The scanner has submitted native Claude call origins through this byte. */
+  claudeCallOrigins?: true;
 }
 
 model ForkPosition {
@@ -134,6 +138,26 @@ model ClaudeUsageReport extends TokenCounts {
   turnId?: Identifier;
   `model`?: string;
   iterationId?: Identifier;
+  /** Native evidence about the transcript row. Older writers omit it. */
+  origin?: ClaudeCallOrigin;
+}
+
+union ClaudeOriginKind { "own", "copy", "subagent" }
+
+@extension("dependentRequired", #{ parentMessageUuid: #["parentSessionId"] })
+@extension("allOf", #[
+  #{ `if`: #{ required: #["parentMessageUuid"] }, then: #{ properties: #{ kind: #{ `const`: "copy" } } } },
+  #{ `if`: #{ properties: #{ kind: #{ `const`: "subagent" } } }, then: #{ required: #["parentSessionId"] } }
+])
+model ClaudeCallOrigin {
+  /** A native child call, a marked copy, or a subagent row with uncertain ownership. */
+  kind: ClaudeOriginKind;
+  transcriptUuid?: Identifier;
+  parentSessionId?: Identifier;
+  /** Original transcript row identified by forkedFrom.messageUuid. */
+  parentMessageUuid?: Identifier;
+  sourceOrder: SourceOrder;
+  byteRange: ByteRange;
 }
 
 /** Zero-based source bytes, from the first byte through the terminating newline.
@@ -146,10 +170,10 @@ model ByteRange {
 union UsageDiagnosticCode {
   "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown",
   "unsupported-claude-iteration", "ambiguous-transcript-replay", "malformed-transcript-line",
-  "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork"
+  "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork", "unresolved-claude-fork"
 }
 
-@extension("if", #{ properties: #{ code: #{ `enum`: #["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork"] } } })
+@extension("if", #{ properties: #{ code: #{ `enum`: #["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork", "unresolved-claude-fork"] } } })
 @extension("then", #{ required: #["byteRange"] })
 model UsageDiagnostic {
   code: UsageDiagnosticCode;
@@ -208,6 +232,11 @@ model UsageAnchor {
   after?: TokenCounts;
 }
 
+@extension("if", #{ properties: #{ checkpoint: #{ required: #["claudeCallOrigins"] } } })
+@extension("then", #{ properties: #{
+  source: #{ properties: #{ harness: #{ `const`: "claude" } } },
+  claudeUsageReports: #{ items: #{ required: #["origin"] } }
+} })
 model Batch {
   source: StreamKey;
   expectedVersion: Count;
@@ -223,7 +252,11 @@ model Batch {
   /** Replace this stream's usage for the verified checkpoint using the new fork evidence.
    * Compare the exact saved checkpoint. Keep messages, other streams and earlier transcript generations. */
   reconcileCodexForkFrom?: Checkpoint;
-  /** Compare each whole Claude report with the evidence already stored in this session. */
+  /** Submit Claude call origins from a previously accepted prefix. Compare its exact
+   * checkpoint and keep its bytes, messages and replay position. */
+  backfillClaudeOriginsFrom?: Checkpoint;
+  /** Compare each whole Claude report with stored evidence. A checkpoint marked
+   * claudeCallOrigins requires origin on every report. */
   claudeUsageReports?: ClaudeUsageReport[];
   usageDiagnostics?: UsageDiagnostic[];
   /** Each anchor refers to a call in this batch's usage list. */

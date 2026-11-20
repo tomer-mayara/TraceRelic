@@ -1,5 +1,5 @@
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
-import type { ClaudeUsageReport, TokenCounts, Usage, UsageStatus } from "./collector-storage.ts";
+import type { ByteRange, ClaudeCallOrigin, ClaudeUsageReport, TokenCounts, Usage, UsageStatus } from "./collector-storage.ts";
 
 export function definedFields<T extends object>(fields: T): T {
   const copy = { ...fields };
@@ -19,6 +19,11 @@ export function isIdentifier(value: unknown): value is string {
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function isByteRange(value: unknown, acceptedEnd = Number.MAX_SAFE_INTEGER): value is ByteRange {
+  return isRecord(value) && isCount(value.startOffset) && isCount(value.endOffset)
+    && value.startOffset < value.endOffset && value.endOffset <= acceptedEnd;
 }
 
 export function isTokenCounts(value: unknown): value is TokenCounts {
@@ -50,11 +55,20 @@ function hasValidCallFields(value: Record<string, unknown>): boolean {
     && (value.iterationId === undefined || isIdentifier(value.messageId) || isIdentifier(value.requestId));
 }
 
+function isClaudeOrigin(value: unknown): value is ClaudeCallOrigin {
+  if (!isRecord(value)) return false;
+  if (value.parentMessageUuid !== undefined && (value.kind !== "copy" || !isIdentifier(value.parentSessionId))) return false;
+  if (value.kind === "subagent" && !isIdentifier(value.parentSessionId)) return false;
+  return (value.kind === "own" || value.kind === "copy" || value.kind === "subagent")
+    && isCount(value.sourceOrder) && value.sourceOrder > 0 && isByteRange(value.byteRange)
+    && [value.transcriptUuid, value.parentSessionId, value.parentMessageUuid].every(id => id === undefined || isIdentifier(id));
+}
+
 export function isClaudeUsageReport(value: unknown): value is ClaudeUsageReport {
   return isRecord(value) && isTokenCounts(value) && isCount(value.inputTokens + value.outputTokens)
     && isUsageStatus(value.status) && isRecordedTimestamp(value.at)
     && (isIdentifier(value.messageId) || isIdentifier(value.requestId))
-    && hasValidCallFields(value) && hasValidDurations(value);
+    && hasValidCallFields(value) && hasValidDurations(value) && (value.origin === undefined || isClaudeOrigin(value.origin));
 }
 
 export function isUsage(value: unknown): value is Usage {

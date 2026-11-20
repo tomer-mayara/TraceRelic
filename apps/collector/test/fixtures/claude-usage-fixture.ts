@@ -16,6 +16,11 @@ export class ClaudeUsageFixture {
     return ClaudeChatFixture.transcript(rows).entries;
   }
 
+  static positioned(...rows: Fields[]) {
+    // Each selected row follows bytes from another session in the same physical file.
+    return this.entries(...rows).map(entry => ({ ...entry, lineNumber: entry.lineNumber + 7, startOffset: entry.endOffset - 77 }));
+  }
+
   static advisorExample() {
     // Provider example in https://platform.claude.com/docs/en/agents-and-tools/tool-use/advisor-tool#usage-and-billing
     return {

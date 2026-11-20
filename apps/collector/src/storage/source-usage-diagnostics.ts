@@ -1,5 +1,5 @@
-import type { Batch, ByteRange, Harness, SourceUsageDiagnostic, UsageDiagnosticCode } from "./collector-storage.ts";
-import { isCount, isRecord } from "./usage-validation.ts";
+import type { Batch, Harness, SourceUsageDiagnostic, UsageDiagnosticCode } from "./collector-storage.ts";
+import { isByteRange, isCount, isRecord } from "./usage-validation.ts";
 
 const rules: Record<UsageDiagnosticCode, { provider?: Harness; reportsGap?: true }> = {
   "invalid-claude-usage": { provider: "claude" },
@@ -11,12 +11,8 @@ const rules: Record<UsageDiagnosticCode, { provider?: Harness; reportsGap?: true
   "unsupported-codex-usage": { provider: "codex", reportsGap: true },
   "codex-counter-reset": { provider: "codex", reportsGap: true },
   "unresolved-codex-fork": { provider: "codex", reportsGap: true },
+  "unresolved-claude-fork": { provider: "claude", reportsGap: true },
 };
-
-function validRange(range: unknown, acceptedEnd: number): range is ByteRange {
-  return isRecord(range) && isCount(range.startOffset) && isCount(range.endOffset)
-    && range.startOffset < range.endOffset && range.endOffset <= acceptedEnd;
-}
 
 export class SourceUsageDiagnostics {
   private readonly entries = new Map<string, SourceUsageDiagnostic>();
@@ -38,15 +34,17 @@ export class SourceUsageDiagnostics {
       const rule = rules[code];
       if (rule.provider && harness !== rule.provider) return null;
       if (rule.reportsGap || byteRange !== undefined) {
-        if (!validRange(byteRange, batch.checkpoint.offset)) return null;
+        if (!isByteRange(byteRange, batch.checkpoint.offset)) return null;
       }
+      // Workspace ownership supplies the current status, including parent evidence from other installations.
+      if (code === "unresolved-claude-fork") continue;
       records.add({
         streamId, ...(installationId !== undefined && { installationId }), code, sourceOrder,
         ...(byteRange && { byteRange: { startOffset: byteRange.startOffset, endOffset: byteRange.endOffset } }),
       });
       hasGap ||= rule.reportsGap === true;
     }
-    return { values: [...records.entries.values()], hasGap };
+    return { values: records.entries.size ? [...records.entries.values()] : previous, hasGap };
   }
 
   private add(diagnostic: SourceUsageDiagnostic): void {

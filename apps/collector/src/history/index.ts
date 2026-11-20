@@ -1,5 +1,5 @@
 export {
-  LocalLLMHistory, type DamagedLine, type LocalHistoryEntry, type ReadPosition, type RecordBatch, type ScanSelection,
+  LocalLLMHistory, type ClaudeSubagent, type DamagedLine, type LocalHistoryEntry, type ReadPosition, type RecordBatch, type ScanSelection,
   type TranscriptSource, type VerifiedPrefix,
 } from "./local-llm-history.ts";
 export { TranscriptChangedError } from "./captured-transcript-file.ts";

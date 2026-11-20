@@ -1,10 +1,12 @@
-import type { ClaudeTranscriptEntry } from "../history/index.ts";
+import type { ClaudeSubagent, ClaudeTranscriptEntry } from "../history/index.ts";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
-import type { ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../storage/collector-storage.ts";
+import type { ClaudeCallOrigin, ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../storage/collector-storage.ts";
 import { ClaudeUsageCounts, isObject, type ReportIssue } from "./claude-usage-counts.ts";
 
 type Fields = Readonly<Record<string, unknown>>;
-type Request = Pick<ClaudeUsageReport, "at" | "status" | "messageId" | "requestId" | "turnId">;
+type Request = Pick<ClaudeUsageReport, "at" | "status" | "messageId" | "requestId" | "turnId" | "origin">;
+type Entry = ClaudeTranscriptEntry & { readonly startOffset?: number };
+type Fork = Pick<ClaudeCallOrigin, "parentSessionId" | "parentMessageUuid">;
 
 function text(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -17,15 +19,43 @@ function assistant(record: Fields): Fields | undefined {
   return message;
 }
 
+function forkOrigin(value: unknown): Fork | undefined {
+  if (value === undefined || value === null) return;
+  if (!isObject(value) || !text(value.sessionId)) return {};
+  return { parentSessionId: value.sessionId, ...(text(value.messageUuid) && { parentMessageUuid: value.messageUuid }) };
+}
+
+function callOrigin(entry: Entry, fork: Fork | undefined, subagent?: ClaudeSubagent): ClaudeCallOrigin | undefined {
+  if (entry.startOffset === undefined) return;
+  const { record, lineNumber, startOffset, endOffset } = entry;
+  const row = {
+    sourceOrder: lineNumber, byteRange: { startOffset, endOffset }, ...(text(record.uuid) && { transcriptUuid: record.uuid }),
+    ...(subagent && { parentSessionId: subagent.parentSessionId }),
+  };
+  if (fork) return { ...row, kind: "copy", ...fork };
+  const own = !subagent || (record.isSidechain !== false
+    && (text(record.agentId) ? record.agentId === subagent.agentId : record.isSidechain === true));
+  return { ...row, kind: own ? "own" : "subagent" };
+}
+
 export class ClaudeUsage {
   private readonly reports: ClaudeUsageReport[] = [];
   private readonly diagnostics: UsageDiagnostic[] = [];
   private hasGap = false;
 
-  static decodeBatch(entries: readonly ClaudeTranscriptEntry[]) {
+  static decodeBatch(entries: readonly Entry[], subagent?: ClaudeSubagent, previousCopy = false) {
     const batch = new ClaudeUsage();
-    for (const entry of entries) batch.read(entry);
-    return { claudeUsageReports: batch.reports, usageDiagnostics: batch.diagnostics, hasGap: batch.hasGap };
+    let parentSessionId: string | undefined;
+    for (const entry of entries) {
+      const fork = forkOrigin(entry.record.forkedFrom);
+      const count = batch.reports.length;
+      batch.read(entry, fork, subagent);
+      if (!previousCopy || text(entry.record.uuid) || count !== batch.reports.length) {
+        parentSessionId ??= subagent?.parentSessionId ?? fork?.parentSessionId;
+      }
+    }
+    return { claudeUsageReports: batch.reports, usageDiagnostics: batch.diagnostics, hasGap: batch.hasGap,
+      ...(parentSessionId && { metadata: { parentSessionId } }) };
   }
 
   private reportIssues(sourceOrder: number): ReportIssue {
@@ -37,7 +67,8 @@ export class ClaudeUsage {
     };
   }
 
-  private read({ record, timestamp, lineNumber }: ClaudeTranscriptEntry): void {
+  private read(entry: Entry, fork: Fork | undefined, subagent?: ClaudeSubagent): void {
+    const { record, timestamp, lineNumber } = entry;
     const message = assistant(record);
     const usage = message?.usage;
     if (!message || usage === undefined || usage === null || (isObject(usage) && !Object.keys(usage).length)) return;
@@ -50,10 +81,11 @@ export class ClaudeUsage {
       issue("invalid-claude-usage", true);
       return;
     }
+    const origin = callOrigin(entry, fork, subagent);
     const request: Request = {
       at: timestamp, status: text(message.stop_reason) ? "final" : "provisional",
       ...(text(message.id) && { messageId: message.id }), ...(text(record.requestId) && { requestId: record.requestId }),
-      ...(text(record.turnId) && { turnId: record.turnId }),
+      ...(text(record.turnId) && { turnId: record.turnId }), ...(origin && { origin }),
     };
     this.observe(usage, request, message.model, issue);
     this.readIterations(usage.iterations, request, issue);

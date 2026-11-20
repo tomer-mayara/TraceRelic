@@ -5,6 +5,7 @@ import type {
   Message, Metadata, SessionKey, SessionView, StreamKey, Usage, UsageAnchor,
 } from "./collector-storage.ts";
 import { checkpointFailure } from "./checkpoint-validation.ts";
+import { ClaudeCallOwners } from "./claude-call-owners.ts";
 import { ClaudeUsageLedger } from "./claude-usage-ledger.ts";
 import { CodexCallOwners } from "./codex-call-owners.ts";
 import { SourceUsageDiagnostics } from "./source-usage-diagnostics.ts";
@@ -260,7 +261,7 @@ function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, st
   let usage = recorded.usage;
   let claude = previous?.measurements.claude;
   if (reports?.length) {
-    if (batch.source.harness !== "claude") return null;
+    if (batch.source.harness !== "claude" || (batch.checkpoint.claudeCallOrigins && reports.some(report => !report?.origin))) return null;
     const next = ClaudeUsageLedger.merge(claude, reports, batch.source.sessionId);
     if (!next) return null;
     claude = next;
@@ -272,9 +273,7 @@ function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, st
     stored.order = combined.order;
     stored.claude = claude;
   }
-  const total = usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
-  if (!isCount(total)) return null;
-  return { stored, usage, total, history, hasGap: recorded.hasGap || (claude?.hasGap ?? false) };
+  return { stored, usage, history, hasGap: recorded.hasGap };
 }
 
 interface RecordedBranch {
@@ -325,7 +324,7 @@ function mergeBranches(
 interface StoredSession {
   version: number;
   checkpoints: Map<string, { checkpoint: Checkpoint; generation: number }>;
-  view: Omit<SessionView, "messages">;
+  view: Pick<SessionView, "key" | "metadata" | "usage" | "usageDiagnostics">;
   messages: Map<string, StoredMessage>;
   measurements: StoredUsage;
   codexUsageWrites?: CodexUsageWrite;
@@ -338,6 +337,10 @@ function coverage(records: number, hasGap: boolean): Coverage {
   return hasGap ? "partial" : "reported";
 }
 
+function totalTokens(usage: readonly Usage[]): number {
+  return usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
+}
+
 function mergeSessionRecords(
   previous: StoredSession | undefined, batch: Batch, stream: string, generation: number,
 ): Omit<StoredSession, "version" | "checkpoints"> | null {
@@ -348,13 +351,12 @@ function mergeSessionRecords(
   const branches = mergeBranches(previous?.branches, batch, JSON.stringify([stream, generation]));
   const diagnostics = SourceUsageDiagnostics.merge(previous?.view.usageDiagnostics, batch);
   if (!messages || !measurements || branches === null || !diagnostics) return null;
-  const { usage, total, stored } = measurements;
+  const { usage, stored } = measurements;
   const hasGap = previous?.hasGap === true || batch.hasGap === true || measurements.hasGap || diagnostics.hasGap;
   const metadata = { ...previous?.view.metadata, ...definedFields(batch.metadata ?? {}) };
   if (branches) metadata.branch = branches.latest.name;
   const view = {
     key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata, usage,
-    coverage: coverage(usage.length, hasGap), observedTotalTokens: usage.length ? total : null,
     ...(diagnostics.values && { usageDiagnostics: diagnostics.values }),
   };
   return { view, messages, measurements: stored, branches, hasGap, codexUsageWrites: measurements.history };
@@ -363,6 +365,7 @@ function mergeSessionRecords(
 export class InMemoryCollectorStorage implements CollectorStorage {
   private readonly sessions = new Map<string, StoredSession>();
   private readonly codexOwners = new CodexCallOwners();
+  private claudeOwners = new ClaudeCallOwners();
 
   async readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot> {
     const session = this.sessions.get(encodeSessionKey(source));
@@ -373,11 +376,12 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   async readSession(key: SessionKey): Promise<SessionView | null> {
     const stored = this.sessions.get(encodeSessionKey(key));
     if (!stored) return null;
-    const usage = key.harness === "codex" ? this.codexOwners.visible(key.sessionId, stored.view.usage) : stored.view.usage;
-    const view = usage.length === stored.view.usage.length ? stored.view : { ...stored.view, usage,
-      coverage: coverage(usage.length, stored.hasGap),
-      observedTotalTokens: usage.length ? usage.reduce((sum, row) => sum + row.inputTokens + row.outputTokens, 0) : null };
-    return structuredClone({ ...view, messages: orderedMessages(stored.messages) });
+    const { usage, diagnostics, hasGap } = key.harness === "claude" ? this.claudeOwners.view(key.sessionId, stored.view.usage, stored.measurements.order)
+      : { usage: this.codexOwners.visible(key.sessionId, stored.view.usage), diagnostics: [], hasGap: false };
+    return structuredClone({ ...stored.view, usage, messages: orderedMessages(stored.messages),
+      coverage: coverage(usage.length, stored.hasGap || hasGap === true || diagnostics.length > 0), observedTotalTokens: usage.length ? totalTokens(usage) : null,
+      ...(diagnostics.length && { usageDiagnostics: [...stored.view.usageDiagnostics ?? [], ...diagnostics] }),
+    });
   }
 
   private verifiedParent(sessionId: string, incoming: StoredSession): string | undefined {
@@ -392,24 +396,42 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     return parent;
   }
 
-  /** Stage both sessions' version changes before publishing a transfer. */
+  /** Validate every changed peer before publishing any part of the transfer. */
+  private advancePeers(source: SessionKey, transfers: ReadonlySet<string>, validUsage?: (peer: StoredSession) => boolean): boolean {
+    const peers = new Map<string, StoredSession>();
+    for (const id of transfers) {
+      if (id === source.sessionId) continue;
+      const key = encodeSessionKey({ harness: source.harness, sessionId: id });
+      const stored = this.sessions.get(key);
+      if (!stored) continue;
+      if (!isCount(stored.version + 1) || (validUsage && !validUsage(stored))) return false;
+      peers.set(key, { ...stored, version: stored.version + 1 });
+    }
+    for (const [key, updated] of peers) this.sessions.set(key, updated);
+    return true;
+  }
+
   private publishOwnership(batch: Batch, next: StoredSession, current: Checkpoint | undefined): boolean {
+    if (batch.source.harness === "claude") {
+      if (batch.codexCallClaims !== undefined) return false;
+      const staged = this.claudeOwners.prepare(batch, next.measurements.claude?.measurements ?? [], next.view.metadata.parentSessionId);
+      if (!staged) return false;
+      const validUsage = (session: StoredSession) => {
+        const projected = staged.owners.view(session.view.key.sessionId, session.view.usage, session.measurements.order);
+        return !projected.conflictingUsageId && isCount(totalTokens(projected.usage));
+      };
+      if (!validUsage(next) || !this.advancePeers(batch.source, staged.changedSessions, validUsage)) return false;
+      this.claudeOwners = staged.owners;
+      return true;
+    }
+    if (!isCount(totalTokens(next.view.usage))) return false;
     const newProof = batch.checkpoint.codexFork?.inheritedThrough !== undefined &&
       !isDeepStrictEqual(batch.checkpoint.codexFork, current?.codexFork);
     const ownership = this.codexOwners.prepare(batch, next.view.usage, id => this.verifiedParent(id, next), newProof);
     if (ownership === null) return false;
     if (!ownership) return true;
-    const peers = new Map<string, StoredSession>();
-    for (const id of ownership.transfers) {
-      if (id === batch.source.sessionId) continue;
-      const key = encodeSessionKey({ harness: "codex", sessionId: id });
-      const stored = this.sessions.get(key);
-      if (!stored) continue;
-      if (!isCount(stored.version + 1)) return false;
-      peers.set(key, { ...stored, version: stored.version + 1 });
-    }
+    if (!this.advancePeers(batch.source, ownership.transfers)) return false;
     this.codexOwners.publish(ownership);
-    for (const [key, updated] of peers) this.sessions.set(key, updated);
     return true;
   }
 

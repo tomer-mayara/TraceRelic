@@ -1,5 +1,4 @@
 import { basename, relative } from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import type { GlobalConfig } from "../config/global-config.ts";
 import {
   LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ScanSelection, type TranscriptSource,
@@ -62,7 +61,7 @@ export class LocalCollector {
     const codexViews = await this.scanProvider("codex", sources.sources(), (source, checkpoint) => sources.format(source, checkpoint), rejections);
     const claude = new LocalLLMHistoryClaude(this.config);
     const claudeViews = await this.scanProvider("claude", claude.discoverSources(selection),
-      source => ClaudeSessionParser.forSource(source.previousCopy), rejections);
+      source => ClaudeSessionParser.forSource(source.previousCopy, source.claudeSubagent), rejections);
     const sessions = [...codexViews, ...claudeViews];
     if (rejections.length) throw new ScanRejectedError(sessions, rejections);
     return sessions;
@@ -130,13 +129,9 @@ export class LocalCollector {
     for (;;) {
       const accepted = position.reset ? null : position.checkpoint;
       const format = await selectParser(transcript, accepted);
-      if (accepted && format.codexFork && !isDeepStrictEqual(format.codexFork, accepted.codexFork)) {
-        const corrected = await TranscriptCursor.reconcileFork(transcript, accepted, format);
-        const batch: Batch = {
-          ...corrected.usage, source, expectedVersion: position.version, expectedOffset: accepted.offset,
-          checkpoint: corrected.checkpoint, reconcileCodexForkFrom: accepted,
-          metadata: { parentSessionId: format.codexFork.parentSessionId }, messages: [],
-        };
+      const corrected = accepted && await TranscriptCursor.reconcileUsage(transcript, accepted, format);
+      if (corrected && accepted) {
+        const batch = { ...corrected, source, expectedVersion: position.version, expectedOffset: accepted.offset };
         const outcome = await recovery.commit(batch, accepted, 0);
         if (outcome && "status" in outcome) return { hasStoredSession: true, rejection: outcome };
         position = outcome ?? { version: position.version + 1, checkpoint: corrected.checkpoint };

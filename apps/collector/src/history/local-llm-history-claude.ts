@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { isAbsolute, join, relative } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
 import {
-  LocalLLMHistory, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry, type TranscriptSource,
+  LocalLLMHistory, type ClaudeSubagent, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry, type TranscriptSource,
 } from "./local-llm-history.ts";
 
 export type ClaudeTranscriptEntry = TranscriptEntry<"claude">;
@@ -15,7 +15,7 @@ interface TranscriptFile {
   sourceFile: string;
   projectDir: string;
   currentFile?: string;
-  subagent?: { parentId: string; agentId: string };
+  subagent?: ClaudeSubagent;
 }
 
 export class LocalLLMHistoryClaude extends LocalLLMHistory {
@@ -32,7 +32,7 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
     for await (const file of this.transcriptFiles(false)) {
       for await (const { lineNumber, record } of this.readRecords(file.sourceFile)) {
         const { timestamp } = record;
-        const sessionId = this.sessionId(record, file.subagent);
+        const sessionId = this.identity(record, file.subagent)?.sessionId;
         if (sessionId && typeof timestamp === "string" && inRange(timestamp)) {
           entries.push({ harness: "claude", sessionId, sourceFile: file.sourceFile, lineNumber, timestamp, record });
         }
@@ -65,42 +65,56 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
     const selectedProject = selection.projectPaths?.some(path => path.length > 0 && relative(path, file.projectDir) === "");
     const requestedIds = selectedFamilies ? undefined : new Set(selection.sessionIds);
     // One file can contain several native IDs. Keep only each ID's selection by its first usable cwd.
-    const sessions = new Map<string, boolean | undefined>();
+    const sessions = new Map<string, { selected?: boolean; subagent?: ClaudeSubagent }>();
     const { file: captured } = await this.inspectFile(sourceFile, async records => {
       for await (const { record } of records) {
-        const sessionId = this.sessionId(record, file.subagent);
-        if (!sessionId) continue;
-        if (!sessions.has(sessionId)) {
+        const identity = this.identity(record, file.subagent);
+        if (!identity) continue;
+        const { sessionId, subagent } = identity;
+        let session = sessions.get(sessionId);
+        if (!session) {
           const selected = selectedProject || this.selected(selection, sessionId, undefined)
             || (currentFile && selectedFamilies?.has(`${currentFile}\0${sessionId}`));
           if (!selected && !selectedFamilies) continue;
-          sessions.set(sessionId, selected ? true : undefined);
+          session = { selected: selected ? true : undefined };
+          sessions.set(sessionId, session);
         }
+        session.subagent ??= subagent;
         const { cwd } = record;
-        if (sessions.get(sessionId) === undefined && typeof cwd === "string" && isAbsolute(cwd) && !cwd.includes("\0")) {
-          const selected = this.selected(selection, sessionId, cwd);
-          sessions.set(sessionId, selected);
-          if (selected && !currentFile) selectedFamilies?.add(`${sourceFile}\0${sessionId}`);
+        if (session.selected === undefined && typeof cwd === "string" && isAbsolute(cwd) && !cwd.includes("\0")) {
+          session.selected = this.selected(selection, sessionId, cwd);
+          if (session.selected && !currentFile) selectedFamilies?.add(`${sourceFile}\0${sessionId}`);
         }
-        if (requestedIds?.size && sessions.size === requestedIds.size) break;
+        if (requestedIds?.size && sessions.size === requestedIds.size) {
+          // A copied row can precede the native agent identity in a nested file.
+          if (!file.subagent || [...sessions.values()].every(item => item.subagent)) break;
+        }
       }
     });
-    for (const [sessionId, selected] of sessions) {
+    for (const [sessionId, { selected, subagent }] of sessions) {
       if (selected) {
-        yield this.transcriptSource({
+        const source = this.transcriptSource({
           harness: "claude", sessionId, file: captured, previousCopy: currentFile !== undefined,
-          matches: record => this.sessionId(record, file.subagent) === sessionId,
+          matches: record => this.identity(record, file.subagent)?.sessionId === sessionId,
         });
+        yield subagent ? { ...source, claudeSubagent: subagent } : source;
       }
     }
   }
 
-  private sessionId(record: LocalHistoryEntry["record"], subagent?: TranscriptFile["subagent"]): string | undefined {
+  private identity(record: LocalHistoryEntry["record"], directory?: ClaudeSubagent): { sessionId: string; subagent?: ClaudeSubagent } | undefined {
     const nativeId = record.sessionId;
     if (typeof nativeId !== "string" || !nativeId.length) return;
-    if (!subagent || nativeId !== subagent.parentId) return nativeId;
-    const agentId = typeof record.agentId === "string" && record.agentId ? record.agentId : subagent.agentId;
-    return `${encodeURIComponent(nativeId)}/subagents/${encodeURIComponent(agentId)}`;
+    if (!directory) return { sessionId: nativeId };
+    const { parentSessionId } = directory;
+    const agentId = typeof record.agentId === "string" && record.agentId ? record.agentId : directory.agentId;
+    if (nativeId === parentSessionId) {
+      return { sessionId: `${encodeURIComponent(nativeId)}/subagents/${encodeURIComponent(agentId)}`, subagent: { parentSessionId, agentId } };
+    }
+    // A physical file may contain records from an independent session. A native
+    // sidechain or agent ID links that session to this parent.
+    const linked = record.isSidechain === true || record.agentId === directory.agentId || nativeId === directory.agentId;
+    return { sessionId: nativeId, ...(linked && { subagent: { parentSessionId, agentId } }) };
   }
 
   private async *transcriptFiles(scan: boolean): AsyncGenerator<TranscriptFile> {
@@ -124,7 +138,7 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
           yield {
             sourceFile: join(agents, file.name), projectDir,
             currentFile: name.previousCopy ? join(agents, name.stem + ".jsonl") : undefined,
-            subagent: { parentId: entry.name, agentId: name.stem.slice("agent-".length) },
+            subagent: { parentSessionId: entry.name, agentId: name.stem.slice("agent-".length) },
           };
         }
       }

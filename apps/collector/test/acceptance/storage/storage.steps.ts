@@ -66,7 +66,7 @@ BeforeAll(function () {
     usageDiagnostics: [{ code: "ambiguous-transcript-replay", sourceOrder: 1 }],
   });
   checkWireValue("CheckpointSnapshot", { version: 1, checkpoint: { ...batch.checkpoint, prefixDigest } });
-  for (const code of ["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork"]) {
+  for (const code of ["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork", "unresolved-claude-fork"]) {
     const diagnostic = { code, sourceOrder: 3 };
     const byteRange = { startOffset: 50, endOffset: 60 };
     checkWireValue("UsageDiagnostic", { ...diagnostic, byteRange });
@@ -107,6 +107,25 @@ BeforeAll(function () {
   for (const [fields, path] of malformed) {
     assert.equal(contract.validate("Batch.json", { ...batch, ...fields }), false, path);
     assert(contract.errors?.some(error => error.instancePath === path), contract.errorsText());
+  }
+});
+
+BeforeAll(function () {
+  const { batch } = new StorageScenario();
+  const origin = { kind: "copy", parentSessionId: "parent", parentMessageUuid: "source-row", transcriptUuid: "copy-row",
+    sourceOrder: 1, byteRange: { startOffset: 0, endOffset: 60 } } as const;
+  const saved = { ...batch.checkpoint, prefixDigest: "c".repeat(64) };
+  const checkpoint = { ...saved, claudeCallOrigins: true };
+  checkWireValue("ClaudeUsageReport", claudeReport({ origin }));
+  checkWireValue("Batch", { ...batch, expectedOffset: saved.offset, checkpoint,
+    backfillClaudeOriginsFrom: saved, claudeUsageReports: [claudeReport({ origin })] });
+  assert.equal(contract.validate("Batch.json", { ...batch, checkpoint, claudeUsageReports: [claudeReport()] }), false);
+  for (const fields of [{ kind: "unknown" }, { sourceOrder: 0 }, { byteRange: undefined }, { parentMessageUuid: "" },
+    { parentSessionId: undefined }, { kind: "own" }, { kind: "subagent", parentSessionId: undefined, parentMessageUuid: undefined }]) {
+    assert.equal(contract.validate("ClaudeCallOrigin.json", { ...origin, ...fields }), false);
+  }
+  for (const fields of [{ claudeCallOrigins: false }, { codexFork: { parentSessionId: "parent" } }, { prefixDigest: undefined }]) {
+    assert.equal(contract.validate("Checkpoint.json", { ...checkpoint, ...fields }), false);
   }
 });
 

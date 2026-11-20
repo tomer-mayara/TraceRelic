@@ -58,12 +58,18 @@ export interface VerifiedPrefix {
   readonly prefixDigest: string;
 }
 
+export interface ClaudeSubagent {
+  readonly parentSessionId: string;
+  readonly agentId: string;
+}
+
 interface TranscriptSourceInfo {
   readonly sessionId: string;
   readonly sourceFile: string;
   readonly fileSize: number;
   readonly previousCopy: boolean;
   readonly codexForkHeader?: { readonly parentSessionId: string; readonly forkedAt?: string };
+  readonly claudeSubagent?: ClaudeSubagent;
 }
 
 export interface TranscriptSource<Entry> extends TranscriptSourceInfo {
