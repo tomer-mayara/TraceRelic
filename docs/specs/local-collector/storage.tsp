@@ -94,7 +94,9 @@ model PresenceWrite extends SourceObservation {
   expectedVersion: Count;
   expectedOffset: Count;
   presence: SourcePresence;
-  /** Only retract journaled messages already corroborated by this peer in the same installation. */
+  /** Retract a journaled message only when the accepted generation records a physical line boundary
+   * and the peer corroborates its position in the same installation. An identified legacy scanner
+   * file with an empty decoder can record an unverified observation. */
   codexIdentity?: { status: "unverified" } | VerifiedCodexIdentity;
 }
 

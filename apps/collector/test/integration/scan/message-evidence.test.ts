@@ -105,8 +105,8 @@ test("correcting old metadata retains the branch and working directory reported 
   assert.deepEqual((await scan())[0].metadata, metadata);
 });
 
-for (const replacement of [false, true]) {
-  test(`unavailable pre-repair evidence remains visible after ${replacement ? "replacement" : "disappearance and return"}`, async t => {
+for (const replacement of [false, true]) for (const emptyState of [false, true]) {
+  test(`${emptyState ? "empty" : "versioned"} pre-repair state remains visible after ${replacement ? "replacement" : "disappearance and return"}`, async t => {
     const home = await Codex.create();
     t.after(() => home.close());
     const storage = new InMemoryCollectorStorage();
@@ -117,6 +117,7 @@ for (const replacement of [false, true]) {
     const commit = storage.commit.bind(storage);
     const writer = t.mock.method(storage, "commit", (batch: Batch) => {
       const { evidenceVersion: _old, ...checkpoint } = batch.checkpoint;
+      if (emptyState) checkpoint.parserState = replacement ? "" : "{}";
       return commit({ ...batch, checkpoint, messageOrigins: undefined });
     });
     const [before] = await scan();

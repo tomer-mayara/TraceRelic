@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseError, Pool, type PoolClient, type QueryResultRow } from "pg";
 import type { CollectorScope } from "../collector-credentials.ts";
-import { legacyScannerLine, matchesSourceScope, sourceHistoryDiagnostic, StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint,
+import { matchesSourceScope, needsHistoryVerification, sourceHistoryDiagnostic, StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint,
   type CheckpointSnapshot, type Message, type PresenceWrite, type SessionKey, type SessionView,
   type SourceScope, type StreamKey, type Usage } from "@tracerelic/collector/storage";
 import type { PersistedSession, RecordChanges, SessionRecords } from "./collector-projection.ts";
@@ -73,8 +73,16 @@ async function flagUnverifiedHistory(sql: Queries): Promise<void> {
       const reset = write?.kind === "batch" && write.value.resetFrom;
       const source = reset ? write.value.source : inventory?.presence === "missing" && inventory.source;
       const prior = reset || checkpoint;
-      if (!source || !prior || legacyScannerLine(prior) === undefined) continue;
+      if (!source || !prior) continue;
       const key = sessionKey(workspace_key, source);
+      let location = reset ? write.value.sourceObservation?.location : inventory?.location;
+      if (reset && !location && !needsHistoryVerification(source, prior)) {
+        const [saved] = await sql.rows<Pick<Row, "inventory">>(`SELECT inventory FROM tracerelic_collector.sources
+          WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 AND installation_key=$4 AND stream_key=$5`,
+        [...key, identity(source.installationId), identity(source.streamId)]);
+        location = saved?.inventory?.location;
+      }
+      if (!needsHistoryVerification(source, prior, location)) continue;
       const [row] = await sql.rows<{ summary: Omit<SessionView, "messages" | "usage"> }>(
         "SELECT summary FROM tracerelic_collector.sessions WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 FOR UPDATE", key);
       const summary = row.summary;

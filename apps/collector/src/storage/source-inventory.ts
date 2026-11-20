@@ -1,7 +1,7 @@
 import { matchesRecordedPath, recordedPathDialect } from "@tracerelic/shared";
 import { isDeepStrictEqual } from "node:util";
 import {
-  legacyScannerLine, legacyScannerLocation, matchesSourceScope, type AcknowledgedSource, type Batch, type Checkpoint, type CodexIdentityStatus, type MissingSource, type PresenceWrite,
+  legacyScannerLocation, matchesSourceScope, needsHistoryVerification, type AcknowledgedSource, type Batch, type Checkpoint, type CodexIdentityStatus, type MissingSource, type PresenceWrite,
   type ObservedExtent, type SourceLocation, type SourceObservation, type SourcePresence, type SourceScope, type StreamKey,
 } from "./collector-storage.ts";
 import { definedFields, isCount, isIdentifier, isRecord } from "./usage-validation.ts";
@@ -113,10 +113,10 @@ function legacyCodexEvidence(batch: Batch, current?: PresenceState): Pick<Presen
   return { ...(current?.codexIdentityStatus && { codexIdentityStatus: current.codexIdentityStatus }), ...(other && { otherCodexEvidence: true }) };
 }
 
-function earlierHistory(prior: PresenceState | undefined, previous: Checkpoint | undefined, reset: boolean) {
-  const earlierGap = prior?.earlierGap === true || (reset && !!prior?.unrecovered && !prior.unrecovered.prefixDigest);
-  const unverified = prior?.unverifiedEarlierHistory || (reset && prior?.codexIdentityStatus !== "repaired"
-    && previous && legacyScannerLine(previous) !== undefined);
+function earlierHistory(prior: PresenceState | undefined, batch: Batch, location?: SourceLocation) {
+  const earlierGap = prior?.earlierGap === true || (!!batch.resetFrom && !!prior?.unrecovered && !prior.unrecovered.prefixDigest);
+  const unverified = prior?.unverifiedEarlierHistory || (batch.resetFrom && prior?.codexIdentityStatus !== "repaired"
+    && needsHistoryVerification(batch.source, batch.resetFrom, prior?.location ?? location));
   return { earlierGap, ...(unverified && { unverifiedEarlierHistory: true as const }) };
 }
 
@@ -140,7 +140,7 @@ export class StoredSource {
       unrecovered: outstandingExtent(batch, previous?.observedThrough, prior?.unrecovered),
       ...completeExtent(checkpoint, sourceObservation, current),
       ...legacyCodexEvidence(batch, current),
-      ...earlierHistory(prior, previous?.checkpoint, reset),
+      ...earlierHistory(prior, batch, location),
     };
     const { harness, sessionId, streamId, installationId } = source;
     const key = previous?.source ?? definedFields({ harness, sessionId, streamId, installationId });
@@ -168,7 +168,7 @@ export class StoredSource {
 
   get unverifiedHistory(): boolean {
     return this.state.unverifiedEarlierHistory === true ||
-      (this.state.presence === "missing" && !this.repairedIdentity && legacyScannerLine(this.checkpoint) !== undefined);
+      (this.state.presence === "missing" && !this.repairedIdentity && needsHistoryVerification(this.source, this.checkpoint, this.state.location));
   }
 
   get observedThrough(): ObservedExtent | undefined {

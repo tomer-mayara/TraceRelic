@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { legacyScannerLine, type Checkpoint, type CodexIdentityProof, type CodexIdentityStatus, type PresenceWrite, type SourceLocation, type StreamKey } from "./collector-storage.ts";
+import { legacyScannerLine, needsHistoryVerification, type Checkpoint, type CodexIdentityProof, type CodexIdentityStatus, type PresenceWrite, type SourceLocation, type StreamKey } from "./collector-storage.ts";
 import type { SessionMessages } from "./session-messages.ts";
 import type { StoredSource } from "./source-inventory.ts";
 import { isCount, isIdentifier, isRecord } from "./usage-validation.ts";
@@ -23,13 +23,12 @@ function validHeader(proof: Verified, update: PresenceWrite, old: Checkpoint): b
     && matchesCheckpoint(proof.accepted, old);
 }
 
-function originalGeneration(update: PresenceWrite, origin: Location & { file: StoredSource }) {
-  const through = legacyScannerLine(origin.file.checkpoint);
+function originalIdentityStatus(update: PresenceWrite, origin: Location & { file: StoredSource }) {
   const original = origin.file.selected(undefined, origin.version);
-  if (update.source.harness !== "codex" || !through || !original || original.presence !== update.presence
+  if (update.source.harness !== "codex" || !original || !needsHistoryVerification(update.source, origin.file.checkpoint, original.location) || original.presence !== update.presence
     || !isDeepStrictEqual(update.location, original.location) || update.observedEnd !== original.observedEnd
     || update.observedPrefixDigest !== original.observedPrefixDigest || update.checkedPrefix !== undefined) return;
-  return { through, status: original.codexIdentityStatus ?? "unverified" };
+  return original.codexIdentityStatus ?? "unverified";
 }
 
 function matchesPeer(file: StoredSource, proof: Verified, location: SourceLocation): boolean {
@@ -44,15 +43,16 @@ export function codexSourceIdentity(update: PresenceWrite, origin: Location & { 
   lookup: (key: StreamKey) => Location | undefined): Correction | "invalid" | "conflict" {
   const proof = update.codexIdentity;
   if (proof === undefined) return {};
-  const original = originalGeneration(update, origin);
-  if (!original || !isRecord(proof)) return "invalid";
-  const uncertain = { status: original.status };
+  const status = originalIdentityStatus(update, origin);
+  if (!status || !isRecord(proof)) return "invalid";
+  const uncertain = { status };
   if (proof.status === "unverified") return uncertain;
-  if (proof.status !== "verified" || !validHeader(proof, update, origin.file.checkpoint)) return "invalid";
+  const through = legacyScannerLine(origin.file.checkpoint);
+  if (through === undefined || proof.status !== "verified" || !validHeader(proof, update, origin.file.checkpoint)) return "invalid";
   const peer = lookup({ ...update.source, sessionId: proof.peerSessionId, streamId: proof.peerStreamId });
   if (!peer || peer.version !== proof.expectedPeerVersion) return "conflict";
   if (!peer.file || !matchesPeer(peer.file, proof, update.location)) return "invalid";
-  const messages = origin.messages.withoutCorroborated({ stream: origin.stream, generation: origin.file.generation }, original.through,
+  const messages = origin.messages.withoutCorroborated({ stream: origin.stream, generation: origin.file.generation }, through,
     { messages: peer.messages, stream: peer.stream, generation: peer.file.generation });
   return messages ? { status: origin.file.repairedMessagesStatus, messages, advancePeer: proof.peerSessionId } : uncertain;
 }

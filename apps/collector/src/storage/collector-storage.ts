@@ -110,6 +110,15 @@ export function legacyScannerLocation(harness: Harness, streamId: string): Sourc
   return { root, path: relative(root, streamId), projectDir };
 }
 
+/** A scanner's original stream ID encodes the same root and path as its observation. */
+export function legacyScannerStream(harness: Harness, { root, path }: SourceLocation): string | undefined {
+  const dialect = recordedPathDialect(root);
+  if (!dialect) return;
+  const candidate = harness === "codex" ? JSON.stringify([root, path]) : dialect.join(root, path);
+  const parsed = legacyScannerLocation(harness, candidate);
+  if (parsed?.root === root && parsed.path === path) return candidate;
+}
+
 /** Use the source's own discovery fields to match a session or project selection. */
 export function matchesSourceScope(scope: SourceScope, source: StreamKey, location: SourceLocation): boolean {
   if (source.harness !== scope.harness || source.installationId !== scope.installationId || location.root !== scope.root) return false;
@@ -143,6 +152,16 @@ export function legacyScannerLine(checkpoint: Checkpoint): number | undefined {
     || typeof state.lineNumber !== "number" || !Number.isSafeInteger(state.lineNumber) || state.lineNumber < 1 || state.lineNumber > checkpoint.offset
     || !state.decoder || typeof state.decoder !== "object" || Array.isArray(state.decoder)) return;
   return state.lineNumber;
+}
+
+/** An empty early scanner state identifies no line. Its source can still establish that history needs checking. */
+export function needsHistoryVerification(source: StreamKey, checkpoint: Checkpoint, location?: SourceLocation): boolean {
+  if (!checkpoint.offset || checkpoint.evidenceVersion) return false;
+  if (legacyScannerLine(checkpoint) !== undefined) return true;
+  if (checkpoint.parserState !== "" && !/^[ \t\r\n]*\{[ \t\r\n]*\}[ \t\r\n]*$/.test(checkpoint.parserState)) return false;
+  const embedded = legacyScannerLocation(source.harness, source.streamId);
+  if (embedded) return !location || (embedded.root === location.root && embedded.path === location.path);
+  return !!location && source.streamId === location.path && legacyScannerStream(source.harness, location) !== undefined;
 }
 
 export interface ForkPosition {

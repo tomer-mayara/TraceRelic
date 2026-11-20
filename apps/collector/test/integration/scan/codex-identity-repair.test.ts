@@ -4,12 +4,12 @@ import { CodexIdentityRepairFixture } from "../../fixtures/codex-identity-repair
 import { StorageUnavailableError, type PresenceWrite } from "#src/storage/collector-storage";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
-for (const match of ["verified", "wrong digest", "absent digest", "wrong row", "unverified usage"] as const) {
+for (const match of ["verified", "wrong digest", "absent digest", "wrong row", "unverified usage", "empty state"] as const) {
   test("legacy cross-session Codex evidence: " + match, async t => {
     const fixture = await CodexIdentityRepairFixture.create();
     t.after(() => fixture.root.close());
     await fixture.legacy({ digest: match === "wrong digest" ? "wrong" : match === "absent digest" ? "absent" : undefined,
-      wrongText: match === "wrong row", usage: match === "unverified usage" });
+      wrongText: match === "wrong row", usage: match === "unverified usage", emptyState: match === "empty state" });
     await fixture.scan(["A"]);
     assert.equal(await fixture.texts("B"), undefined);
     const [uncertain] = await fixture.scan(["A"]);
@@ -18,6 +18,7 @@ for (const match of ["verified", "wrong digest", "absent digest", "wrong row", "
     const repaired = match === "verified" || match === "unverified usage";
     assert.deepEqual(await fixture.texts("A"), repaired ? ["belongs to A"] : [match === "wrong row" ? "uncertain" : "belongs to B", "belongs to A"]);
     assert.deepEqual(await fixture.texts("B"), ["belongs to B"]);
+    if (match === "empty state") assert.equal(await fixture.storage.recordPresence(await fixture.proof()), "invalid");
     const key = fixture.key("A");
     const view = await fixture.storage.readSession(key);
     assert.equal(view?.usageDiagnostics?.some(row => row.code === "unverified-source-history") ?? false, match !== "verified");

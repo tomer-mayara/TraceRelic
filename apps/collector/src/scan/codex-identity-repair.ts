@@ -1,5 +1,5 @@
 import { TranscriptChangedError, type TranscriptSource } from "../history/index.ts";
-import { legacyScannerLine, type AcknowledgedSource, type Checkpoint, type CodexIdentityProof, type CollectorStorage,
+import { legacyScannerLine, needsHistoryVerification, type AcknowledgedSource, type Checkpoint, type CodexIdentityProof, type CollectorStorage,
   type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";
 import { captureProof, readStorage } from "./scan-recovery.ts";
@@ -45,7 +45,7 @@ export class CodexIdentityRepair {
     const storage = this.storage;
     for (let attempt = 0; attempt < 2; attempt++) {
       const { checkpoint, version } = await readStorage(row.source, () => storage.readCheckpoint(row.source));
-      if (!checkpoint || !legacyScannerLine(checkpoint) || row.codexIdentityStatus === "repaired" || row.codexIdentityStatus === "messages-repaired") return false;
+      if (!checkpoint || !needsHistoryVerification(row.source, checkpoint, row.location) || row.codexIdentityStatus === "repaired" || row.codexIdentityStatus === "messages-repaired") return false;
       if (version !== row.version) {
         const fresh = await this.reload(row.source);
         if (!fresh) return false;
@@ -86,7 +86,7 @@ export class CodexIdentityRepair {
 
   private async proof<Entry>(old: Checkpoint, { sighting, transcript }: Seen<Entry>): Promise<CodexIdentityProof | undefined> {
     const headerEnd = transcript.codexHeaderEnd;
-    if (sighting.rejected || !old.prefixDigest || !headerEnd || headerEnd > old.offset) return;
+    if (sighting.rejected || !old.prefixDigest || !headerEnd || headerEnd > old.offset || legacyScannerLine(old) === undefined) return;
     const { checkpoint, version } = await readStorage(sighting.source, () => this.storage.readCheckpoint(sighting.source));
     if (!checkpoint?.evidenceVersion || !checkpoint.prefixDigest || checkpoint.offset < old.offset) return;
     try {

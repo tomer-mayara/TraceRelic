@@ -28,6 +28,14 @@ The table links the public behaviors and regression checks for the combined stac
 | Remote sync | The API accepts versioned, digest-checked transfers under the existing credential. It can resume large histories and resolve proved aliases across both installation settings. [Long call sequence](../../apps/api/test/acceptance/collector/remote-sync.feature) · [17,000 anonymous messages and restart](../../apps/api/test/integration/collector/long-anonymous-history.test.ts) |
 | PostgreSQL and CI | PostgreSQL projects changed records and their positions. Ordinary presence requires zero record updates. CI builds the workspace and shared schemas once and reports the individual contract and behavior checks. [Competing writes and projection](../../apps/api/test/acceptance/postgres/competing-writes.feature) · [CI workflow](../../.github/workflows/collector.yml) |
 
+Three upgrade cases use the same public contracts and checks. Preserve uncertainty for a known
+scanner file whose legacy checkpoint has an empty decoder and a positive offset. Require a physical
+line number before retracting text across sessions. Keep the original precedence of Claude current
+and backup metadata during correction. Exercise both behaviors through a scanner restart. Replay an
+LC-17 PostgreSQL journal with its original session revisions so a corrected peer ownership decision
+cannot block later writes. Check the stored views, both session versions and an unrelated write
+after reopening the database. The scanner and PostgreSQL contract suites cover these cases.
+
 ## Review snapshot
 
 At the original review, all 19 PRs were drafts with passing head checks. They formed an unbroken chain

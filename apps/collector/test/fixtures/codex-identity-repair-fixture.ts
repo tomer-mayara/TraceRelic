@@ -19,11 +19,11 @@ export class CodexIdentityRepairFixture {
   key(sessionId: string): StreamKey {
     return { harness: "codex", sessionId, streamId: basename(this.path), installationId: "desktop" };
   }
-  async legacy(options: { digest?: "wrong" | "absent"; usage?: boolean; wrongText?: boolean } = {}): Promise<Batch> {
+  async legacy(options: { digest?: "wrong" | "absent"; usage?: boolean; wrongText?: boolean; emptyState?: boolean } = {}): Promise<Batch> {
     const bytes = await readFile(this.path);
     const source = this.key("A");
     const original = batch(0, 0, { source, sourceObservation: { location: { root: this.root.home, path: source.streamId }, observedEnd: bytes.length },
-      checkpoint: { parserState: codexParserState(2), offset: bytes.length, ...(options.digest !== "absent" && {
+      checkpoint: { parserState: options.emptyState ? "{}" : codexParserState(2), offset: bytes.length, ...(options.digest !== "absent" && {
         prefixDigest: options.digest === "wrong" ? "a".repeat(64) : createHash("sha256").update(bytes).digest("hex") }) },
       messages: [{ id: "old-id", role: "user", at: "2026-02-01T12:00:00Z", text: options.wrongText ? "uncertain" : "belongs to B", sourceOrder: 2, blockIndex: 0 }],
       usage: options.usage ? [observation(10, 0)] : [] });

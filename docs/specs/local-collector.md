@@ -184,7 +184,9 @@ and independent source contributions. Mark the checkpoint with `evidenceVersion:
 native Codex session proves an old message was filed in the wrong session, compare both source versions
 and the corroborating message positions before removing the old contribution. Keep any unverified
 measurements and report `unverified-source-history` against the original source. A missing or replaced
-legacy generation also carries that diagnostic when its records cannot be verified.
+legacy generation also carries that diagnostic when its records cannot be verified. An empty legacy
+decoder at a positive byte offset qualifies when the recorded source identifies a scanner file. A
+cross-session text correction also needs the physical line boundary of the accepted generation.
 
 `watch` uses a 60,000 ms default interval, allows one active pass and skips elapsed ticks. Preserve
 pending age until work is resolved. Honor the longest applicable retry deadline, including a valid
