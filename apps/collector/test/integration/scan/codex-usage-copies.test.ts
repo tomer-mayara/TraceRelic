@@ -66,8 +66,11 @@ for (const failure of ["invalid", "conflict"] as const) {
     await fixture.report("laptop", 2, 200, 80, "second");
 
     const commit = fixture.storage.commit.bind(fixture.storage);
+    let attempts = 0;
     const injectFailure = t.mock.method(fixture.storage, "commit", async (batch: Batch) => {
       if (batch.source.installationId === "desktop") return commit(batch);
+      attempts++;
+      assert(attempts <= 2, "scans must stop repeated conflicts at the same source checkpoint");
       if (failure === "conflict") {
         // Advance the shared session version after the laptop has read its checkpoint.
         await fixture.report("desktop", 3, 200);
@@ -84,7 +87,8 @@ for (const failure of ["invalid", "conflict"] as const) {
     injectFailure.mock.restore();
     const after = await fixture.checkpoint("laptop");
     assert.deepEqual(after.checkpoint, before.checkpoint);
-    assert.equal(after.version, before.version + (failure === "conflict" ? 1 : 0));
+    assert.equal(attempts, failure === "conflict" ? 2 : 1);
+    assert.equal(after.version, before.version + (failure === "conflict" ? attempts : 0));
     const accepted = await fixture.storage.readSession(fixture.key);
     assert(accepted);
     assert.deepEqual(accepted.usage, coarse.usage);

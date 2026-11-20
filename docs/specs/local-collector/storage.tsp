@@ -220,9 +220,11 @@ model SessionView {
   observedTotalTokens: Count | null;
 }
 
+/** A connection failure or timeout can interrupt any operation. */
 interface CollectorStorage {
   /** Return the current session version even when this source has no checkpoint. */
   readCheckpoint(source: StreamKey): CheckpointSnapshot;
+  /** A lost reply leaves the outcome unknown. Read the durable checkpoint and session version to recover. */
   commit(batch: Batch): CommitResult;
   readSession(key: SessionKey): SessionView | null;
 }

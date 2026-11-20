@@ -112,8 +112,20 @@ interface LocalLLMHistoryClaude extends LocalLLMHistory {
   readTranscripts(selection?: ScanSelection): ClaudeTranscript[];
 }
 
+/** A one-time scan could not confirm its work. An explicit new scan can retry immediately. */
+model PendingScan {
+  status: "pending";
+  reason: "storage-unavailable" | "version-conflict";
+  source: StreamKey;
+  /** Attempted transcript bytes, when a batch was available. */
+  byteRange?: ByteRange;
+  /** Earliest suggested time for an automatic retry. */
+  retryAt: utcDateTime;
+}
+
 interface LocalCollector {
   /** Import complete records into the destination workspace. Return its selected sessions.
-   * A rejected commit reports the source file and attempted byte range. */
+   * An unconfirmed write or unresolved version conflict raises a scan error carrying PendingScan.
+   * An invalid commit reports the source file and attempted byte range. */
   scanOnce(selection?: ScanSelection): SessionView[];
 }

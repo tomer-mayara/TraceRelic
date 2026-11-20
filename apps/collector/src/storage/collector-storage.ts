@@ -167,3 +167,23 @@ export interface CollectorStorage {
   commit(batch: Batch): Promise<CommitResult>;
   readSession(key: SessionKey): Promise<SessionView | null>;
 }
+
+const transportFailures = new Set([
+  "ECONNRESET", "ETIMEDOUT", "ECONNREFUSED", "EPIPE",
+  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT",
+]);
+
+/** A storage request failed in transport. The destination may have accepted a write. */
+export class StorageUnavailableError extends Error {
+  static is(error: unknown): boolean {
+    const visited = new Set<Error>();
+    while (error instanceof Error && !visited.has(error)) {
+      if (error instanceof StorageUnavailableError) return true;
+      if (error instanceof DOMException && error.name === "TimeoutError") return true;
+      if ("code" in error && typeof error.code === "string" && transportFailures.has(error.code)) return true;
+      visited.add(error);
+      error = error.cause;
+    }
+    return false;
+  }
+}

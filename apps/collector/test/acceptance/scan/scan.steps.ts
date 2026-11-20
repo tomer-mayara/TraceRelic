@@ -9,6 +9,7 @@ import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 import { scanContract as contract } from "../../fixtures/scan-contract.ts";
 import "./recover-changed-transcript.steps.ts";
 import "./preserve-known-usage.steps.ts";
+import "./retry-lost-connection.steps.ts";
 
 class ScanScenario {
   fixture!: ScanCommandFixture;
@@ -72,7 +73,7 @@ Before({ tags: "@lc04" }, async function (this: ScanScenario) { this.counts = aw
 After({ tags: "@lc04" }, async function (this: ScanScenario) { await this.counts?.close(); });
 Before({ tags: "@lc05" }, async function (this: ScanScenario) { this.claude = await ClaudeUsageScanFixture.create(); });
 After({ tags: "@lc05" }, async function (this: ScanScenario) { await this.claude?.close(); });
-Before({ tags: "not (@lc04 or @lc05 or @lc06 or @lc07)" }, async function (this: ScanScenario) {
+Before({ tags: "not (@lc04 or @lc05 or @lc06 or @lc07 or @lc08)" }, async function (this: ScanScenario) {
   this.fixture = await ScanCommandFixture.create();
   await this.fixture.configure();
 });

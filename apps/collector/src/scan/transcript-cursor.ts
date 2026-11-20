@@ -138,17 +138,19 @@ export class TranscriptCursor<Entry extends SourceLine> {
 
   async *read(source: TranscriptSource<Entry>) {
     let backfill = this.backfill?.usage;
+    let startOffset = backfill ? 0 : this.position.offset;
     for await (const { chat, next, prefixDigest } of this.decode(source)) {
       if (backfill) {
         backfill.add(chat);
         Object.assign(chat, backfill);
         backfill = undefined;
       }
-      yield { chat, checkpoint: this.checkpointAt(next, prefixDigest), upgrade: false };
+      yield { chat, checkpoint: this.checkpointAt(next, prefixDigest), startOffset, upgrade: false };
+      startOffset = next.offset;
     }
     if (backfill) {
       const chat: DecodedChat = { messages: [], metadata: {}, ...backfill };
-      yield { chat, checkpoint: this.checkpointAt(this.position, this.backfill?.checkpoint.prefixDigest), upgrade: true };
+      yield { chat, checkpoint: this.checkpointAt(this.position, this.backfill?.checkpoint.prefixDigest), startOffset, upgrade: true };
     }
   }
 

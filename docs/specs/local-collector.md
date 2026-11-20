@@ -470,6 +470,17 @@ Feature: Sync after a lost connection
 1. **Unit.** Simulate a timeout and a version conflict. Discard unconfirmed parser state and read the stored checkpoint. Use a test clock for retry delays.
 2. **Integration.** Drop the request, then drop only the reply. Reuse both cases for the HTTP client in LC-15.
 
+| LC-08 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [lost connection scenario](../../apps/collector/test/acceptance/scan/retry-lost-connection.feature) through `scan --once`. Drop the request and the reply separately. A fresh scan against the same storage must return both calls once, 150 tokens and the accepted end byte. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | An unresolved write reports pending work, its logical source, the attempted byte range and the suggested retry time. Check the report against its schema and use a test clock to check the delay. Confirm that a transport failure preserves the session's measured coverage. Existing service objectives apply. |
+| Architecture | The scanner reconciles through the existing storage port. The adapter identifies transport failures. The transcript and the accepted checkpoint supply the retry data. The [collector dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) defines the pending report. Successful scans still return selected sessions. The [storage contract](local-collector/storage.tsp) retains its three commit outcomes and documents that a lost reply leaves the outcome unknown. Run `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+After a write times out or loses its connection, read the stored checkpoint and session version. If storage confirms progress, verify the winning bytes and resume from its parser state. If the read fails or the write is still unconfirmed, end the one-time scan with a pending report. The CLI writes that JSON report to standard error and exits with status 75 (temporary failure). A fresh scan can retry immediately after reconnection. Suggest a one-second delay to automatic callers.
+
+On a version conflict, rebuild the affected batch from the winning checkpoint. Stop a repeated conflict at the same saved position and report it for a later scan. If another writer accepted a different file, preserve its checkpoint for a fresh capture.
+
 #### LC-09 · Isolate a rejected batch
 
 ```gherkin

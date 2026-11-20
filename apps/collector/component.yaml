@@ -11,6 +11,7 @@ behavior:
   - test/acceptance/scan/resume-growing-file.feature
   - test/acceptance/scan/recover-changed-transcript.feature
   - test/acceptance/scan/preserve-known-usage.feature
+  - test/acceptance/scan/retry-lost-connection.feature
   - test/acceptance/scan/codex-token-counts.feature
   - test/acceptance/scan/claude-usage.feature
   - test/acceptance/scan/two-chats.feature
