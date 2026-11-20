@@ -5,19 +5,23 @@ import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
 export interface ParserFormat<Entry> {
   version: number;
   resume(state?: unknown): ChatParser<Entry>;
-  upgrade?(oldDecoder?: object): { parser: ChatParser<Entry>; read(entries: readonly Entry[]): DecodedUsage };
+  upgrade?(oldDecoder?: object): { parser: ChatParser<Entry>; read(entries: readonly Entry[]): Partial<DecodedUsage> };
 }
 
 class BackfilledUsage implements DecodedUsage {
   readonly usage: DecodedUsage["usage"] = [];
   readonly usageAnchors: NonNullable<DecodedUsage["usageAnchors"]> = [];
   readonly usageWindows: DecodedUsage["usageWindows"] = [];
+  readonly claudeUsageReports: NonNullable<DecodedUsage["claudeUsageReports"]> = [];
+  readonly usageDiagnostics: NonNullable<DecodedUsage["usageDiagnostics"]> = [];
   hasGap = false;
 
   add(batch: Partial<DecodedUsage>): void {
     for (const record of batch.usage ?? []) this.usage.push(record);
     for (const anchor of batch.usageAnchors ?? []) this.usageAnchors.push(anchor);
     for (const window of batch.usageWindows ?? []) this.usageWindows.push(window);
+    for (const report of batch.claudeUsageReports ?? []) this.claudeUsageReports.push(report);
+    for (const diagnostic of batch.usageDiagnostics ?? []) this.usageDiagnostics.push(diagnostic);
     this.hasGap ||= batch.hasGap === true;
   }
 }

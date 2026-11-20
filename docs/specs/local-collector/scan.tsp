@@ -43,7 +43,7 @@ model ReadPosition {
 
 /** JSON stored in Checkpoint.parserState after a batch. The provider owns the decoder fields. */
 model ParserCheckpointState {
-  /** Version 2 adds Codex counter state. Claude checkpoints continue to use version 1. */
+  /** Version 2 covers accepted usage for both providers. Codex also saves its cumulative counter state. */
   version: 1 | 2;
   lineNumber: SourceOrder;
   decoder: Record<unknown>;

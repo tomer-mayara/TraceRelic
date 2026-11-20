@@ -72,8 +72,42 @@ model TokenCounts {
 }
 
 union UsageKind { "call", "interval" }
+union UsageStatus { "provisional", "final" }
+
+model CacheWriteDurations {
+  /** Parts of cacheWriteTokens. */
+  cacheWrite5mTokens?: Count;
+  cacheWrite1hTokens?: Count;
+}
+
+/** A whole provider observation. At least one native message or request ID is required.
+ * An advisor iteration belongs to the same request and has its own measurement. */
+@extension("anyOf", #[#{ required: #["messageId"] }, #{ required: #["requestId"] }])
+model ClaudeUsageReport extends TokenCounts {
+  ...CacheWriteDurations;
+  at: utcDateTime;
+  status: UsageStatus;
+  messageId?: Identifier;
+  requestId?: Identifier;
+  turnId?: Identifier;
+  `model`?: string;
+  iterationId?: Identifier;
+}
+
+union UsageDiagnosticCode { "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration" }
+
+model UsageDiagnostic {
+  code: UsageDiagnosticCode;
+  sourceOrder: SourceOrder;
+}
+
+model SourceUsageDiagnostic extends UsageDiagnostic {
+  streamId: Identifier;
+  installationId?: Identifier;
+}
 
 model Usage extends TokenCounts {
+  ...CacheWriteDurations;
   id: Identifier;
   revision: Revision;
   at: utcDateTime;
@@ -81,6 +115,10 @@ model Usage extends TokenCounts {
   `model`?: string;
   /** Older records can omit the kind. Only a call can identify a turn or request. */
   kind?: UsageKind;
+  /** Provider completion status when known. */
+  status?: UsageStatus;
+  messageId?: Identifier;
+  iterationId?: Identifier;
   turnId?: Identifier;
   requestId?: Identifier;
 }
@@ -113,12 +151,15 @@ model Batch {
   branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
+  /** Compare each whole Claude report with the evidence already stored in this session. */
+  claudeUsageReports?: ClaudeUsageReport[];
+  usageDiagnostics?: UsageDiagnostic[];
   /** Each anchor refers to a call in this batch's usage list. */
   usageAnchors?: UsageAnchor[];
   /** Storage atomically replaces a coarse interval when a verified, complete
    * partition covers the same counters. Replaying the coarse copy keeps the detail. */
   usageWindows?: UsageWindow[];
-  /** Upgrade an accepted Codex checkpoint at the same offset to add usage for its prefix.
+  /** Upgrade an accepted text-only checkpoint at the same offset to add usage for its prefix.
    * Supply empty messages and metadata. Compare the exact previous parser state, version and offset. */
   upgradeFromParserState?: string;
   hasGap?: boolean;
@@ -129,6 +170,8 @@ model SessionView {
   metadata: Metadata;
   messages: Message[];
   usage: Usage[];
+  /** Report a source and line once per diagnostic code. */
+  usageDiagnostics?: SourceUsageDiagnostic[];
   coverage: Coverage;
   observedTotalTokens: Count | null;
 }

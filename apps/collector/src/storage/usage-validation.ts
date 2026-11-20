@@ -1,5 +1,5 @@
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
-import type { TokenCounts, Usage } from "./collector-storage.ts";
+import type { ClaudeUsageReport, TokenCounts, Usage, UsageStatus } from "./collector-storage.ts";
 
 export function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
@@ -21,15 +21,42 @@ export function isTokenCounts(value: unknown): value is TokenCounts {
     && cacheReadTokens + cacheWriteTokens <= inputTokens && reasoningTokens <= outputTokens;
 }
 
+function isUsageStatus(value: unknown): value is UsageStatus {
+  return value === "provisional" || value === "final";
+}
+
+function hasValidDurations(value: Record<string, unknown>): boolean {
+  const has5m = value.cacheWrite5mTokens !== undefined;
+  const has1h = value.cacheWrite1hTokens !== undefined;
+  if (!has5m && !has1h) return true;
+  const { cacheWrite5mTokens = 0, cacheWrite1hTokens = 0, cacheWriteTokens } = value;
+  if (!isCount(cacheWriteTokens) || !isCount(cacheWrite5mTokens) || !isCount(cacheWrite1hTokens)) return false;
+  const sum = cacheWrite5mTokens + cacheWrite1hTokens;
+  return has5m && has1h ? sum === cacheWriteTokens : sum <= cacheWriteTokens;
+}
+
+function hasValidCallFields(value: Record<string, unknown>): boolean {
+  return [value.messageId, value.requestId, value.iterationId, value.turnId].every(field => field === undefined || isIdentifier(field))
+    && (value.model === undefined || typeof value.model === "string")
+    && (value.status === undefined || isUsageStatus(value.status))
+    && (value.iterationId === undefined || isIdentifier(value.messageId) || isIdentifier(value.requestId));
+}
+
+export function isClaudeUsageReport(value: unknown): value is ClaudeUsageReport {
+  return isRecord(value) && isTokenCounts(value) && isCount(value.inputTokens + value.outputTokens)
+    && isUsageStatus(value.status) && isRecordedTimestamp(value.at)
+    && (isIdentifier(value.messageId) || isIdentifier(value.requestId))
+    && hasValidCallFields(value) && hasValidDurations(value);
+}
+
 export function isUsage(value: unknown): value is Usage {
   if (!isRecord(value)) return false;
-  const { id, revision, at, kind, model, turnId, requestId } = value;
-  return isIdentifier(id) && isCount(revision) && revision > 0 && isRecordedTimestamp(at)
-    && isTokenCounts(value)
-    && (kind === undefined || kind === "call" || kind === "interval")
-    && (model === undefined || (kind !== "interval" && typeof model === "string"))
-    && (turnId === undefined || (kind === "call" && isIdentifier(turnId)))
-    && (requestId === undefined || (kind === "call" && isIdentifier(requestId)));
+  const { id, revision, at, kind, model } = value;
+  if (!isIdentifier(id) || !isCount(revision) || revision < 1 || !isRecordedTimestamp(at) || !isTokenCounts(value)) return false;
+  if (kind === "call") return hasValidCallFields(value) && hasValidDurations(value);
+  const callFields = ["status", "messageId", "requestId", "turnId", "iterationId", "cacheWrite5mTokens", "cacheWrite1hTokens"];
+  return callFields.every(field => value[field] === undefined)
+    && ((kind === undefined && (model === undefined || typeof model === "string")) || (kind === "interval" && model === undefined));
 }
 
 export function isNativeCodexCall(usage: Usage): boolean {

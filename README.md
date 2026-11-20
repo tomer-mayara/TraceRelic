@@ -47,7 +47,9 @@ The standalone command uses memory for one invocation. TypeScript callers can pa
 
 Set an optional `installationId` in the configuration when multiple installations scan into one workspace. Each installation keeps its own read position and shares the session's messages and version. Claude rows with a UUID can recover text from an earlier transcript copy. Repeated prompts within a conversation keep their separate positions.
 
-For Codex, `observedTotalTokens` sums measured input and output. Each `usage` record identifies a call or the remaining interval between two cumulative reports. A second copy can supply more detail about the same total. An explicit zero is a measurement. Sessions without measurements have a null total and unknown coverage. A known gap makes measured coverage partial. Claude token accounting is scheduled for LC-05. [Local collector engineering spec](docs/specs/local-collector.md)
+For Codex, each `usage` record identifies a call or the remaining interval between two cumulative reports. A second copy can supply more detail about the same total. For Claude Code, text and tool-only rows can update the same request. Its final report can raise or lower the count. Cache reads and writes are included in input, and separate advisor calls have their own measurements.
+
+`observedTotalTokens` sums the accepted input and output. An explicit zero counts as a measurement. A session without accepted measurements has a null total and unknown coverage. A known gap makes measured coverage partial. When Claude usage has an unsupported breakdown, `usageDiagnostics` identifies the source and line. [Local collector engineering spec](docs/specs/local-collector.md)
 
 ## Run the checks
 

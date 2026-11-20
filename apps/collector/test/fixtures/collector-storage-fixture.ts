@@ -1,5 +1,5 @@
 import type {
-  Batch, Message, StreamKey, TokenCounts, Usage, UsageKind, UsageWindow,
+  Batch, ClaudeUsageReport, Message, StreamKey, TokenCounts, Usage, UsageKind, UsageWindow,
 } from "../../src/storage/collector-storage.ts";
 
 const observedAt = "2026-01-01T00:00:00Z";
@@ -28,6 +28,17 @@ export function request(fields: Partial<Usage> = {}): Usage {
     id: "req-1/msg-1", revision: 1, at: planning.at,
     inputTokens: 40, outputTokens: 2, ...fields,
   };
+}
+
+export function claudeReport(fields: Partial<ClaudeUsageReport> = {}): ClaudeUsageReport {
+  return {
+    messageId: "message", requestId: "request", at: observedAt, status: "provisional",
+    inputTokens: 40, cacheReadTokens: 25, cacheWriteTokens: 5, outputTokens: 2, ...fields,
+  };
+}
+
+export function claudeParserState(version: 1 | 2, occurrences: Record<string, number> = {}, lineNumber = 2): string {
+  return JSON.stringify({ version, lineNumber, decoder: { occurrences } });
 }
 
 export function prompt(text: string): Message {

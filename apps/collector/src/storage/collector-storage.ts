@@ -62,13 +62,45 @@ export interface TokenCounts {
 }
 
 export type UsageKind = "call" | "interval";
+export type UsageStatus = "provisional" | "final";
 
-export interface Usage extends TokenCounts {
+export interface CacheWriteDurations {
+  cacheWrite5mTokens?: Count;
+  cacheWrite1hTokens?: Count;
+}
+
+export interface ClaudeUsageReport extends TokenCounts, CacheWriteDurations {
+  at: string;
+  status: UsageStatus;
+  messageId?: Identifier;
+  requestId?: Identifier;
+  turnId?: Identifier;
+  model?: string;
+  iterationId?: Identifier;
+}
+
+export type UsageDiagnosticCode = "invalid-claude-usage" | "unidentified-claude-call"
+  | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration";
+
+export interface UsageDiagnostic {
+  code: UsageDiagnosticCode;
+  sourceOrder: SourceOrder;
+}
+
+export interface SourceUsageDiagnostic extends UsageDiagnostic {
+  streamId: Identifier;
+  installationId?: Identifier;
+}
+
+export interface Usage extends TokenCounts, CacheWriteDurations {
   id: Identifier;
   revision: Revision;
   at: string;
   model?: string;
   kind?: UsageKind;
+  status?: UsageStatus;
+  messageId?: Identifier;
+  iterationId?: Identifier;
   turnId?: Identifier;
   requestId?: Identifier;
 }
@@ -95,6 +127,8 @@ export interface Batch {
   branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
+  claudeUsageReports?: ClaudeUsageReport[];
+  usageDiagnostics?: UsageDiagnostic[];
   usageAnchors?: UsageAnchor[];
   usageWindows?: UsageWindow[];
   upgradeFromParserState?: string;
@@ -106,6 +140,7 @@ export interface SessionView {
   metadata: Metadata;
   messages: Message[];
   usage: Usage[];
+  usageDiagnostics?: SourceUsageDiagnostic[];
   coverage: Coverage;
   observedTotalTokens: Count | null;
 }

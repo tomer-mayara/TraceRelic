@@ -50,7 +50,8 @@ test("a mixed scan keeps both provider sessions and recovers identified text fro
   assert.deepEqual(claudeChat.messages.slice(0, 2).map(({ text, sourceOrder }) => [text, sourceOrder]),
     [["Why?", 1], ["For relevance.", 2]]);
   assert.deepEqual(claudeChat.metadata, { cwd: reply.cwd, branch: reply.gitBranch });
-  assert.equal(claudeChat.observedTotalTokens, null);
+  assert.equal(claudeChat.observedTotalTokens, 72);
+  assert.equal(claudeChat.coverage, "reported");
   assert.equal(await storage.readSession({ harness: "claude", sessionId: "other-session" }), null);
   assert.deepEqual(await new CollectorCommand(storage).run(args), scanned);
   const cli = fixture.run(args);

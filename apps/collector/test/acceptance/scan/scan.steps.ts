@@ -6,6 +6,7 @@ import { fullFormats } from "ajv-formats/dist/formats.js";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
 import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ScanSelection } from "@tracerelic/collector/history";
 import type { SessionKey, SessionView } from "../../../src/storage/collector-storage.ts";
+import { ClaudeUsageScanFixture } from "../../fixtures/claude-usage-scan-fixture.ts";
 import { CodexUsageScanFixture } from "../../fixtures/codex-usage-scan-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 
@@ -18,6 +19,12 @@ const contract = new Ajv2020({ formats: fullFormats }).addSchema({ ...schema, $s
 
 class ScanScenario {
   fixture!: ScanCommandFixture;
+  claude!: ClaudeUsageScanFixture;
+  inputs!: { input_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
+  textRow!: ReturnType<ClaudeUsageScanFixture["report"]>;
+  toolRow!: ReturnType<ClaudeUsageScanFixture["report"]>;
+  original!: SessionView;
+  corrected!: SessionView;
   counts!: CodexUsageScanFixture;
   measured!: SessionView;
   previousIds = new Set<string>();
@@ -70,7 +77,9 @@ class ScanScenario {
 setWorldConstructor(ScanScenario);
 Before({ tags: "@lc04" }, async function (this: ScanScenario) { this.counts = await CodexUsageScanFixture.create(); });
 After({ tags: "@lc04" }, async function (this: ScanScenario) { await this.counts?.close(); });
-Before({ tags: "not @lc04" }, async function (this: ScanScenario) {
+Before({ tags: "@lc05" }, async function (this: ScanScenario) { this.claude = await ClaudeUsageScanFixture.create(); });
+After({ tags: "@lc05" }, async function (this: ScanScenario) { await this.claude?.close(); });
+Before({ tags: "not (@lc04 or @lc05)" }, async function (this: ScanScenario) {
   this.fixture = await ScanCommandFixture.create();
   await this.fixture.configure();
 });
@@ -207,7 +216,7 @@ Then("both checkpoints record the accepted line and session version", function (
     assert.equal(scan.progress.checkpoint.offset, offset);
     const state: unknown = JSON.parse(scan.progress.checkpoint.parserState);
     assert(contract.validate("ParserCheckpointState.json", state), contract.errorsText());
-    assert.partialDeepStrictEqual(state, { version: 1, lineNumber });
+    assert.partialDeepStrictEqual(state, { version: 2, lineNumber });
   }
 });
 
@@ -272,4 +281,44 @@ Then("the session still shows {int} tokens and the two parts account for the who
   assert.equal(this.measured.coverage, "reported");
   assert.deepEqual(this.measured.usage.map(row => [row.kind, row.requestId, row.inputTokens, row.outputTokens]).sort(),
     this.detail.map((tokens, index) => ["call", ["first", "second"][index], tokens * 4 / 5, tokens / 5]));
+});
+
+Given("a request uses {int} ordinary, {int} cache-read and {int} cache-write input tokens", function (
+  this: ScanScenario, ordinary: number, read: number, write: number,
+) {
+  this.inputs = { input_tokens: ordinary, cache_read_input_tokens: read, cache_creation_input_tokens: write };
+});
+
+Given("its text row reports {int} output tokens and its later tool row reports {int}", function (
+  this: ScanScenario, earlier: number, later: number,
+) {
+  this.textRow = this.claude.report(1, { ...this.inputs, output_tokens: earlier }, { text: "Read the notes.", uuid: "first-row" });
+  this.toolRow = this.claude.report(2, { ...this.inputs, output_tokens: later }, { final: true, uuid: "tool-row" });
+});
+
+When("I scan both rows and replay the earlier report", async function (this: ScanScenario) {
+  await this.claude.append("desktop", this.textRow);
+  this.original = await this.claude.scan("desktop");
+  await this.claude.append("desktop", this.toolRow);
+  this.corrected = await this.claude.scan("desktop");
+  await this.claude.append("desktop", this.textRow);
+  this.measured = await this.claude.scan("desktop");
+});
+
+Then("the session has one request with {int} input tokens and {int} output tokens", function (
+  this: ScanScenario, inputTokens: number, outputTokens: number,
+) {
+  assert.equal(this.measured.usage.length, 1, "the corrected request must contribute one measurement");
+  assert.equal(this.original.usage.length, 1);
+  const [first] = this.original.usage;
+  assert.partialDeepStrictEqual(first, { at: this.textRow.timestamp, revision: 1, status: "provisional",
+    outputTokens: this.textRow.message.usage.output_tokens });
+  assert.deepEqual(this.measured, this.corrected);
+  assert.partialDeepStrictEqual(this.measured.usage[0], {
+    id: first.id, at: first.at, revision: 2, kind: "call", status: "final", requestId: this.textRow.requestId,
+    inputTokens, outputTokens, cacheReadTokens: this.inputs.cache_read_input_tokens, cacheWriteTokens: this.inputs.cache_creation_input_tokens,
+  });
+  assert.equal(this.measured.coverage, "reported");
+  assert.deepEqual(this.measured.messages.map(row => row.text), ["Read the notes."]);
+  assert(contract.validate("SessionView.json", this.measured), contract.errorsText());
 });

@@ -125,7 +125,7 @@ bun run lint
 bun run habit-hooks --all
 ```
 
-The scan check runs the Codex token scenarios, chat imports and growing-file scenarios. It verifies every `@two_chats` step has a binding. To exercise the cross-provider totals while Claude accounting is pending in LC-05, run `bun run --cwd apps/collector check:scan-scenarios --tags @two_chats` after the scan check.
+The scan check runs token corrections, chat imports and growing-file scenarios. Its `@two_chats` scenario checks both providers' totals before and after a restart and append.
 
 ## Tickets
 
@@ -262,7 +262,7 @@ Feature: Import visible Codex chat text
 
 | LC-01 constraint | Decision and check |
 | --- | --- |
-| Behavior | `collector scan --once --config <file>` reads active and archived Codex rollouts. Repeat `--session <id>` or `--project <directory>` to select sessions for the destination workspace. Either match selects a session. With neither option the command selects the configured root. The [planning chat scenario](../../apps/collector/test/acceptance/scan/codex-planning.feature) runs in `bun run check:collector-scan`. The [two-chat scenario](../../apps/collector/test/acceptance/scan/two-chats.feature) has executable bindings now and becomes required after LC-04 and LC-05. |
+| Behavior | `collector scan --once --config <file>` reads active and archived Codex rollouts. Repeat `--session <id>` or `--project <directory>` to select sessions for the destination workspace. Either match selects a session. With neither option the command selects the configured root. The [planning chat scenario](../../apps/collector/test/acceptance/scan/codex-planning.feature) and the [two-chat scenario](../../apps/collector/test/acceptance/scan/two-chats.feature) run in `bun run check:collector-scan`. |
 | Observability | The command writes the selected session views as JSON. A planning chat with no measurements has unknown coverage and a null total. Storage rejections identify the source and attempted byte range. The command and storage checks exercise these outcomes. |
 | Architecture | One scanner uses the [Codex reader](../../apps/collector/src/history/local-llm-history-codex.ts) and the [storage port](../../apps/collector/src/storage/collector-storage.ts). Each injected storage instance represents one workspace. The standalone command uses process-local memory for this delivery. The [dependency rules](../../.dependency-cruiser.collector.json) keep the storage implementation outside the scanner. Run `bun run check:collector-deps`. |
 | Interface | The [scan contract](local-collector/scan.tsp) defines source selection, the Codex reader's complete records and byte positions, and the stored session results. The [storage contract](local-collector/storage.tsp) adds optional message positions, turn and request IDs, recorded context and the position of a branch observation. An undated branch change has an order within its source. A branch from another source supersedes the current hint only when recorded times establish which came later. Earlier batches can omit the new fields. Run `bun run test`, `bun run check:collector-storage` and `bun run check:collector-scan`. |
@@ -371,6 +371,17 @@ Feature: Keep one measurement per Claude request
 
 1. **Unit.** Test the two reports in both arrival orders, an explicit final correction downward, and conflicting provisional counts. Select an entire report. Check the cache-duration breakdown and an advisor iteration without adding executor iterations twice.
 2. **Integration.** Separate the reports with a restart. Have two collectors propose different updates from the same stored version. Reload the winner on conflict and apply the comparison again.
+
+| LC-05 constraint | Decision and check |
+| --- | --- |
+| Behavior | Scan assistant usage even when a row contains only a tool call. Preserve one measurement per request and one per advisor iteration. A final report can reduce a count. Run the [Claude correction scenario](../../apps/collector/test/acceptance/scan/claude-usage.feature) and the [cross-provider restart scenario](../../apps/collector/test/acceptance/scan/two-chats.feature) in `bun run check:collector-scan`. |
+| Observability | The session shows accepted measurements, their status and revisions, and the measured total. Keep an unresolved call out of the total, flag a gap, and preserve independent calls. A diagnostic identifies the source, line and unsupported or invalid usage evidence. Existing service objectives apply. Check the returned view in `bun run test` and `bun run check:collector-storage`. |
+| Architecture | The Claude parser reads native reports. The scanner sends them through the storage port. Storage compares them with accepted session evidence inside the version-checked transaction. A competing Claude correction reloads the winning checkpoint and compares again. The [dependency rules](../../.dependency-cruiser.collector.json) enforce these boundaries in `bun run check:collector-deps`. |
+| Interface | The [storage contract](local-collector/storage.tsp) adds whole Claude observations, optional native IDs, completion status, cache-write durations and source diagnostics. Older usage remains readable. The [scan contract](local-collector/scan.tsp) marks Claude usage as imported in version 2. A text-only checkpoint can backfill its accepted prefix. Check both schemas and rollback with `bun run check:collector-storage`, `bun run check:collector-scan` and `bun run test`. |
+
+Match both native identifiers when supplied. A single identifier can match only one known request. A correction keeps the first accepted ID, time and position. Compare all comparable counts together. A replay of a weaker or disputed observation cannot restore a withdrawn count. A later final or unambiguously stronger report can resolve the call. Keep recorded gaps as specified in the coverage rules.
+
+Use the provider's advisor iteration ID when present. Otherwise use the iteration's position in the request's ordered iteration list. If an unfamiliar iteration type appears, retain the measured calls and report its source line. On a competing correction, retry from the winning checkpoint. A second conflict at the same saved position returns the affected byte range for a later scan.
 
 #### LC-06 · Recover after a move or rewrite
 

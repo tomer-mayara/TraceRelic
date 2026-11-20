@@ -1,9 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import type {
-  Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage,
-  Message, Metadata, SessionKey, SessionView, StreamKey, Usage, UsageAnchor,
+  Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage, Harness,
+  Message, Metadata, SessionKey, SessionView, SourceUsageDiagnostic, StreamKey, Usage, UsageAnchor,
 } from "./collector-storage.ts";
+import { ClaudeUsageLedger } from "./claude-usage-ledger.ts";
 import { isCount, isIdentifier, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
 import { UsageWindows } from "./usage-windows.ts";
 
@@ -148,9 +149,11 @@ interface StoredUsage {
   standalone: Usage[];
   anchors: Map<string, StoredAnchor[]>;
   windows: UsageWindows;
+  claude?: ClaudeUsageLedger;
+  order?: ReadonlySet<string>;
 }
 
-function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, stream: string) {
+function mergeRecordedUsage(previous: StoredSession | undefined, batch: Batch, stream: string) {
   if (!Array.isArray(batch.usage) || (batch.usageWindows !== undefined && !Array.isArray(batch.usageWindows))
     || (batch.usageAnchors !== undefined && !Array.isArray(batch.usageAnchors))) return null;
   const anchors = mergeAnchors(previous?.measurements.anchors, batch, stream);
@@ -169,10 +172,52 @@ function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, st
   const surviving = previous?.view.usage.filter(record => ids.has(record.id)) ?? [];
   const usage = mergeUsage(surviving, incoming, codexCalls);
   if (!usage) return null;
+  const hasGap = windows.hasGap || activeIds.size !== parts.length;
+  return { stored: { standalone, anchors, windows }, usage, hasGap };
+}
+
+function combineClaudeUsage(previous: StoredSession | undefined, ordinary: Usage[], claude: ClaudeUsageLedger) {
+  // Only native evidence can resolve a previously withdrawn Claude measurement.
+  if (ordinary.some(record => claude.measurementIds.has(record.id))) return null;
+  const order = new Set(previous?.measurements.order ?? previous?.view.usage.map(record => record.id));
+  for (const record of ordinary) order.add(record.id);
+  // A call can be observed and withdrawn within a single transaction. Keep its first position.
+  for (const id of claude.measurementIds) order.add(id);
+  if (!ordinary.length) return { order, usage: [...claude.measurements] };
+  const active = new Map(ordinary.map(record => [record.id, record]));
+  for (const record of claude.measurements) active.set(record.id, record);
+  const usage: Usage[] = [];
+  for (const id of order) {
+    const record = active.get(id);
+    if (record) usage.push(record);
+  }
+  return { order, usage };
+}
+
+function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, stream: string) {
+  const reports = batch.claudeUsageReports;
+  if (reports !== undefined && !Array.isArray(reports)) return null;
+  const recorded = mergeRecordedUsage(previous, batch, stream);
+  if (!recorded) return null;
+  const stored: StoredUsage = recorded.stored;
+  let usage = recorded.usage;
+  let claude = previous?.measurements.claude;
+  if (reports?.length) {
+    if (batch.source.harness !== "claude") return null;
+    const next = ClaudeUsageLedger.merge(claude, reports, batch.source.sessionId);
+    if (!next) return null;
+    claude = next;
+  }
+  if (claude) {
+    const combined = combineClaudeUsage(previous, usage, claude);
+    if (!combined) return null;
+    usage = combined.usage;
+    stored.order = combined.order;
+    stored.claude = claude;
+  }
   const total = usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
   if (!isCount(total)) return null;
-  const hasGap = windows.hasGap || activeIds.size !== parts.length;
-  return { stored: { standalone, anchors, windows }, usage, total, hasGap };
+  return { stored, usage, total, hasGap: recorded.hasGap || (claude?.hasGap ?? false) };
 }
 
 interface RecordedBranch {
@@ -244,6 +289,28 @@ function coverage(records: number, hasGap: boolean): Coverage {
   return hasGap ? "partial" : "reported";
 }
 
+const diagnosticCodes = new Set(["invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration"]);
+
+function diagnosticKey(value: SourceUsageDiagnostic): string {
+  return JSON.stringify([value.streamId, value.installationId, value.sourceOrder, value.code]);
+}
+
+function mergeDiagnostics(previous: SourceUsageDiagnostic[] | undefined, batch: Batch): SourceUsageDiagnostic[] | undefined | null {
+  const incoming = batch.usageDiagnostics;
+  if (incoming === undefined) return previous;
+  if (!Array.isArray(incoming)) return null;
+  if (!incoming.length) return previous;
+  if (batch.source.harness !== "claude") return null;
+  const diagnostics = new Map(previous?.map(value => [diagnosticKey(value), value]));
+  const { streamId, installationId } = batch.source;
+  for (const entry of incoming) {
+    if (!isRecord(entry) || !isRecordNumber(entry.sourceOrder) || !diagnosticCodes.has(entry.code)) return null;
+    const value = { streamId, ...(installationId !== undefined && { installationId }), sourceOrder: entry.sourceOrder, code: entry.code };
+    diagnostics.set(diagnosticKey(value), value);
+  }
+  return [...diagnostics.values()];
+}
+
 function mergeSessionRecords(
   previous: StoredSession | undefined, batch: Batch, stream: string,
 ): Omit<StoredSession, "version" | "checkpoints"> | null {
@@ -251,7 +318,8 @@ function mergeSessionRecords(
   const messages = mergeMessages(previous?.messages, batch.messages, stream);
   const measurements = mergeMeasurements(previous, batch, stream);
   const branches = mergeBranches(previous?.branches, batch, stream);
-  if (!messages || !measurements || branches === null) return null;
+  const usageDiagnostics = mergeDiagnostics(previous?.view.usageDiagnostics, batch);
+  if (!messages || !measurements || branches === null || usageDiagnostics === null) return null;
   const { usage, total, stored } = measurements;
   const hasGap = previous?.hasGap === true || batch.hasGap === true || measurements.hasGap;
   const metadata = { ...previous?.view.metadata, ...definedFields(batch.metadata ?? {}) };
@@ -259,6 +327,7 @@ function mergeSessionRecords(
   const view = {
     key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata, usage,
     coverage: coverage(usage.length, hasGap), observedTotalTokens: usage.length ? total : null,
+    ...(usageDiagnostics && { usageDiagnostics }),
   };
   return { view, messages, measurements: stored, branches, hasGap };
 }
@@ -273,25 +342,36 @@ function parserEnvelope(value: unknown, version: number, offset: number) {
   return { lineNumber: value.lineNumber, decoder: value.decoder };
 }
 
-function upgradesCodexParser(current: Checkpoint, next: Checkpoint): boolean {
+function upgradedChat(harness: Harness, decoder: Record<string, unknown>) {
+  if (harness === "codex") {
+    if (Object.keys(decoder).length === 2 && isRecord(decoder.chat) && isRecord(decoder.usage)) return decoder.chat;
+  } else if (harness === "claude" && Object.keys(decoder).length === 1 && isRecord(decoder.occurrences)) {
+    const valid = Object.entries(decoder.occurrences).every(([digest, count]) => /^[a-f0-9]{64}$/.test(digest)
+      && isCount(count) && count > 0);
+    if (valid) return decoder;
+  }
+}
+
+function upgradesParser(harness: Harness, current: Checkpoint, next: Checkpoint): boolean {
   const state = parserEnvelope(parseState(next.parserState), 2, current.offset);
-  if (!state || Object.keys(state.decoder).length !== 2 || !isRecord(state.decoder.chat) || !isRecord(state.decoder.usage)) return false;
+  if (!state) return false;
+  const chat = upgradedChat(harness, state.decoder);
+  if (!chat) return false;
   const old = parseState(current.parserState);
   if (isRecord(old) && Object.keys(old).length === 0) return true;
   const before = parserEnvelope(old, 1, current.offset);
-  return before !== null && state.lineNumber === before.lineNumber && isDeepStrictEqual(state.decoder.chat, before.decoder);
+  return before !== null && state.lineNumber === before.lineNumber && isDeepStrictEqual(chat, before.decoder);
 }
 
 function checkpointFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
   const { checkpoint, upgradeFromParserState } = batch;
   if (!isRecord(checkpoint) || !isCount(checkpoint.offset) || typeof checkpoint.parserState !== "string") return "invalid";
   if (upgradeFromParserState === undefined) return checkpoint.offset > (current?.offset ?? 0) ? undefined : "invalid";
-  if (!current || batch.source.harness !== "codex" || checkpoint.offset !== current.offset
-    || typeof upgradeFromParserState !== "string") return "invalid";
+  if (!current || checkpoint.offset !== current.offset || typeof upgradeFromParserState !== "string") return "invalid";
   if (current.parserState !== upgradeFromParserState) return "conflict";
   if (batch.messages?.length || batch.branchObservation !== undefined
     || Object.values(batch.metadata ?? {}).some(value => value !== undefined)) return "invalid";
-  if (!upgradesCodexParser(current, checkpoint)) return "invalid";
+  if (!upgradesParser(batch.source.harness, current, checkpoint)) return "invalid";
 }
 
 export class InMemoryCollectorStorage implements CollectorStorage {

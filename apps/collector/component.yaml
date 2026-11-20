@@ -10,6 +10,7 @@ behavior:
   - test/acceptance/scan/claude-conversation.feature
   - test/acceptance/scan/resume-growing-file.feature
   - test/acceptance/scan/codex-token-counts.feature
+  - test/acceptance/scan/claude-usage.feature
   - test/acceptance/scan/two-chats.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp

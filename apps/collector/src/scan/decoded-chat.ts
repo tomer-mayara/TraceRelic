@@ -1,5 +1,7 @@
 import type { RecordBatch } from "../history/index.ts";
-import type { BranchObservation, Message, Metadata, Usage, UsageAnchor, UsageWindow } from "../storage/collector-storage.ts";
+import type {
+  BranchObservation, ClaudeUsageReport, Message, Metadata, Usage, UsageAnchor, UsageDiagnostic, UsageWindow,
+} from "../storage/collector-storage.ts";
 
 type PositionedMessage = Message & { sourceOrder: number; blockIndex: number };
 
@@ -7,6 +9,8 @@ export interface DecodedUsage {
   usage: Usage[];
   usageAnchors?: UsageAnchor[];
   usageWindows: UsageWindow[];
+  claudeUsageReports?: ClaudeUsageReport[];
+  usageDiagnostics?: UsageDiagnostic[];
   hasGap: boolean;
 }
 

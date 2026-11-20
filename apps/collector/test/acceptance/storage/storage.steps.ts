@@ -7,7 +7,7 @@ import type {
   Batch, CheckpointSnapshot, CollectorStorage, CommitResult, SessionKey, SessionView,
 } from "../../../src/storage/collector-storage.ts";
 import {
-  codexMeasurement, codexParserState, codexSource, codexWindow, initialPlanningBatch, observation, prompt,
+  claudeReport, codexMeasurement, codexParserState, codexSource, codexWindow, initialPlanningBatch, observation, prompt,
 } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
@@ -123,6 +123,37 @@ BeforeAll(function () {
     [{ upgradeFromParserState: null }, "/upgradeFromParserState"],
   ];
   for (const [fields, path] of malformed) {
+    assert.equal(contract.validate("Batch.json", { ...batch, ...fields }), false, path);
+    assert(contract.errors?.some(error => error.instancePath === path), contract.errorsText());
+  }
+});
+
+BeforeAll(async function () {
+  const scenario = new StorageScenario();
+  const report = claudeReport({ status: "final", outputTokens: 91, cacheWrite5mTokens: 2, cacheWrite1hTokens: 3 });
+  const diagnostic = { code: "unsupported-claude-iteration", sourceOrder: 4 } as const;
+  const batch: Batch = { ...scenario.batch, claudeUsageReports: [report], usageDiagnostics: [diagnostic], hasGap: true };
+  checkWireValue("ClaudeUsageReport", report);
+  checkWireValue("UsageStatus", report.status);
+  checkWireValue("UsageDiagnostic", diagnostic);
+  await scenario.commit(batch);
+  assert.equal(scenario.result, "committed");
+  const view = await scenario.view();
+  assert.equal(view.observedTotalTokens, 131);
+  assert.equal(view.coverage, "partial");
+  assert.equal(view.usage.length, 1);
+  assert.deepEqual(view.usage[0], { ...report, id: view.usage[0].id, kind: "call", revision: 1 });
+  assert.deepEqual(view.usageDiagnostics, [{ ...diagnostic, streamId: batch.source.streamId }]);
+  checkWireValue("SourceUsageDiagnostic", view.usageDiagnostics[0]);
+  for (const [fields, path] of [
+    [{ claudeUsageReports: [{ ...report, status: "unknown" }] }, "/claudeUsageReports/0/status"],
+    [{ claudeUsageReports: [{ ...report, messageId: undefined, requestId: undefined }] }, "/claudeUsageReports/0"],
+    [{ claudeUsageReports: [{ ...report, messageId: "" }] }, "/claudeUsageReports/0/messageId"],
+    [{ claudeUsageReports: [{ ...report, iterationId: "" }] }, "/claudeUsageReports/0/iterationId"],
+    [{ claudeUsageReports: [{ ...report, cacheWrite5mTokens: -1 }] }, "/claudeUsageReports/0/cacheWrite5mTokens"],
+    [{ usageDiagnostics: [{ ...diagnostic, code: "wrong" }] }, "/usageDiagnostics/0/code"],
+    [{ usageDiagnostics: [{ ...diagnostic, sourceOrder: 0 }] }, "/usageDiagnostics/0/sourceOrder"],
+  ] as const) {
     assert.equal(contract.validate("Batch.json", { ...batch, ...fields }), false, path);
     assert(contract.errors?.some(error => error.instancePath === path), contract.errorsText());
   }
