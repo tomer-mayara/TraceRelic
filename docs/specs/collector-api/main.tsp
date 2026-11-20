@@ -23,6 +23,12 @@ model CollectorRemoteDestination {
   @secret @pattern("^[a-zA-Z0-9._~+/-]+=*$") TRACERELIC_COLLECTOR_TOKEN: string;
 }
 
+/** Server environment setting for the PostgreSQL store. Startup applies outstanding migrations before listening. */
+@TypeSpec.JsonSchema.jsonSchema
+model CollectorDatabaseConfig {
+  @secret @format("uri") @pattern("^postgres(ql)?://") DATABASE_URL: string;
+}
+
 @TypeSpec.JsonSchema.jsonSchema
 model SessionResult {
   session: SessionView | null;

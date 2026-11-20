@@ -10,6 +10,7 @@
     "lint": "oxlint apps packages test",
     "check:collector-storage": "bun run build && tsp compile docs/specs/local-collector/storage.tsp --pretty false && bun run check:collector-deps && bun run --cwd apps/collector check:storage-scenarios",
     "check:collector-api": "bun run build && tsp compile docs/specs/local-collector/storage.tsp --pretty false && bun run check:collector-deps && bun run --cwd apps/api check:collector-scenarios",
+    "check:collector-postgres": "bun run build && tsp compile docs/specs/local-collector/storage.tsp --pretty false && bun run check:collector-deps && bun run --cwd apps/api check:postgres-scenarios",
     "check:collector-history": "bun run build && tsp compile docs/specs/local-collector/history.tsp --pretty false --output-dir dist/collector-history --option @typespec/json-schema.bundleId=history.schema.json && bun run check:collector-deps && bun run --cwd apps/collector check:history-scenarios && bun run --cwd apps/collector check:config-scenarios",
     "check:collector-scan": "bun run build && tsp compile docs/specs/local-collector/scan.tsp --pretty false --output-dir dist/collector-scan --option @typespec/json-schema.bundleId=scan.schema.json && bun run check:collector-deps && bun run --cwd apps/collector check:scan-scenarios",
     "check:collector-deps": "depcruise --config .dependency-cruiser.collector.json \"{apps,packages}/*/{src,scripts,test}\"",

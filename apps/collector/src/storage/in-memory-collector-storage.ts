@@ -371,6 +371,9 @@ function mergeSessionRecords(
   return { view, messages, measurements: stored, branches, hasGap, codexUsageWrites: measurements.history };
 }
 
+/** A write can advance the session that supplied the data and another session that owns a call. */
+export interface SessionRevision extends SessionKey { version: number }
+
 export class InMemoryCollectorStorage implements CollectorStorage {
   private readonly sessions = new Map<string, StoredSession>();
   private readonly codexOwners = new CodexCallOwners();
@@ -388,7 +391,18 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     return structuredClone(selected);
   }
 
-  async recordPresence(update: PresenceWrite): Promise<CommitResult> {
+  readAcknowledgedSource(source: StreamKey): AcknowledgedSource | null {
+    const session = this.sessions.get(encodeSessionKey(source));
+    const row = session?.checkpoints.get(encodeStreamKey(source))?.selected(undefined, session.version);
+    return structuredClone(row ?? null);
+  }
+
+  private saveSession(key: string, session: StoredSession, changed?: SessionRevision[]): void {
+    this.sessions.set(key, session);
+    changed?.push({ ...session.view.key, version: session.version });
+  }
+
+  async recordPresence(update: PresenceWrite, changed?: SessionRevision[]): Promise<CommitResult> {
     if (!hasValidPosition(update)) return "invalid";
     const key = encodeSessionKey(update.source);
     const stream = encodeStreamKey(update.source);
@@ -402,7 +416,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const version = session.version + 1;
     if (!isCount(version)) return "invalid";
     const checkpoints = new Map(session.checkpoints).set(stream, next);
-    this.sessions.set(key, { ...session, version, checkpoints });
+    this.saveSession(key, { ...session, version, checkpoints }, changed);
     return "committed";
   }
 
@@ -444,7 +458,8 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   }
 
   /** Validate every changed peer before publishing any part of the transfer. */
-  private advancePeers(source: SessionKey, transfers: ReadonlySet<string>, validUsage?: (peer: StoredSession) => boolean): boolean {
+  private advancePeers(source: SessionKey, transfers: ReadonlySet<string>, changed?: SessionRevision[],
+    validUsage?: (peer: StoredSession) => boolean): boolean {
     const peers = new Map<string, StoredSession>();
     for (const id of transfers) {
       if (id === source.sessionId) continue;
@@ -454,11 +469,11 @@ export class InMemoryCollectorStorage implements CollectorStorage {
       if (!isCount(stored.version + 1) || (validUsage && !validUsage(stored))) return false;
       peers.set(key, { ...stored, version: stored.version + 1 });
     }
-    for (const [key, updated] of peers) this.sessions.set(key, updated);
+    for (const [key, updated] of peers) this.saveSession(key, updated, changed);
     return true;
   }
 
-  private publishOwnership(batch: Batch, next: StoredSession, current: Checkpoint | undefined): boolean {
+  private publishOwnership(batch: Batch, next: StoredSession, current: Checkpoint | undefined, changed?: SessionRevision[]): boolean {
     if (batch.source.harness === "claude") {
       if (batch.codexCallClaims !== undefined) return false;
       const staged = this.claudeOwners.prepare(batch, next.measurements.claude?.measurements ?? [], next.view.metadata.parentSessionId);
@@ -467,7 +482,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
         const projected = staged.owners.view(session.view.key.sessionId, session.view.usage, session.measurements.order);
         return !projected.conflictingUsageId && isCount(totalTokens(projected.usage));
       };
-      if (!validUsage(next) || !this.advancePeers(batch.source, staged.changedSessions, validUsage)) return false;
+      if (!validUsage(next) || !this.advancePeers(batch.source, staged.changedSessions, changed, validUsage)) return false;
       this.claudeOwners = staged.owners;
       return true;
     }
@@ -477,12 +492,12 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const ownership = this.codexOwners.prepare(batch, next.view.usage, id => this.verifiedParent(id, next), newProof);
     if (ownership === null) return false;
     if (!ownership) return true;
-    if (!this.advancePeers(batch.source, ownership.transfers)) return false;
+    if (!this.advancePeers(batch.source, ownership.transfers, changed)) return false;
     this.codexOwners.publish(ownership);
     return true;
   }
 
-  async commit(batch: Batch): Promise<CommitResult> {
+  async commit(batch: Batch, changed?: SessionRevision[]): Promise<CommitResult> {
     if (!hasValidPosition(batch)) return "invalid";
     const { source, expectedVersion, expectedOffset } = batch;
     const session = encodeSessionKey(source);
@@ -506,8 +521,8 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const checkpoints = new Map(previous?.checkpoints);
     checkpoints.set(stream, accepted);
     const next = { version, checkpoints, ...records };
-    if (!this.publishOwnership(incoming, next, current?.checkpoint)) return "invalid";
-    this.sessions.set(session, next);
+    if (!this.publishOwnership(incoming, next, current?.checkpoint, changed)) return "invalid";
+    this.saveSession(session, next, changed);
     return "committed";
   }
 }

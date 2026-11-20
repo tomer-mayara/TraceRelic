@@ -75,12 +75,16 @@ The scanner keeps reading after a damaged complete line. For damaged lines and u
 
 ## Run the local collector API
 
-Build the API and start it with a trusted credential file. It listens on `127.0.0.1:3000` by default. Set `PORT` to choose another port. Each workspace has its own in-memory store for the life of the process.
+The API stores accepted sessions and checkpoints in PostgreSQL. Set `DATABASE_URL` and supply the trusted collector credential file. On startup the API applies its migrations, then listens on `127.0.0.1:3000`. Set `PORT` to choose another port.
 
 ```sh
+docker compose up -d --wait db
 bun run build
+export DATABASE_URL=postgresql://tracker:tracker_local@127.0.0.1:55432/feature_tokens
 TRACERELIC_COLLECTOR_CREDENTIALS_FILE=/path/to/credentials.json bun run collector-api
 ```
+
+Restart the API against the same database to resume from the last accepted checkpoint. The database role must be able to create the `tracerelic_collector` schema and apply migrations there. [API migrations](apps/api/src/migrations)
 
 The file is a JSON array. For each issued bearer token, store its lowercase SHA-256 digest, workspace, installation and expiry time. To get the digest of a token in `TRACERELIC_COLLECTOR_TOKEN`, run `printf %s "$TRACERELIC_COLLECTOR_TOKEN" | openssl dgst -sha256`. Two installations in one workspace share sessions and keep their own checkpoints.
 
@@ -133,6 +137,8 @@ bun run test
 ```
 
 `bun run test` type-checks, compiles, and runs each component's `*.test.ts` suites under `test/unit/`, `test/integration/`, `test/interface/`, and `test/acceptance/`. The collector contract checks run the Cucumber features with their adjacent step definitions. [Test layout](docs/engineering-guidelines/coding-principles.md#test-locations)
+
+Run `bun run check:collector-postgres` to exercise API restarts, competing first writes, and the storage contract against PostgreSQL. The database tests in both commands start disposable PostgreSQL 18.7 containers on loopback. To reuse a test server, set `TRACERELIC_TEST_DATABASE_URL` to a database where the test role can create databases. Each fixture creates a uniquely named database and removes it when it finishes.
 
 Run `bun run check:shared-logging` to build the log record schema, check package dependencies, and run the logging scenarios on Bun and Node. [Shared logging plan](docs/specs/shared-logging.md)
 

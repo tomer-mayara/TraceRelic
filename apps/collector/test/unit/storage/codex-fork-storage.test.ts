@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { SessionRevision } from "@tracerelic/collector/memory-storage";
 import { batch, codexMeasurement, codexSource, codexWindow, planning } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
@@ -58,9 +59,14 @@ test("a verified parent takes ownership of its native call in one versioned work
   assert.equal(await store.commit(childBatch), "committed");
   const parentBatch = batch(0, 0, { source: parent, usage: [original],
     codexCallClaims: [{ ...claim, usageId: original.id, ownerSessionId: parent.sessionId }] });
-  assert.equal(await store.commit({ ...parentBatch, usage: [{ ...original, inputTokens: -1 }] }), "invalid");
+  const changed: SessionRevision[] = [];
+  assert.equal(await store.commit({ ...parentBatch, usage: [{ ...original, inputTokens: -1 }] }, changed), "invalid");
+  assert.equal(changed.length, 0);
   assert.equal((await store.readSession(child))?.observedTotalTokens, 32);
-  assert.equal(await store.commit(parentBatch), "committed");
+  assert.equal(await store.commit(parentBatch, changed), "committed");
+  assert.deepEqual(changed.sort((a, b) => a.sessionId.localeCompare(b.sessionId)), [
+    { harness: "codex", sessionId: "child", version: 2 }, { harness: "codex", sessionId: "parent", version: 1 },
+  ]);
   assert.equal((await store.readSession(parent))?.observedTotalTokens, 25);
   assert.deepEqual((await store.readSession(child))?.usage, [unrelated]);
   assert.deepEqual(await store.readCheckpoint(child), { version: 2, checkpoint: repaired });

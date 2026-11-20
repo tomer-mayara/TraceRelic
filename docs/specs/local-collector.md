@@ -2,7 +2,7 @@
 
 A developer can read a saved Codex or Claude Code chat and see how many tokens it used. A planning chat counts even if it never edits a file. Show the measured total, the text, and any known gap. Keep enough evidence to link a turn to a feature or pull request later.
 
-**First delivery.** Build one local scanner. Test it against the existing in-memory storage fixture. **Remote delivery.** Send the same records to the TraceRelic API. The API owns the database. Supabase Postgres is a candidate. Pricing, PR detection, and feature attribution come later.
+**First delivery.** Build one local scanner. Test it against the existing in-memory storage fixture. **Remote delivery.** Send the same records to the TraceRelic API. The API owns the PostgreSQL database. Pricing, PR detection, and feature attribution come later.
 
 ## First end-to-end scenario to implement
 
@@ -120,6 +120,8 @@ bun install --frozen-lockfile
 bun run check:collector-history
 bun run check:collector-storage
 bun run check:collector-scan
+bun run check:collector-api
+bun run check:collector-postgres
 bun run test
 bun run lint
 bun run habit-hooks --all
@@ -665,7 +667,7 @@ Feature: Keep workspace data separate
 
 The bearer credential identifies one workspace and one installation and has an expiry time. Reads and writes select their workspace from that credential. On a source or inventory request the API supplies the installation. A caller may repeat the same installation ID. A different installation ID or an explicit workspace selector in the request yields HTTP 400. Missing, unknown and expired credentials all receive HTTP 401 with a bearer challenge.
 
-All five operations accept JSON by POST under `/v1/collector`. Session reads return a `session` field that is null when absent. Checkpoint reads and source lists return their storage values directly. Batch and presence writes return `committed` (200), `conflict` (409) or `invalid` (422) in the `result` field. Malformed JSON returns 400. The local service binds to loopback and loads operator-supplied credential hashes. Its workspace data lasts for the life of the process.
+All five operations accept JSON by POST under `/v1/collector`. Session reads return a `session` field that is null when absent. Checkpoint reads and source lists return their storage values directly. Batch and presence writes return `committed` (200), `conflict` (409) or `invalid` (422) in the `result` field. Malformed JSON returns 400. The local service binds to loopback and loads operator-supplied credential hashes. LC-16 adds the PostgreSQL store used by the executable API.
 
 #### LC-15 · Sync through the HTTP client
 
@@ -709,6 +711,15 @@ Feature: Read stored data after a server restart
 
 1. **Interface.** Write the restart and LC-17 race scenarios before building the adapter. Run server-owned migrations in a disposable database. Use workspace-scoped keys for sessions and records. Scope source checkpoints by installation as well.
 2. **Integration.** After restart, compare the text, order, latest correction, coverage, ownership and source status to the fixture. Use one storage contract suite for both adapters.
+
+| LC-16 constraint | Decision and check |
+| --- | --- |
+| Behavior | Restart the packaged API with fresh connections to PostgreSQL and read the two workspaces through their credentials. Run the [restart scenario](../../apps/api/test/acceptance/postgres/restart.feature), the [first-write race](../../apps/api/test/acceptance/postgres/competing-writes.feature), and the [storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) against disposable databases with `bun run check:collector-postgres`. Compare corrected usage, message order, missing sources, ownership and subsequent writes with the in-memory adapter in `bun run test`. |
+| Observability | Keep the [API commit outcome and duration](collector-api/main.tsp). Report readiness after migrations succeed, and return the existing storage-unavailable response when a connection fails. Check that startup and request errors exclude connection strings and chat text. The service objective stays the same. |
+| Architecture | The API build includes its [versioned migrations](../../apps/api/src/migrations/001-collector-storage.sql). The executable owns the PostgreSQL pool. Store accepted writes and their session, record and source projections in one transaction. Writers in the same workspace take turns so call ownership can move between sessions. Reuse the existing merge rules and apply newly committed writes when an API writer needs to catch up. Reads use workspace-scoped database keys. Run the [dependency checks](../../.dependency-cruiser.collector.json). |
+| Interface | At startup, validate `DATABASE_URL` against the generated [PostgreSQL configuration schema](collector-api/main.tsp). The [version 1 HTTP operations](collector-api/main.tsp) and [storage port](local-collector/storage.tsp) retain their request, response and outcome types. Keep session and record identities scoped to the workspace and provider, and key each source by its installation and stream as well. Build TypeSpec and run the same storage assertions in memory and through the PostgreSQL-backed API. |
+
+Use PostgreSQL 18 from the repository's Compose setup. Before accepting requests, the API connects to the configured database and applies outstanding migrations. Store the full accepted evidence so a later correction or fork can still change the correct session after a restart. A repeated presence report at the same version can succeed without adding another write. Each API process can rebuild its writer state from the database.
 
 #### LC-17 · Make competing writes atomic
 

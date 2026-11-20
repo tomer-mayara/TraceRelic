@@ -12,8 +12,9 @@
   },
   "scripts": {
     "contract": "tsp compile ../../docs/specs/collector-api/main.tsp --pretty false",
-    "compile": "bun run contract && swc src -d dist --strip-leading-paths --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc",
-    "check:collector-scenarios": "cucumber-js \"test/acceptance/collector/*.feature\" --import ./dist/test/acceptance/collector/workspace.steps.js --import ./dist/test/acceptance/collector/remote-sync.steps.js --format summary && cucumber-js ../collector/test/acceptance/storage/storage.feature --import ../collector/dist/test/acceptance/storage/storage.steps.js --import ./dist/test/acceptance/collector/storage-over-http.steps.js --format summary"
+    "compile": "bun run contract && swc src -d dist --strip-leading-paths --copy-files --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc",
+    "check:collector-scenarios": "cucumber-js \"test/acceptance/collector/*.feature\" --import ./dist/test/acceptance/collector/workspace.steps.js --import ./dist/test/acceptance/collector/remote-sync.steps.js --format summary && cucumber-js ../collector/test/acceptance/storage/storage.feature --import ../collector/dist/test/acceptance/storage/storage.steps.js --import ./dist/test/acceptance/collector/storage-over-http.steps.js --format summary",
+    "check:postgres-scenarios": "cucumber-js \"test/acceptance/postgres/*.feature\" --import ./dist/test/acceptance/postgres/durability.steps.js --format summary && cucumber-js ../collector/test/acceptance/storage/storage.feature --import ../collector/dist/test/acceptance/storage/storage.steps.js --import ./dist/test/acceptance/postgres/storage.steps.js --format summary"
   },
   "dependencies": {
     "@tracerelic/collector": "workspace:*",

@@ -42,3 +42,13 @@ test("the generated credential record schema requires a digest, scope and explic
     assert.equal(contract.is("CollectorCredentialRecord", invalid), false);
   }
 });
+
+test("the generated database configuration schema requires a PostgreSQL connection URI", () => {
+  const contract = new CollectorWireContract();
+  for (const url of ["postgres://localhost/store", "postgresql:///store?host=%2Ftmp", "postgresql://localhost/store%20name"]) {
+    assert(contract.is("CollectorDatabaseConfig", { DATABASE_URL: url }));
+  }
+  for (const config of [{}, { DATABASE_URL: "https://localhost/store" }, { DATABASE_URL: "postgres://localhost/store name" }]) {
+    assert.equal(contract.is("CollectorDatabaseConfig", config), false);
+  }
+});

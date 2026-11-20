@@ -1,6 +1,18 @@
 {
   "forbidden": [
     {
+      "name": "api-connects-to-postgres-through-the-collector-database",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/(?!storage/collector-database\\.ts$)" },
+      "to": { "path": "(^|/)(pg|pg-pool)(/|$)", "dependencyTypesNot": ["type-only"] }
+    },
+    {
+      "name": "http-handlers-do-not-open-databases",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/collector-api\\.ts$" },
+      "to": { "path": "^apps/api/src/storage/", "reachable": true }
+    },
+    {
       "name": "http-client-uses-the-wire-contract-and-storage-port",
       "severity": "error",
       "from": { "path": "^apps/collector/src/storage/http-collector-storage\\.ts$" },

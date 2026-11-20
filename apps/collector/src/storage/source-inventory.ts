@@ -124,9 +124,9 @@ export class StoredSource {
     return isDeepStrictEqual(state, previous) ? this : new StoredSource(this.source, this.checkpoint, this.generation, state);
   }
 
-  selected(scope: SourceScope, version: number): AcknowledgedSource | undefined {
+  selected(scope: SourceScope | undefined, version: number): AcknowledgedSource | undefined {
     const { location, observedEnd, presence } = this.state;
-    if (!location || !matchesSourceScope(scope, this.source, location)) return;
+    if (!location || (scope && !matchesSourceScope(scope, this.source, location))) return;
     return { source: this.source, location, observedEnd, presence, version, acceptedOffset: this.checkpoint.offset };
   }
 

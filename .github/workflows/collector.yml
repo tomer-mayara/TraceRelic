@@ -9,6 +9,16 @@ permissions:
 jobs:
   collector:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.7
+        env:
+          POSTGRES_PASSWORD: collector_test_only
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 30
+    env:
+      TRACERELIC_TEST_DATABASE_URL: postgresql://postgres:collector_test_only@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
@@ -31,6 +41,9 @@ jobs:
       - name: Test collector HTTP API
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run check:collector-api
+      - name: Test PostgreSQL storage and API restart
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bun run check:collector-postgres
       - name: Test shared logging
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run check:shared-logging

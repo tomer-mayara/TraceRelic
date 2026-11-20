@@ -13,6 +13,7 @@ export interface CollectorCredentialRecord {
 
 interface CollectorModels {
   CollectorCredentialRecord: CollectorCredentialRecord;
+  CollectorDatabaseConfig: { DATABASE_URL: string };
   SessionKey: SessionKey;
   StreamKey: StreamKey;
   SourceScope: SourceScope;

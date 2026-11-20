@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { CollectorApiProcess } from "../../fixtures/collector-api-process.ts";
 import { credentialRecord } from "../../fixtures/collector-credential.ts";
+import { DisposablePostgres } from "../../fixtures/disposable-postgres.ts";
 
 test("the collector API entry point rejects missing or malformed configuration without printing its contents", async t => {
   const dir = await mkdtemp(join(tmpdir(), "tracerelic-api-config-"));
@@ -28,6 +29,13 @@ test("the collector API entry point rejects missing or malformed configuration w
     assert.equal(result.status, 1);
     assert.match(result.stderr, /PORT/);
   }
+  for (const databaseUrl of [undefined, "invalid-private-database-url", "postgresql://user:private-password@127.0.0.1:0/missing"]) {
+    const result = CollectorApiProcess.invalidConfiguration(file, "0", databaseUrl);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /DATABASE_URL/);
+    assert.doesNotMatch(result.stderr, /private|postgresql:\/\//);
+    assert.equal(result.stdout, "");
+  }
 });
 
 test("the compiled API serves its configured workspaces, emits a commit metric, and shuts down on SIGTERM", async t => {
@@ -36,8 +44,11 @@ test("the compiled API serves its configured workspaces, emits a commit metric, 
   const file = join(dir, "credentials.json");
   const tokens = ["local-a", "local-b"];
   await writeFile(file, JSON.stringify(tokens.map((token, index) => credentialRecord(token, `team-${index}`, "laptop"))));
-  const server = new CollectorApiProcess(file);
-  t.after(async () => { await server.stop("SIGTERM"); });
+  const database = await DisposablePostgres.open();
+  const server = new CollectorApiProcess(file, database.url);
+  t.after(async () => {
+    try { await server.stop("SIGTERM"); } finally { await database.close(); }
+  });
   const started = await server.nextEvent();
   assert.equal(started.event, "listening");
   const address = new URL(started.address);
@@ -60,6 +71,15 @@ test("the compiled API serves its configured workspaces, emits a commit metric, 
   assert(Number.isFinite(metric.durationMs) && metric.durationMs >= 0);
   assert.partialDeepStrictEqual(await post("session", tokens[0], key), { session: { key } });
   assert.deepEqual(await post("session", tokens[1], key), { session: null });
+  await database.close();
+  const offline = await fetch(new URL("/v1/collector/batches", address), {
+    method: "POST", headers: { authorization: "Bearer " + tokens[0], "content-type": "application/json" },
+    body: JSON.stringify(batch), signal: AbortSignal.timeout(10_000),
+  });
+  assert.equal(offline.status, 503);
+  assert.deepEqual(await offline.json(), { error: "storage-unavailable" });
+  const outage = await server.nextEvent();
+  assert.deepEqual({ ...outage, durationMs: 0 }, { ...metric, durationMs: 0, outcome: "storage-unavailable" });
   assert.deepEqual(await server.stop("SIGTERM"), [0, null]);
   assert.equal(server.stderr, "");
 });
