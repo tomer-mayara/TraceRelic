@@ -25,7 +25,7 @@ function checkWireValue(model: string, value: unknown): void {
 }
 
 class StorageScenario {
-  readonly store: CollectorStorage = new InMemoryCollectorStorage();
+  store: CollectorStorage = new InMemoryCollectorStorage();
   batch = initialPlanningBatch();
   readonly source = this.batch.source;
   readonly key: SessionKey = { harness: this.source.harness, sessionId: this.source.sessionId };

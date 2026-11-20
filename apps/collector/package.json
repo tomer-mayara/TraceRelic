@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./storage": { "types": "./src/storage/collector-storage.ts", "import": "./dist/storage/collector-storage.js" },
+    "./memory-storage": { "types": "./src/storage/in-memory-collector-storage.ts", "import": "./dist/storage/in-memory-collector-storage.js" },
     "./command": { "types": "./src/commands/collector-command.ts", "import": "./dist/commands/collector-command.js" },
     "./scan": { "types": "./src/scan/local-collector.ts", "import": "./dist/scan/local-collector.js" },
     "./config": { "types": "./src/config/index.ts", "import": "./dist/config/index.js" },

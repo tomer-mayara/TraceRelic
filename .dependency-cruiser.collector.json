@@ -1,6 +1,18 @@
 {
   "forbidden": [
     {
+      "name": "collector-api-depends-on-storage",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/" },
+      "to": { "path": "^apps/collector/src/(?!storage/)" }
+    },
+    {
+      "name": "http-handlers-use-the-storage-port",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/collector-api\\.ts$" },
+      "to": { "path": "^apps/collector/src/storage/(?!collector-storage\\.ts$)", "reachable": true }
+    },
+    {
       "name": "schedule-runs-the-scan-through-its-handler",
       "severity": "error",
       "from": { "path": "^apps/collector/src/scan/scheduled-scanner\\.ts$" },

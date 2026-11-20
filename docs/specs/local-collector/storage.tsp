@@ -280,10 +280,10 @@ model UsageAnchor {
   after?: TokenCounts;
 }
 
-@extension("if", #{ properties: #{ checkpoint: #{ required: #["claudeCallOrigins"] } } })
+@extension("if", #{ properties: #{ checkpoint: #{ type: "object", required: #["claudeCallOrigins"] } } })
 @extension("then", #{ properties: #{
-  source: #{ properties: #{ harness: #{ `const`: "claude" } } },
-  claudeUsageReports: #{ items: #{ required: #["origin"] } }
+  source: #{ type: "object", properties: #{ harness: #{ `const`: "claude" } } },
+  claudeUsageReports: #{ type: "array", items: #{ type: "object", required: #["origin"] } }
 } })
 model Batch {
   source: StreamKey;

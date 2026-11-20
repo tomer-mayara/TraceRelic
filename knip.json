@@ -3,10 +3,10 @@
   "workspaces": {
     ".": {
       "entry": [".habit-hooks/eslint.config.mjs", "test/acceptance/**/*.{test,steps}.ts"],
-      "ignoreDependencies": ["@typespec/json-schema", "jscpd", "ts-morph"]
+      "ignoreDependencies": ["@typespec/http", "@typespec/json-schema", "@typespec/openapi", "@typespec/openapi3", "jscpd", "ts-morph"]
     },
     "apps/*": {
-      "entry": ["test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts", "src/cli.ts", "src/storage/collector-storage.ts", "scripts/*.mjs"],
+      "entry": ["test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts", "src/cli.ts", "src/main.ts", "src/storage/collector-storage.ts", "scripts/*.mjs"],
       "project": ["{src,test}/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"]
     },
     "packages/*": {

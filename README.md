@@ -73,6 +73,37 @@ A Claude fork or subagent keeps its own chat and links to its parent. If it copi
 
 The scanner keeps reading after a damaged complete line. For damaged lines and unsupported usage, including a Claude cache breakdown, `usageDiagnostics` gives the source, line number and byte range. The range includes the terminating newline. Codex keeps independently identified calls and resumes counting cumulative changes from the next reliable snapshot. [Local collector engineering spec](docs/specs/local-collector.md)
 
+## Run the local collector API
+
+Build the API and start it with a trusted credential file. It listens on `127.0.0.1:3000` by default. Set `PORT` to choose another port. Each workspace has its own in-memory store for the life of the process.
+
+```sh
+bun run build
+TRACERELIC_COLLECTOR_CREDENTIALS_FILE=/path/to/credentials.json bun run collector-api
+```
+
+The file is a JSON array. For each issued bearer token, store its lowercase SHA-256 digest, workspace, installation and expiry time. To get the digest of a token in `TRACERELIC_COLLECTOR_TOKEN`, run `printf %s "$TRACERELIC_COLLECTOR_TOKEN" | openssl dgst -sha256`. Two installations in one workspace share sessions and keep their own checkpoints.
+
+```json
+[
+  {
+    "tokenSha256": "<64 lowercase hex digits>",
+    "workspaceId": "research",
+    "installationId": "desktop",
+    "expiresAt": "2030-01-01T00:00:00Z"
+  }
+]
+```
+
+For example, set `TRACERELIC_COLLECTOR_TOKEN` to the issued token and read a session. An unknown session returns `{"session":null}`. Each batch commit reports its outcome and elapsed milliseconds on the server. The build writes the routes and response codes to `apps/api/dist/contracts/openapi.json`. The adjacent `collector-api.schema.json` contains the request validation rules, including cross-field checks for batches and checkpoints. [Version 1 HTTP contract](docs/specs/collector-api/main.tsp)
+
+```sh
+curl --header "Authorization: Bearer $TRACERELIC_COLLECTOR_TOKEN" --json '{"harness":"codex","sessionId":"planning"}' \
+  http://127.0.0.1:3000/v1/collector/session
+```
+
+Run `bun run check:collector-api` to exercise workspace isolation and the storage contract over a loopback connection.
+
 ## Run the checks
 
 Use Node.js **26.13.1** and Bun **1.4.4**. With nvm installed, run `nvm install` and `nvm use` from this directory. If you need Bun, run `curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.4` and add `$HOME/.bun/bin` to the front of your `PATH`. [Node.js release](https://nodejs.org/en/blog/release/v26.13.1) · [Bun installation](https://bun.com/docs/installation)
@@ -103,7 +134,7 @@ bun run habit-hooks --branch main
 
 ESLint checks TypeScript, TSX, and workspace `.mjs` scripts. Function limits are 60 code lines for TypeScript, 120 for TSX, and 200 for tests and scripts. The file limit is 500 code lines. jscpd flags duplicated blocks of at least 10 lines and 100 tokens. Knip checks dependencies across all workspaces, including during a single-file scan. Review the reported findings as well as the exit status.
 
-Knip's root tool exceptions cover `jscpd` and `ts-morph` for Habit Hooks, and the `@typespec/json-schema` emitter loaded by the storage contract. ESLint's parser uses the TypeScript 6 JavaScript API. `bun run lint` runs Oxlint, and `bun run typecheck` uses `tsrs`.
+Knip's root tool exceptions cover `jscpd` and `ts-morph` for Habit Hooks and the HTTP, OpenAPI and JSON Schema libraries loaded by TypeSpec. ESLint's parser uses the TypeScript 6 JavaScript API. `bun run lint` runs Oxlint, and `bun run typecheck` uses `tsrs`.
 
 ## Connect to PostgreSQL
 

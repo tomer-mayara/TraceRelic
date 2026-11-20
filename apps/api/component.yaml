@@ -1,0 +1,11 @@
+name: collector-api
+spec: ../../docs/specs/local-collector.md
+behavior:
+  - test/acceptance/collector/workspace.feature
+  - ../collector/test/acceptance/storage/storage.feature
+interface:
+  - ../../docs/specs/collector-api/main.tsp
+  - ../../docs/specs/local-collector/storage.tsp
+dependencyRules: ../../.dependency-cruiser.collector.json
+server: src/collector-api.ts
+entrypoint: src/main.ts

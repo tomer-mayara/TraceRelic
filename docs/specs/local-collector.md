@@ -656,6 +656,17 @@ Feature: Keep workspace data separate
 1. **Interface.** Define versioned HTTP operations, authentication and responses in TypeSpec. Test missing credentials, malformed JSON and typed storage outcomes. Derive workspace and installation from the verified credential.
 2. **Integration.** Run the same storage cases through a local API and test credentials. A workspace in the request body cannot give access to another workspace's session or inventory.
 
+| LC-14 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [workspace scenarios](../../apps/api/test/acceptance/collector/workspace.feature) and the [five storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) over a loopback HTTP connection. Test two workspaces with the same native session ID, two installations in one workspace, and a credential that expires between requests. Run `bun run check:collector-api` and `bun run test`. |
+| Observability | Record each batch commit outcome and elapsed milliseconds with its verified workspace and installation. Use a monotonic clock. Keep token values and conversation text out of logs and errors. Test the emitted fields and all three storage outcomes. Set a production service objective after measurements exist. |
+| Architecture | Authenticate each request in `apps/api` before parsing its body or selecting storage. The handler takes a credential verifier and a workspace storage provider. The local process supplies one in-memory store per workspace. The collector and API share the [storage port](../../apps/collector/src/storage/collector-storage.ts). Run the [dependency checks](../../.dependency-cruiser.collector.json) with `bun run check:collector-deps`. |
+| Interface | The [version 1 HTTP contract](collector-api/main.tsp) defines bearer authentication, five JSON operations, and typed responses. Use the [storage models](local-collector/storage.tsp) for requests and stored records. Build OpenAPI and JSON Schema and check real HTTP results with `bun run check:collector-api`. |
+
+The bearer credential identifies one workspace and one installation and has an expiry time. Reads and writes select their workspace from that credential. On a source or inventory request the API supplies the installation. A caller may repeat the same installation ID. A different installation ID or an explicit workspace selector in the request yields HTTP 400. Missing, unknown and expired credentials all receive HTTP 401 with a bearer challenge.
+
+All five operations accept JSON by POST under `/v1/collector`. Session reads return a `session` field that is null when absent. Checkpoint reads and source lists return their storage values directly. Batch and presence writes return `committed` (200), `conflict` (409) or `invalid` (422) in the `result` field. Malformed JSON returns 400. The local service binds to loopback and loads operator-supplied credential hashes. Its workspace data lasts for the life of the process.
+
 #### LC-15 · Sync through the HTTP client
 
 ```gherkin
