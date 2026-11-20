@@ -354,7 +354,9 @@ interface CollectorStorage {
   recordPresence(update: PresenceWrite): CommitResult;
   /** Return the current session version even when this source has no checkpoint. */
   readCheckpoint(source: StreamKey): CheckpointSnapshot;
-  /** A lost reply leaves the outcome unknown. Read the durable checkpoint and session version to recover. */
+  /** Compare the shared session version and this source's accepted offset, including the first write.
+   * Commit records, ownership changes, source state and checkpoints together. A conflict or rollback
+   * leaves the prior committed state visible. After a lost reply, read the durable checkpoint before retrying. */
   commit(batch: Batch): CommitResult;
   readSession(key: SessionKey): SessionView | null;
 }

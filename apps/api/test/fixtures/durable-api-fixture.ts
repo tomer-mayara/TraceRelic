@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HttpCollectorStorage } from "@tracerelic/collector/http-storage";
 import type { Batch, CollectorStorage } from "@tracerelic/collector/storage";
+import type { CommitMetric } from "#src/collector-api";
 import { CollectorApiProcess } from "./collector-api-process.ts";
 import { credentialRecord } from "./collector-credential.ts";
 import { batch, source } from "./collector-wire-payloads.ts";
@@ -13,6 +14,7 @@ import { DisposablePostgres } from "./disposable-postgres.ts";
 export interface WorkspaceClients {
   a: CollectorStorage;
   b: CollectorStorage;
+  nextCommitMetric(): Promise<CommitMetric>;
 }
 
 export function firstBatch(tokens: number, offset: number, id = "planning"): Batch {
@@ -49,12 +51,15 @@ export class DurableApiFixture {
     }
   }
 
+  get databaseUrl(): string { return this.database.url; }
+
   async start(): Promise<WorkspaceClients> {
     const process = new CollectorApiProcess(this.file, this.database.url);
     this.processes.add(process);
     const ready = await process.nextEvent();
     assert.equal(ready.event, "listening");
-    return { a: new HttpCollectorStorage(ready.address, this.tokens.a), b: new HttpCollectorStorage(ready.address, this.tokens.b) };
+    return { a: new HttpCollectorStorage(ready.address, this.tokens.a), b: new HttpCollectorStorage(ready.address, this.tokens.b),
+      nextCommitMetric: () => process.nextEvent() };
   }
 
   private async stop(): Promise<void> {

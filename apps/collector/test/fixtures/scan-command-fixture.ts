@@ -2,13 +2,12 @@ import assert from "node:assert/strict";
 import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
-import type { Message } from "../../src/storage/collector-storage.ts";
+import type { CollectorStorage, Message } from "../../src/storage/collector-storage.ts";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { CodexRolloutFixture } from "./codex-rollout-fixture.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 
 export class ScanCommandFixture {
-  readonly storage = new InMemoryCollectorStorage();
   readonly codexKey = { harness: "codex", sessionId: "codex-plan" } as const;
   readonly claudeKey = { harness: "claude", sessionId: "claude-plan" } as const;
   codexMessages: Pick<Message, "at" | "role" | "text">[] = [];
@@ -17,18 +16,19 @@ export class ScanCommandFixture {
   readonly projectPath: string;
   private readonly claude: ClaudeProjectFixture;
   readonly configFile: string;
-  private command = new CollectorCommand(this.storage);
+  private command: CollectorCommand;
   private rollout!: string;
   private cumulative = 0;
 
-  private constructor(private readonly codex: CodexRolloutFixture) {
+  private constructor(private readonly codex: CodexRolloutFixture, readonly storage: CollectorStorage) {
+    this.command = new CollectorCommand(storage);
     this.claude = new ClaudeProjectFixture(join(codex.home, "claude"));
     this.projectPath = join(codex.home, "work", "search");
     this.configFile = join(codex.home, "collector.json");
   }
 
-  static async create(): Promise<ScanCommandFixture> {
-    return new ScanCommandFixture(await CodexRolloutFixture.create());
+  static async create(storage: CollectorStorage = new InMemoryCollectorStorage()): Promise<ScanCommandFixture> {
+    return new ScanCommandFixture(await CodexRolloutFixture.create(), storage);
   }
 
   async configure(): Promise<void> {

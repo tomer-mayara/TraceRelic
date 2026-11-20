@@ -1,6 +1,7 @@
 import { InMemoryCollectorStorage, type SessionRevision } from "@tracerelic/collector/memory-storage";
 import type { Batch, CollectorStorage, CommitResult, PresenceWrite, SessionKey, SourceScope, StreamKey } from "@tracerelic/collector/storage";
-import type { CollectorTransaction, CollectorWrite, PersistedSession, PostgresCollectorDatabase } from "./collector-database.ts";
+import { SessionVersionConflict, type CollectorTransaction, type CollectorWrite, type PersistedSession,
+  type PostgresCollectorDatabase } from "./collector-database.ts";
 
 /** Retain the evidence used to validate this workspace's next write, including ownership across sessions. */
 class WorkspaceWriter {
@@ -66,6 +67,9 @@ export class PostgresCollectorStorage implements CollectorStorage {
       const outcome = await this.database.write(this.workspaceId, tx => writer.accept(tx, write));
       this.confirmed = writer;
       return outcome;
+    }).catch((error: unknown) => {
+      if (error instanceof SessionVersionConflict) return "conflict" as const;
+      throw error;
     });
     this.pending = result.catch(() => {});
     return result;

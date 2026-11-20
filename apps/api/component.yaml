@@ -5,7 +5,9 @@ behavior:
   - test/acceptance/collector/remote-sync.feature
   - test/acceptance/postgres/restart.feature
   - test/acceptance/postgres/competing-writes.feature
+  - test/acceptance/postgres/write-rollback.feature
   - ../collector/test/acceptance/storage/storage.feature
+  - ../collector/test/acceptance/scan/two-chats.feature
 interface:
   - ../../docs/specs/collector-api/main.tsp
   - ../../docs/specs/local-collector/storage.tsp

@@ -41,7 +41,7 @@ jobs:
       - name: Test collector HTTP API
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run check:collector-api
-      - name: Test PostgreSQL storage and API restart
+      - name: Test PostgreSQL writes, API restarts and collector scans
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run check:collector-postgres
       - name: Test shared logging

@@ -9,6 +9,10 @@ export type CollectorWrite = { kind: "batch"; value: Batch } | { kind: "presence
 
 export interface PersistedSession { version: number; view: SessionView }
 
+export class SessionVersionConflict extends Error {
+  constructor() { super("Collector session version conflict"); }
+}
+
 export interface CollectorTransaction {
   entriesAfter(position: string, limit?: number): Promise<{ position: string; write: CollectorWrite }[]>;
   save(write: CollectorWrite, sessions: readonly PersistedSession[], checkpoint: Checkpoint,
@@ -56,11 +60,16 @@ class WorkspaceTransaction implements CollectorTransaction {
 
   async save(write: CollectorWrite, sessions: readonly PersistedSession[], checkpoint: Checkpoint,
     inventory: AcknowledgedSource | null): Promise<string> {
+    const { source, expectedVersion } = write.value;
+    const sourceSession = sessions.find(({ view: { key } }) => key.harness === source.harness && key.sessionId === source.sessionId);
+    if (!sourceSession) throw new Error("Accepted collector write has no source session");
     const [entry] = await this.sql.rows<{ position: string }>(
       "INSERT INTO tracerelic_collector.writes (workspace_key, entry) VALUES ($1, $2) RETURNING position::text",
       [this.workspace, JSON.stringify(write)]);
-    for (const session of sessions) await this.saveSession(session, entry.position);
-    const source = write.value.source;
+    await this.saveSession(sourceSession, expectedVersion, entry.position);
+    for (const peer of sessions) {
+      if (peer !== sourceSession) await this.saveSession(peer, peer.version - 1);
+    }
     await this.sql.rows(`INSERT INTO tracerelic_collector.sources
       (workspace_key, harness, session_key, installation_key, stream_key, first_position, root_key, checkpoint, inventory)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -71,13 +80,19 @@ class WorkspaceTransaction implements CollectorTransaction {
     return entry.position;
   }
 
-  private async saveSession({ version, view }: PersistedSession, position: string): Promise<void> {
+  private async saveSession({ version, view }: PersistedSession, expectedVersion: number, firstPosition?: string): Promise<void> {
     const key = sessionKey(this.workspace, view.key);
     const { messages, usage, ...summary } = view;
-    await this.sql.rows(`INSERT INTO tracerelic_collector.sessions
-      (workspace_key, harness, session_key, first_position, version, summary) VALUES ($1,$2,$3,$4,$5,$6)
-      ON CONFLICT (workspace_key, harness, session_key) DO UPDATE
-      SET version = EXCLUDED.version, summary = EXCLUDED.summary`, [...key, position, version, JSON.stringify(summary)]);
+    const values = [...key, JSON.stringify(summary)];
+    // A source can create a session. An ownership transfer must find an existing peer at its expected version.
+    const [saved] = expectedVersion === 0 && firstPosition !== undefined
+      ? await this.sql.rows<{ version: number }>(`INSERT INTO tracerelic_collector.sessions
+          (workspace_key, harness, session_key, summary, first_position, version) VALUES ($1,$2,$3,$4,$5,1)
+          ON CONFLICT (workspace_key, harness, session_key) DO NOTHING RETURNING version::float8 AS version`, [...values, firstPosition])
+      : await this.sql.rows<{ version: number }>(`UPDATE tracerelic_collector.sessions SET summary = $4, version = version + 1
+          WHERE workspace_key = $1 AND harness = $2 AND session_key = $3 AND version = $5
+          RETURNING version::float8 AS version`, [...values, expectedVersion]);
+    if (saved?.version !== version) throw new SessionVersionConflict();
     await this.saveRecords(key, "message", messages);
     await this.saveRecords(key, "usage", usage);
   }

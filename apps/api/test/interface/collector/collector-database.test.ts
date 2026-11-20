@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { StorageUnavailableError } from "@tracerelic/collector/storage";
-import { PostgresCollectorDatabase } from "#src/storage/collector-database";
+import { PostgresCollectorDatabase, SessionVersionConflict } from "#src/storage/collector-database";
 import { migrationVersions, projectedWrite } from "../../fixtures/collector-database-write.ts";
 import { DisposablePostgres } from "../../fixtures/disposable-postgres.ts";
 
@@ -57,18 +57,66 @@ test("a failed transaction leaves the journal, session, records and checkpoint a
 
 test("journal readers advance through bounded pages of their workspace in write order", async () => {
   const [database] = databases;
-  const { write, view, inventory } = projectedWrite();
-  const checkpoint = write.value.checkpoint;
-  const save = (workspace: string, version: number) => database.write(workspace,
-    tx => tx.save(write, [{ version, view }], checkpoint, inventory));
-  const first = await save("paged", 1);
-  await save("different", 1);
-  const second = await save("paged", 2);
-  const third = await save("paged", 3);
+  const first = await database.write("paged", projectedWrite(0).save);
+  await database.write("different", projectedWrite(0).save);
+  const second = await database.write("paged", projectedWrite(1).save);
+  const third = await database.write("paged", projectedWrite(2).save);
   const page = (cursor: string) => database.write("paged", tx => tx.entriesAfter(cursor, 2));
   assert.deepEqual((await page("0")).map(row => row.position), [first, second]);
   assert.deepEqual((await page(second)).map(row => row.position), [third]);
   assert.deepEqual(await page(third), []);
+});
+
+test("competing writes to a new session store only the winning journal entry and records", async () => {
+  const workspace = "first insert";
+  const candidates = [projectedWrite(0, "chat", "one"), projectedWrite(0, "chat", "two")];
+  const results = await Promise.allSettled(databases.map((db, i) => db.write(workspace, candidates[i].save)));
+  assert.deepEqual(results.map(result => result.status).sort(), ["fulfilled", "rejected"]);
+  const index = results.findIndex(result => result.status === "fulfilled");
+  const loser = results[1 - index];
+  assert(loser.status === "rejected" && loser.reason instanceof SessionVersionConflict);
+  const winner = candidates[index];
+  const reader = databases[1 - index];
+  assert.deepEqual(await reader.readSession(workspace, winner.view.key), winner.view);
+  assert.deepEqual(await reader.readCheckpoint(workspace, winner.write.value.source), { version: 1, checkpoint: winner.write.value.checkpoint });
+  const journal = await reader.write(workspace, tx => tx.entriesAfter("0"));
+  assert.deepEqual(journal.map(entry => entry.write), [winner.write]);
+});
+
+test("a stale submitter or a missing session cannot advance to the next version", async () => {
+  const [writer, reader] = databases;
+  const workspace = "compare versions";
+  const second = projectedWrite(1, "chat");
+  await assert.rejects(writer.write(workspace, second.save), SessionVersionConflict);
+  assert.equal(await reader.readSession(workspace, second.view.key), null);
+  await writer.write(workspace, projectedWrite(0, "chat").save);
+  const position = await writer.write(workspace, second.save);
+  const stale = projectedWrite(1, "chat", "stale");
+  await assert.rejects(reader.write(workspace, stale.save), SessionVersionConflict);
+  await assert.rejects(reader.write(workspace, tx => tx.save(stale.write, [{ version: 3, view: stale.view }],
+    stale.write.value.checkpoint, stale.inventory)), SessionVersionConflict);
+  assert.deepEqual(await reader.readSession(workspace, second.view.key), second.view);
+  assert.deepEqual(await reader.readCheckpoint(workspace, second.write.value.source), { version: 2, checkpoint: second.write.value.checkpoint });
+  assert.deepEqual(await reader.write(workspace, tx => tx.entriesAfter(position)), []);
+});
+
+test("an absent or stale peer rolls back the source's version, records and journal entry", async () => {
+  const [writer, reader] = databases;
+  const workspace = "peer versions";
+  const source = projectedWrite(0, "source");
+  const peer = projectedWrite(1, "peer");
+  await writer.write(workspace, source.save);
+  await writer.write(workspace, projectedWrite(0, "peer").save);
+  const position = await writer.write(workspace, peer.save);
+  const next = projectedWrite(1, "source", "uncommitted");
+  const absent = projectedWrite(0, "absent");
+  await assert.rejects(reader.write(workspace, tx => next.save(tx, [{ version: 1, view: absent.view }])), SessionVersionConflict);
+  await assert.rejects(reader.write(workspace, tx => next.save(tx, [{ version: 2, view: peer.view }])), SessionVersionConflict);
+  assert.equal(await reader.readSession(workspace, absent.view.key), null);
+  assert.deepEqual(await reader.readSession(workspace, source.view.key), source.view);
+  assert.deepEqual(await reader.readCheckpoint(workspace, source.write.value.source), { version: 1, checkpoint: source.write.value.checkpoint });
+  assert.deepEqual(await reader.readCheckpoint(workspace, peer.write.value.source), { version: 2, checkpoint: peer.write.value.checkpoint });
+  assert.deepEqual(await reader.write(workspace, tx => tx.entriesAfter(position)), []);
 });
 
 test("malformed connection settings and unavailable connections use safe diagnostics", async () => {

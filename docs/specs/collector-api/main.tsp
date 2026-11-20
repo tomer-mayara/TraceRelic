@@ -115,7 +115,8 @@ op readCheckpoint(@body source: StreamKey): JsonReply<200, CheckpointSnapshot> |
 @post @route("/sources")
 op listSources(@body scope: SourceScope): JsonReply<200, AcknowledgedSource[]> | RequestError;
 
-/** Bind the batch source to the credential's installation before committing it. */
+/** Commit the batch for the credential's installation. A stale session version or source offset
+ * returns 409. A successful response acknowledges the records and checkpoint together. */
 @post @route("/batches")
 op commit(@body batch: Batch): WriteReply;
 

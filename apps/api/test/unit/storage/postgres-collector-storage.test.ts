@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { StorageUnavailableError } from "@tracerelic/collector/storage";
+import { SessionVersionConflict } from "#src/storage/collector-database";
 import { PostgresCollectorStorage } from "#src/storage/postgres-collector-storage";
 import { CollectorTransactionFixture, revision } from "../../fixtures/collector-transaction-fixture.ts";
 import { batch, key, presence, scope, session, source, storedSource } from "../../fixtures/collector-wire-payloads.ts";
@@ -67,6 +68,20 @@ for (const failure of ["rollback", "lost-reply"] as const) {
     assert.deepEqual(db.saved[2].sessions[0].view.messages, batch.messages);
   });
 }
+
+test("a database version conflict discards the writer's uncommitted state before a retry", async () => {
+  const db = new CollectorTransactionFixture();
+  const store = new PostgresCollectorStorage(db, "workspace");
+  assert.equal(await store.commit(batch), "committed");
+  const next = revision(1);
+  db.beforeCommit = async () => { throw new SessionVersionConflict(); };
+  assert.equal(await store.commit(next), "conflict");
+  assert.equal(db.saved.length, 1);
+  db.beforeCommit = undefined;
+  assert.equal(await store.commit(next), "committed");
+  assert.deepEqual(db.cursors, ["0", "1", "0"]);
+  assert.equal(db.saved[1].sessions[0].version, 2);
+});
 
 test("an overlapping local write waits for an unconfirmed transaction", async () => {
   const db = new CollectorTransactionFixture();

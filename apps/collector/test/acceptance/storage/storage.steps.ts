@@ -10,7 +10,7 @@ import {
   claudeReport, codexMeasurement, codexParserState, codexSource, codexWindow, initialPlanningBatch, observation, prompt,
 } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
-import { inventoryScope, inventorySource, measuredSource, presence } from "../../fixtures/source-inventory-fixture.ts";
+import { inventoryLocation, inventoryScope, inventorySource, measuredSource, presence } from "../../fixtures/source-inventory-fixture.ts";
 
 const schemaFile = new URL(
   "../../dist/collector-storage/storage.schema.json", import.meta.resolve("@tracerelic/collector/package.json"),
@@ -27,8 +27,8 @@ function checkWireValue(model: string, value: unknown): void {
 class StorageScenario {
   store: CollectorStorage = new InMemoryCollectorStorage();
   batch = initialPlanningBatch();
-  readonly source = this.batch.source;
-  readonly key: SessionKey = { harness: this.source.harness, sessionId: this.source.sessionId };
+  get source() { return this.batch.source; }
+  get key(): SessionKey { return { harness: this.source.harness, sessionId: this.source.sessionId }; }
   secondBatch?: Batch;
   result?: CommitResult;
 
@@ -56,28 +56,15 @@ class StorageScenario {
 
 setWorldConstructor(StorageScenario);
 
-BeforeAll(async function () {
-  const store = new InMemoryCollectorStorage();
-  const batch = measuredSource(500);
+BeforeAll(function () {
   const update = presence(1, "missing", 500);
-  checkWireValue("Batch", batch);
-  checkWireValue("SourceScope", inventoryScope);
-  checkWireValue("PresenceWrite", update);
-  assert.equal(await store.commit(batch), "committed");
-  const [source] = await store.listSources(inventoryScope);
-  checkWireValue("AcknowledgedSource", source);
-  assert.equal(await store.recordPresence(update), "committed");
-  const view = await store.readSession(inventorySource);
-  assert(view?.missingSources);
-  checkWireValue("MissingSource", view.missingSources[0]);
-  checkWireValue("SessionView", view);
   for (const fields of [{ presence: "unknown" }, { expectedVersion: -1 }, { observedEnd: 0.5 }, { location: { path: "file" } }]) {
     assert.equal(contract.validate("PresenceWrite.json", { ...update, ...fields }), false);
   }
 });
 
 BeforeAll(function () {
-  const { batch } = new StorageScenario();
+  const batch = initialPlanningBatch();
   checkWireValue("Batch", batch);
   const prefixDigest = "d".repeat(64);
   checkWireValue("Batch", {
@@ -132,7 +119,7 @@ BeforeAll(function () {
 });
 
 BeforeAll(function () {
-  const { batch } = new StorageScenario();
+  const batch = initialPlanningBatch();
   const origin = { kind: "copy", parentSessionId: "parent", parentMessageUuid: "source-row", transcriptUuid: "copy-row",
     sourceOrder: 1, byteRange: { startOffset: 0, endOffset: 60 } } as const;
   const saved = { ...batch.checkpoint, prefixDigest: "c".repeat(64) };
@@ -204,23 +191,16 @@ BeforeAll(function () {
   }
 });
 
-BeforeAll(async function () {
-  const scenario = new StorageScenario();
-  const report = claudeReport({ status: "final", outputTokens: 91, cacheWrite5mTokens: 2, cacheWrite1hTokens: 3 });
-  const diagnostic = { code: "unsupported-claude-iteration", sourceOrder: 4 } as const;
-  const batch: Batch = { ...scenario.batch, claudeUsageReports: [report], usageDiagnostics: [diagnostic], hasGap: true };
+const finalReport = claudeReport({ status: "final", outputTokens: 91, cacheWrite5mTokens: 2, cacheWrite1hTokens: 3 });
+const unsupportedIteration = { code: "unsupported-claude-iteration", sourceOrder: 4 } as const;
+
+BeforeAll(function () {
+  const batch = initialPlanningBatch();
+  const report = finalReport;
+  const diagnostic = unsupportedIteration;
   checkWireValue("ClaudeUsageReport", report);
   checkWireValue("UsageStatus", report.status);
   checkWireValue("UsageDiagnostic", diagnostic);
-  await scenario.commit(batch);
-  assert.equal(scenario.result, "committed");
-  const view = await scenario.view();
-  assert.equal(view.observedTotalTokens, 131);
-  assert.equal(view.coverage, "partial");
-  assert.equal(view.usage.length, 1);
-  assert.deepEqual(view.usage[0], { ...report, id: view.usage[0].id, kind: "call", revision: 1 });
-  assert.deepEqual(view.usageDiagnostics, [{ ...diagnostic, streamId: batch.source.streamId }]);
-  checkWireValue("SourceUsageDiagnostic", view.usageDiagnostics[0]);
   for (const [fields, path] of [
     [{ claudeUsageReports: [{ ...report, status: "unknown" }] }, "/claudeUsageReports/0/status"],
     [{ claudeUsageReports: [{ ...report, messageId: undefined, requestId: undefined }] }, "/claudeUsageReports/0"],
@@ -346,4 +326,55 @@ Then("the second source has no checkpoint and sees session version {int}", async
   assert.deepEqual(await this.view(), {
     key: this.key, metadata: {}, messages: this.batch.messages, usage: [], coverage: "unknown", observedTotalTokens: null,
   });
+});
+
+Given("a source has reported 70 tokens at byte 420 of 500", async function (this: StorageScenario) {
+  this.batch = measuredSource(500);
+  await this.commit();
+  assert.equal(this.result, "committed");
+  assert.equal((await this.view()).observedTotalTokens, 70);
+  checkWireValue("SourceScope", inventoryScope);
+  const sources = await this.store.listSources(inventoryScope);
+  assert.deepEqual(sources, [{ source: inventorySource, location: inventoryLocation, version: 1,
+    acceptedOffset: 420, observedEnd: 500, presence: "present" }]);
+  checkWireValue("AcknowledgedSource", sources[0]);
+});
+
+When("the collector reports that source missing", async function (this: StorageScenario) {
+  const update = presence(1, "missing", 500);
+  checkWireValue("PresenceWrite", update);
+  assert.equal(await this.store.recordPresence(update), "committed");
+});
+
+Then("the source list and the session report it missing at byte {int}", async function (this: StorageScenario, offset: number) {
+  const sources = await this.store.listSources(inventoryScope);
+  assert.deepEqual(sources, [{ source: inventorySource, location: inventoryLocation, version: 2,
+    acceptedOffset: offset, observedEnd: 500, presence: "missing" }]);
+  checkWireValue("AcknowledgedSource", sources[0]);
+  assert.deepEqual(await this.readCheckpoint(), { version: 2, checkpoint: this.batch.checkpoint });
+  const view = await this.view();
+  assert.deepEqual(view.missingSources, [{ source: inventorySource, acceptedOffset: offset, observedEnd: 500, status: "missing" }]);
+  checkWireValue("MissingSource", view.missingSources[0]);
+  assert.equal(view.observedTotalTokens, 70);
+  assert.equal(view.coverage, "partial");
+});
+
+When("a final Claude report includes 131 tokens and an unsupported iteration", async function (this: StorageScenario) {
+  this.batch = { ...this.batch, source: { ...this.source, installationId: "desktop" },
+    claudeUsageReports: [finalReport], usageDiagnostics: [unsupportedIteration], hasGap: true };
+  await this.commit();
+  assert.equal(this.result, "committed");
+});
+
+Then("the session reports {int} tokens with partial coverage and the diagnostic for that source", async function (
+  this: StorageScenario, total: number,
+) {
+  assert.deepEqual(await this.readCheckpoint(), { version: 1, checkpoint: this.batch.checkpoint });
+  const view = await this.view();
+  assert.equal(view.observedTotalTokens, total);
+  assert.equal(view.coverage, "partial");
+  assert.equal(view.usage.length, 1);
+  assert.deepEqual(view.usage[0], { ...finalReport, id: view.usage[0].id, kind: "call", revision: 1 });
+  assert.deepEqual(view.usageDiagnostics, [{ ...unsupportedIteration, streamId: this.source.streamId, installationId: "desktop" }]);
+  checkWireValue("SourceUsageDiagnostic", view.usageDiagnostics[0]);
 });

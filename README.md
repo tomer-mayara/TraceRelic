@@ -138,7 +138,9 @@ bun run test
 
 `bun run test` type-checks, compiles, and runs each component's `*.test.ts` suites under `test/unit/`, `test/integration/`, `test/interface/`, and `test/acceptance/`. The collector contract checks run the Cucumber features with their adjacent step definitions. [Test layout](docs/engineering-guidelines/coding-principles.md#test-locations)
 
-Run `bun run check:collector-postgres` to exercise API restarts, competing first writes, and the storage contract against PostgreSQL. The database tests in both commands start disposable PostgreSQL 18.7 containers on loopback. To reuse a test server, set `TRACERELIC_TEST_DATABASE_URL` to a database where the test role can create databases. Each fixture creates a uniquely named database and removes it when it finishes.
+Run `bun run check:collector-postgres` to check competing writes, rollback and retry, and API restarts against PostgreSQL. The same command runs the storage contract and scans two example chats through the HTTP client and API. [Two-chat scenario](apps/collector/test/acceptance/scan/two-chats.feature)
+
+Database tests start disposable PostgreSQL 18.7 containers on loopback. To reuse a test server, set `TRACERELIC_TEST_DATABASE_URL` to a database where the test role can create databases. Each fixture creates a uniquely named database and removes it when it finishes.
 
 Run `bun run check:shared-logging` to build the log record schema, check package dependencies, and run the logging scenarios on Bun and Node. [Shared logging plan](docs/specs/shared-logging.md)
 

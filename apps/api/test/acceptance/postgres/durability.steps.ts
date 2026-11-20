@@ -44,25 +44,58 @@ Then("workspace A reads {int} tokens at byte {int} and workspace B reads {int} t
       assertStored(this.clients.b, firstBatch(tokensB, endB), tokensB)]);
   });
 
-Given("two workers read version zero for the same source", async function (this: DurabilityScenario) {
+Given(/^two workers read version zero for (the same source|different sources in the same session)$/, async function (
+  this: DurabilityScenario, sources: string,
+) {
   this.competing = await this.api.start();
   this.writes = [firstBatch(120, 420, "first"), firstBatch(9, 70, "second")];
-  const { source } = this.writes[0];
-  for (const storage of [this.clients.a, this.competing.a]) {
-    assert.deepEqual(await storage.readCheckpoint(source), { version: 0, checkpoint: null });
-  }
+  if (sources === "different sources in the same session") this.writes[1].source.streamId = "second.jsonl";
+  const checkpoints = await Promise.all([this.clients.a.readCheckpoint(this.writes[0].source),
+    this.competing.a.readCheckpoint(this.writes[1].source)]);
+  for (const checkpoint of checkpoints) assert.deepEqual(checkpoint, { version: 0, checkpoint: null });
 });
 
 When("they submit different first batches through independent database connections", async function (this: DurabilityScenario) {
   this.results = await Promise.all([this.clients.a.commit(this.writes[0]), this.competing.a.commit(this.writes[1])]);
 });
 
-Then("one worker sees committed and the other sees conflict", function (this: DurabilityScenario) {
+Then("one worker sees committed and the other sees conflict", async function (this: DurabilityScenario) {
   assert.deepEqual([...this.results].sort(), ["committed", "conflict"]);
+  const metrics = await Promise.all([this.clients.nextCommitMetric(), this.competing.nextCommitMetric()]);
+  assert.deepEqual(metrics.map(event => event.outcome), this.results);
 });
 
 Then("a new reader sees only the winner's records and checkpoint", async function (this: DurabilityScenario) {
   const fresh = await this.api.start();
   const winner = this.writes[this.results.indexOf("committed")];
   await assertStored(fresh.a, winner, winner.usage[0].inputTokens);
+});
+
+Then("the losing source sees the winner's version and has no checkpoint", async function (this: DurabilityScenario) {
+  const fresh = await this.api.start();
+  const winner = this.writes[this.results.indexOf("committed")];
+  const loser = this.writes[this.results.indexOf("conflict")];
+  await assertStored(fresh.a, winner, winner.usage[0].inputTokens);
+  assert.deepEqual(await fresh.a.readCheckpoint(loser.source), { version: 1, checkpoint: null });
+});
+
+When("the losing worker reloads and retries its call once", async function (this: DurabilityScenario) {
+  const index = this.results.indexOf("conflict");
+  const worker = [this.clients.a, this.competing.a][index];
+  const batch = this.writes[index];
+  const { version, checkpoint } = await worker.readCheckpoint(batch.source);
+  assert.equal(await worker.commit({ ...batch, expectedVersion: version, expectedOffset: checkpoint?.offset ?? 0 }), "committed");
+});
+
+Then("a new reader sees both calls once and both source checkpoints at version 2", async function (this: DurabilityScenario) {
+  const fresh = await this.api.start();
+  const session = await fresh.a.readSession(this.writes[0].source);
+  assert.ok(session);
+  const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
+  assert.deepEqual(session.messages.sort(byId), this.writes.flatMap(batch => batch.messages).sort(byId));
+  assert.deepEqual(session.usage.sort(byId), this.writes.flatMap(batch => batch.usage).sort(byId));
+  assert.equal(session.observedTotalTokens, 129);
+  for (const batch of this.writes) {
+    assert.deepEqual(await fresh.a.readCheckpoint(batch.source), { version: 2, checkpoint: batch.checkpoint });
+  }
 });

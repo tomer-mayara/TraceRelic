@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { After, Before, Given, Then, When, setWorldConstructor } from "@cucumber/cucumber";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
 import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ScanSelection } from "@tracerelic/collector/history";
-import type { SessionKey, SessionView } from "../../../src/storage/collector-storage.ts";
+import type { CollectorStorage, SessionKey, SessionView } from "../../../src/storage/collector-storage.ts";
 import { ClaudeUsageScanFixture } from "../../fixtures/claude-usage-scan-fixture.ts";
 import { CodexUsageScanFixture } from "../../fixtures/codex-usage-scan-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
@@ -19,6 +19,8 @@ import "./scheduled-scan.steps.ts";
 
 class ScanScenario {
   fixture!: ScanCommandFixture;
+  scanStorage?: CollectorStorage;
+  sessionReader?: CollectorStorage;
   claude!: ClaudeUsageScanFixture;
   inputs!: { input_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
   textRow!: ReturnType<ClaudeUsageScanFixture["report"]>;
@@ -66,7 +68,7 @@ class ScanScenario {
   }
 
   async session(key: SessionKey): Promise<SessionView> {
-    const session = await this.fixture.storage.readSession(key);
+    const session = await (this.sessionReader ?? this.fixture.storage).readSession(key);
     assert(session, `${key.harness}/${key.sessionId} is absent after the scan`);
     assert(contract.validate("SessionView.json", session), contract.errorsText());
     assert.deepEqual(session.key, key);
@@ -80,7 +82,7 @@ After({ tags: "@lc04" }, async function (this: ScanScenario) { await this.counts
 Before({ tags: "@lc05" }, async function (this: ScanScenario) { this.claude = await ClaudeUsageScanFixture.create(); });
 After({ tags: "@lc05" }, async function (this: ScanScenario) { await this.claude?.close(); });
 Before({ tags: "@lc01 or @lc02 or @lc03 or @two_chats" }, async function (this: ScanScenario) {
-  this.fixture = await ScanCommandFixture.create();
+  this.fixture = await ScanCommandFixture.create(this.scanStorage);
   await this.fixture.configure();
 });
 After(async function (this: ScanScenario) { await this.fixture?.close(); });
