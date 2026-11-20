@@ -1,24 +1,36 @@
 import type { CodexRolloutEntry, DamagedLine, RecordBatch } from "../history/index.ts";
+import type { CodexForkCheckpoint } from "../storage/collector-storage.ts";
 import { invalidState, stateRecord } from "./chat-parser-state.ts";
 import { CodexChat } from "./codex-chat.ts";
+import { CodexForkUsage } from "./codex-fork-usage.ts";
 import { CodexUsage } from "./codex-usage.ts";
 import type { ChatParser, DecodedChat } from "./decoded-chat.ts";
+import type { ParserFormat } from "./transcript-cursor.ts";
 
 export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
   static readonly version = 2;
   static readonly gapVersion = 4;
 
-  private constructor(private readonly chat: CodexChat, private readonly counts: CodexUsage) {}
+  private constructor(private readonly chat: CodexChat, private readonly counts: CodexUsage, private readonly parentId?: string) {}
 
-  static resume(state?: unknown): CodexSessionParser {
-    if (state === undefined) return new CodexSessionParser(CodexChat.resume(), CodexUsage.resume());
-    const saved = stateRecord(state, ["chat", "usage"]);
-    if (saved.chat === undefined || saved.usage === undefined) invalidState();
-    return new CodexSessionParser(CodexChat.resume(saved.chat), CodexUsage.resume(saved.usage));
+  static forFork(plan: CodexForkCheckpoint, forkedAt?: string): ParserFormat<CodexRolloutEntry> {
+    const fork = () => new CodexForkUsage(plan, forkedAt);
+    return {
+      version: this.version, gapVersion: this.gapVersion, codexFork: plan,
+      resume: state => this.resume(state, fork()),
+      upgrade: oldChat => this.upgrade(oldChat, fork()),
+    };
   }
 
-  static upgrade(oldChat?: object) {
-    const parser = new CodexSessionParser(CodexChat.resume(oldChat), CodexUsage.resume());
+  static resume(state?: unknown, fork?: CodexForkUsage): CodexSessionParser {
+    if (state === undefined) return new CodexSessionParser(CodexChat.resume(), CodexUsage.resume(undefined, fork), fork?.plan.parentSessionId);
+    const saved = stateRecord(state, ["chat", "usage"]);
+    if (saved.chat === undefined || saved.usage === undefined) invalidState();
+    return new CodexSessionParser(CodexChat.resume(saved.chat), CodexUsage.resume(saved.usage, fork), fork?.plan.parentSessionId);
+  }
+
+  static upgrade(oldChat?: object, fork?: CodexForkUsage) {
+    const parser = new CodexSessionParser(CodexChat.resume(oldChat), CodexUsage.resume(undefined, fork), fork?.plan.parentSessionId);
     return {
       parser,
       read(entries: readonly CodexRolloutEntry[], damagedLines?: readonly DamagedLine[]) {
@@ -38,7 +50,9 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
   }
 
   decodeBatch(entries: readonly CodexRolloutEntry[], damagedLines?: readonly DamagedLine[]): DecodedChat {
-    return { ...this.chat.decodeBatch(entries), ...this.counts.decodeBatch(entries, damagedLines) };
+    const chat = this.chat.decodeBatch(entries);
+    if (this.parentId) chat.metadata.parentSessionId = this.parentId;
+    return { ...chat, ...this.counts.decodeBatch(entries, damagedLines) };
   }
 
   snapshot(): object {

@@ -23,6 +23,12 @@ export function initialPlanningBatch(): Batch {
   });
 }
 
+/** Reproduce the wire fields sent by the earlier text-only scanner. */
+export function textOnlyBatch(batch: Batch, checkpoint: Batch["checkpoint"]): Batch {
+  const { source, expectedVersion, expectedOffset, messages, metadata, branchObservation } = batch;
+  return { source, expectedVersion, expectedOffset, checkpoint, messages, metadata, branchObservation, usage: [] };
+}
+
 export function request(fields: Partial<Usage> = {}): Usage {
   return {
     id: "req-1/msg-1", revision: 1, at: planning.at,

@@ -63,3 +63,19 @@ test("the winner's replay boundary must match the captured suffix", async () => 
   await assert.rejects(f.recovery.commit(append, f.saved, 10), ScanPendingError);
   assert.deepEqual(f.verified, [[20, 80]]);
 });
+
+test("a lost reply to a same-byte fork correction can be confirmed from its saved evidence", async () => {
+  const f = new ScanRecoveryFixture();
+  const previous = { ...f.saved, codexFork: { parentSessionId: "parent", firstUncertain: { offset: 0, lineNumber: 1 } } };
+  const next = { ...f.saved, codexFork: { parentSessionId: "parent", inheritedThrough: { offset: 10, lineNumber: 1 } } };
+  f.timeoutAfter(2, next);
+  const correction = batch(1, 10, { checkpoint: next, reconcileCodexForkFrom: previous });
+  assert.deepEqual(await f.recovery.commit(correction, previous, 0), f.winner);
+});
+
+test("omitting empty optional checkpoint fields on the wire cannot confirm an unrelated write", async () => {
+  const f = new ScanRecoveryFixture();
+  const previous = { ...f.saved, replayThrough: undefined, codexFork: undefined };
+  f.timeoutAfter(2, f.saved);
+  await assert.rejects(f.recovery.commit(batch(1, 10), previous, 10), ScanPendingError);
+});

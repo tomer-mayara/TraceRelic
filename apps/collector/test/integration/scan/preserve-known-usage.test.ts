@@ -4,6 +4,7 @@ import { test } from "node:test";
 import type { Batch } from "../../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture } from "../../fixtures/codex-rollout-fixture.ts";
 import { CodexUsageFixture as Codex } from "../../fixtures/codex-usage-fixture.ts";
+import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
 import { RewriteScanFixture } from "../../fixtures/rewrite-scan-fixture.ts";
 import { appendTranscriptBytes } from "../../fixtures/transcript-gap-fixture.ts";
 
@@ -118,8 +119,7 @@ test("backfilling a text-only checkpoint at the damaged line preserves a pending
   const legacy = t.mock.method(store, "commit", (batch: Batch) => {
     const { lineNumber, decoder } = JSON.parse(batch.checkpoint.parserState);
     const parserState = JSON.stringify({ version: 1, lineNumber, decoder: decoder.chat });
-    return commit({ ...batch, usage: [], usageWindows: [], usageAnchors: [], hasGap: false, usageDiagnostics: [],
-      checkpoint: { ...batch.checkpoint, parserState } });
+    return commit(textOnlyBatch(batch, { ...batch.checkpoint, parserState }));
   });
   assert.equal((await fixture.scan()).observedTotalTokens, null);
   legacy.mock.restore();

@@ -63,6 +63,7 @@ interface TranscriptSourceInfo {
   readonly sourceFile: string;
   readonly fileSize: number;
   readonly previousCopy: boolean;
+  readonly codexForkHeader?: { readonly parentSessionId: string; readonly forkedAt?: string };
 }
 
 export interface TranscriptSource<Entry> extends TranscriptSourceInfo {

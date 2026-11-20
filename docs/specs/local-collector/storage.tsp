@@ -44,6 +44,32 @@ model Checkpoint {
   /** While a fallback decision depends on bytes beyond this checkpoint, verify those bytes
    * again on restart. Drop this bound once the checkpoint reaches it. */
   replayThrough?: VerifiedPrefix;
+  /** Decision for the captured Codex fork. Older checkpoints lack this field. */
+  codexFork?: CodexForkCheckpoint;
+}
+
+model ForkPosition {
+  /** Next byte after a verified copy, or the first byte of an uncertain row. */
+  offset: Count;
+  /** Physical line establishing the boundary or uncertainty. */
+  lineNumber: SourceOrder;
+}
+
+@extension("dependentRequired", #{ baseline: #["inheritedThrough"] })
+@extension("not", #{ required: #["inheritedThrough", "firstUncertain"] })
+model CodexForkCheckpoint {
+  parentSessionId: Identifier;
+  /** Last verified inherited row. A verified empty prefix ends at the child's header. */
+  inheritedThrough?: ForkBoundary;
+  /** Cumulative counters at that boundary, when available. */
+  baseline?: TokenCounts;
+  /** Earliest usage whose origin is unresolved. */
+  firstUncertain?: ForkPosition;
+}
+
+model ForkBoundary extends ForkPosition {
+  /** Verify the copied bytes if the scan stopped before this boundary. */
+  prefixDigest?: PrefixDigest;
 }
 
 model CheckpointSnapshot {
@@ -120,10 +146,10 @@ model ByteRange {
 union UsageDiagnosticCode {
   "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown",
   "unsupported-claude-iteration", "ambiguous-transcript-replay", "malformed-transcript-line",
-  "unsupported-codex-usage", "codex-counter-reset"
+  "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork"
 }
 
-@extension("if", #{ properties: #{ code: #{ `enum`: #["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset"] } } })
+@extension("if", #{ properties: #{ code: #{ `enum`: #["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork"] } } })
 @extension("then", #{ required: #["byteRange"] })
 model UsageDiagnostic {
   code: UsageDiagnosticCode;
@@ -192,6 +218,11 @@ model Batch {
   branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
+  /** Bind a reliable native call to its workspace owner. Copied reports can name their verified parent. */
+  codexCallClaims?: CodexCallClaim[];
+  /** Replace this stream's usage for the verified checkpoint using the new fork evidence.
+   * Compare the exact saved checkpoint. Keep messages, other streams and earlier transcript generations. */
+  reconcileCodexForkFrom?: Checkpoint;
   /** Compare each whole Claude report with the evidence already stored in this session. */
   claudeUsageReports?: ClaudeUsageReport[];
   usageDiagnostics?: UsageDiagnostic[];
@@ -207,6 +238,14 @@ model Batch {
    * as well as the session version. Keep accepted records and require a new prefix digest. */
   resetFrom?: Checkpoint;
   hasGap?: boolean;
+}
+
+model CodexCallClaim {
+  /** SHA-256 of the provider ID and its kind, independent of the reporting session. */
+  providerId: PrefixDigest;
+  /** Session-scoped ID of the call in the reporting stream. */
+  usageId: Identifier;
+  ownerSessionId: Identifier;
 }
 
 model SessionView {

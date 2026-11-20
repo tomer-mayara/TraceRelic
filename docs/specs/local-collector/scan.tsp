@@ -64,6 +64,14 @@ model TranscriptSourceInfo {
   /** File size observed at discovery, including any unfinished suffix. */
   fileSize: Count;
   previousCopy: boolean;
+  /** Only the child's own native Codex header supplies this link. */
+  codexForkHeader?: CodexForkHeader;
+}
+
+model CodexForkHeader {
+  parentSessionId: Identifier;
+  /** Creation time of the child thread, when recorded. */
+  forkedAt?: utcDateTime;
 }
 
 model ScannedEntry<Entry extends {}> {

@@ -1,10 +1,13 @@
 import type { DamagedLine } from "../history/index.ts";
-import type { TokenCounts, Usage, UsageAnchor, UsageDiagnostic, UsageWindow } from "../storage/collector-storage.ts";
+import type { TokenCounts, Usage, UsageDiagnostic, UsageWindow } from "../storage/collector-storage.ts";
 import { invalidState, jsonDigest, stateRecord, stateString } from "./chat-parser-state.ts";
+import type { CodexForkUsage } from "./codex-fork-usage.ts";
 import { type Breakdown, breakdowns, difference, mergeRepeated, object, partition, restoredCounts, sameTotals, zero } from "./codex-usage-counts.ts";
-import { advanceContext, type Call, type CallContext, initialHistory, readReport, recorded, type Report, type UsageEntry } from "./codex-usage-report.ts";
+import { type Call, type CallContext, type Fields, initialHistory, readReport, recorded,
+  type Report, reportContext, type UsageEntry } from "./codex-usage-report.ts";
+import type { DecodedUsage } from "./decoded-chat.ts";
 
-type Result = { usage: Usage[]; usageWindows: UsageWindow[]; usageAnchors?: UsageAnchor[]; usageDiagnostics?: UsageDiagnostic[]; hasGap: boolean };
+type Result = DecodedUsage;
 type SeenCall = Pick<TokenCounts, "inputTokens" | "outputTokens"> & { historyId: string };
 
 function validHistory(value: unknown): value is string {
@@ -34,7 +37,7 @@ function restoreCall(value: unknown): Call {
   return call;
 }
 
-function diagnose(result: Result, code: "unsupported-codex-usage" | "codex-counter-reset", sourceOrder: number): void {
+function diagnose(result: Result, code: UsageDiagnostic["code"], sourceOrder: number): void {
   result.hasGap = true;
   (result.usageDiagnostics ??= []).push({ code, sourceOrder });
 }
@@ -51,11 +54,15 @@ export class CodexUsage {
   private readonly seen = new Map<string, SeenCall>();
   private readonly pending = new Map<string, Call>();
 
-  static resume(state?: unknown): CodexUsage {
-    const usage = new CodexUsage();
+  private constructor(private readonly fork?: CodexForkUsage) {}
+
+  static resume(state?: unknown, fork?: CodexForkUsage): CodexUsage {
+    const usage = new CodexUsage(fork);
     if (state === undefined) return usage;
     const saved = stateRecord(state, ["historyId", "baseline", "turnId", "model", "requestId", "seen", "pending",
-      "disputed", "observations", "awaitingBaseline"]);
+      "disputed", "observations", "awaitingBaseline", "fork"]);
+    if (fork) fork.restore(saved.fork);
+    else if (saved.fork !== undefined) invalidState();
     if (saved.awaitingBaseline !== undefined && saved.awaitingBaseline !== true) invalidState();
     usage.needsBaseline = saved.awaitingBaseline === true;
     if (saved.historyId !== undefined && !validHistory(saved.historyId)) invalidState();
@@ -111,6 +118,7 @@ export class CodexUsage {
       disputed: [...this.disputed], observations: [...this.observations],
       seen: Object.fromEntries(Array.from(this.seen, ([id, call]) => [id, { ...call }])),
       pending: Array.from(this.pending.values(), call => ({ ...call })),
+      ...(this.fork && { fork: this.fork.snapshot() }),
     };
   }
 
@@ -123,7 +131,12 @@ export class CodexUsage {
     let index = 0;
     for (const line of damagedLines) {
       while (index < entries.length && entries[index].lineNumber < line.lineNumber) this.read(entries[index++], result);
+      if (this.fork?.plan.firstUncertain?.lineNumber === line.lineNumber) {
+        (result.usageDiagnostics ??= []).push({ code: "unresolved-codex-fork", sourceOrder: line.lineNumber,
+          byteRange: { startOffset: line.startOffset, endOffset: line.endOffset } });
+      }
       this.interrupt();
+      this.fork?.interrupt();
       this.context = {};
       result.hasGap = true;
     }
@@ -137,23 +150,51 @@ export class CodexUsage {
     this.pending.clear();
   }
 
+  private startHistory(entry: UsageEntry, payload: Fields | undefined): void {
+    this.historyId = this.fork?.historyId(entry.sessionId) ?? initialHistory(entry, payload);
+    const seed = this.fork?.plan.baseline;
+    if (seed) {
+      this.baseline = { ...seed };
+      this.lastObservation = jsonDigest([this.historyId, "fork-boundary", seed.inputTokens, seed.outputTokens]);
+      this.observations.add(this.lastObservation);
+    } else if (this.fork?.plan.inheritedThrough) this.needsBaseline = true;
+  }
+
   private read(entry: UsageEntry, result: Result): void {
     const payload = object(entry.record.payload);
-    if (!this.historyId) this.historyId = initialHistory(entry, payload);
+    if (!this.historyId) this.startHistory(entry, payload);
+    if (this.fork?.plan.firstUncertain?.lineNumber === entry.lineNumber) diagnose(result, "unresolved-codex-fork", entry.lineNumber);
     if (!payload) return;
-    const event = entry.record.type === "event_msg";
-    if (entry.record.type === "turn_context" || (event && payload.type === "task_started")) {
-      this.context = advanceContext(entry, payload, this.context);
-      return;
-    }
-    if (!event) return;
-    if (payload.type === "task_complete" || payload.type === "turn_aborted") {
-      this.context = {};
-      return;
-    }
-    if (payload.type !== "token_count") return;
+    const inherited = this.fork?.inherited(entry.lineNumber);
+    if (!inherited) this.fork?.turn.observe(entry, payload);
+    this.context = reportContext(entry, payload, this.context, Boolean(this.fork));
+    if (entry.record.type !== "event_msg" || payload.type !== "token_count") return;
     const report = readReport(entry, payload, this.context, this.historyId);
+    if (inherited) {
+      // Keep native identity if the inherited request is repeated in the child's suffix.
+      if (report?.independent && report.last) this.remember(report.last);
+      if (entry.lineNumber === this.fork?.plan.inheritedThrough?.lineNumber) this.context = {};
+      return;
+    }
     if (report === undefined) return;
+    this.acceptReport(entry, report, result);
+  }
+
+  private acceptReport(entry: UsageEntry, report: Report | null, result: Result): void {
+    const id = report?.last?.id;
+    const known = id !== undefined && this.seen.has(id);
+    if (this.fork && !this.fork.plan.inheritedThrough) {
+      if (!report || report.invalidTotal) diagnose(result, "unsupported-codex-usage", entry.lineNumber);
+      if (report?.last && report.independent && this.fork.turn.owns(report.turnId)) this.standalone(report.last, result);
+    } else {
+      this.applyReport(entry, report, known, result);
+    }
+    if (!known && id && report?.providerId && this.seen.has(id) && (this.fork || this.historyId.startsWith("verified:"))) {
+      (result.codexCallClaims ??= []).push({ providerId: report.providerId, usageId: id, ownerSessionId: entry.sessionId });
+    }
+  }
+
+  private applyReport(entry: UsageEntry, report: Report | null, known: boolean, result: Result): void {
     if (!report || report.invalidTotal) {
       diagnose(result, "unsupported-codex-usage", entry.lineNumber);
       this.interrupt();
@@ -165,6 +206,11 @@ export class CodexUsage {
       const observation = jsonDigest([entry.record, report.at, report.independent && report.last?.id]);
       if (this.observations.has(observation)) return;
       this.observations.add(observation);
+      if (this.fork?.startsFresh(report, this.pending, known)) {
+        this.baseline = undefined;
+        this.lastObservation = undefined;
+        this.needsBaseline = false;
+      }
       this.reconcile(report.end, report, observation, result);
       this.lastObservation = observation;
       return;

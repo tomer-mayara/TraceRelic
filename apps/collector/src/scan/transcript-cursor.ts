@@ -1,5 +1,5 @@
-import type { DamagedLine, ReadPosition, RecordBatch, TranscriptSource, VerifiedPrefix } from "../history/index.ts";
-import type { Checkpoint, Message } from "../storage/collector-storage.ts";
+import { TranscriptChangedError, type DamagedLine, type ReadPosition, type RecordBatch, type TranscriptSource, type VerifiedPrefix } from "../history/index.ts";
+import type { Checkpoint, CodexForkCheckpoint, Message } from "../storage/collector-storage.ts";
 import { stateRecord } from "./chat-parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
 import {
@@ -9,6 +9,7 @@ import {
 export interface ParserFormat<Entry> {
   version: number;
   gapVersion?: number;
+  codexFork?: CodexForkCheckpoint;
   resume(state?: unknown): ChatParser<Entry>;
   upgrade?(oldDecoder?: object): {
     parser: ChatParser<Entry>;
@@ -30,6 +31,7 @@ class BackfilledUsage implements DecodedUsage {
   readonly usageAnchors: NonNullable<DecodedUsage["usageAnchors"]> = [];
   readonly usageWindows: DecodedUsage["usageWindows"] = [];
   readonly claudeUsageReports: NonNullable<DecodedUsage["claudeUsageReports"]> = [];
+  codexCallClaims?: DecodedUsage["codexCallClaims"];
   readonly usageDiagnostics: NonNullable<DecodedUsage["usageDiagnostics"]> = [];
   hasGap = false;
 
@@ -38,6 +40,10 @@ class BackfilledUsage implements DecodedUsage {
     for (const anchor of batch.usageAnchors ?? []) this.usageAnchors.push(anchor);
     for (const window of batch.usageWindows ?? []) this.usageWindows.push(window);
     for (const report of batch.claudeUsageReports ?? []) this.claudeUsageReports.push(report);
+    if (batch.codexCallClaims?.length) {
+      const claims = this.codexCallClaims ??= [];
+      for (const claim of batch.codexCallClaims) claims.push(claim);
+    }
     for (const diagnostic of batch.usageDiagnostics ?? []) this.usageDiagnostics.push(diagnostic);
     this.hasGap ||= batch.hasGap === true;
   }
@@ -66,6 +72,28 @@ export class TranscriptCursor<Entry extends SourceLine> {
     private readonly parser: ChatParser<Entry>, private readonly replay?: ReplayPlan,
     private readonly backfill?: { usage: BackfilledUsage; checkpoint: Checkpoint },
   ) {}
+
+  /** Reclassify the already accepted bytes in a single storage write. Keep the accepted chat and replay state. */
+  static async reconcileFork<Entry extends SourceLine>(source: TranscriptSource<Entry>, checkpoint: Checkpoint, format: ParserFormat<Entry>) {
+    const saved = readState(checkpoint, format, source.sourceFile);
+    const parser = format.resume();
+    const usage = new BackfilledUsage();
+    let position = { offset: 0, lineNumber: 0 };
+    let digest: string | undefined;
+    for await (const batch of source.readBatches(position, undefined, checkpoint.offset)) {
+      const chat = parser.decodeBatch(batch.entries, batch.damagedLines);
+      locateDiagnostics(batch, chat);
+      usage.add(chat);
+      position = batch.next;
+      digest = batch.prefixDigest;
+    }
+    if (position.offset !== checkpoint.offset || digest !== checkpoint.prefixDigest
+      || (saved && saved.lineNumber !== position.lineNumber)) throw new TranscriptChangedError(source.sourceFile);
+    const acceptedChat = saved?.version === 1 ? saved.decoder : saved?.decoder.chat;
+    const restored = acceptedChat ? format.resume({ ...parser.snapshot(), chat: acceptedChat }) : parser;
+    const cursor = new TranscriptCursor(position, format, restored, saved?.replay);
+    return { usage, checkpoint: cursor.checkpointAt(position, digest) };
+  }
 
   static async restore<Entry extends SourceLine>(
     source: TranscriptSource<Entry>, checkpoint: Checkpoint | null, format: ParserFormat<Entry>,
@@ -161,7 +189,8 @@ export class TranscriptCursor<Entry extends SourceLine> {
     let version = replayOccurrences ? replayVersion : this.format.version;
     if (this.parser.awaitingBaseline && this.format.gapVersion !== undefined) version = this.format.gapVersion;
     const parserState = JSON.stringify({ version, lineNumber, decoder: this.parser.snapshot(), replayOccurrences });
-    return { offset, parserState, prefixDigest, ...(replayThrough && { replayThrough }) };
+    return { offset, parserState, prefixDigest, ...(replayThrough && { replayThrough }),
+      ...(this.format.codexFork && { codexFork: this.format.codexFork }) };
   }
 }
 

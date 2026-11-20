@@ -68,17 +68,25 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
       }
     });
     if (!header || !this.selected(selection, header.sessionId, header.cwd)) return;
-    return this.transcriptSource({
+    const source = this.transcriptSource({
       harness: "codex", sessionId: header.sessionId, file, previousCopy: false,
       blankPrefixHeaderEnd: header.blankPrefixHeaderEnd,
       matches: (_record, lineNumber) => lineNumber >= header.lineNumber,
     });
+    return header.codexForkHeader ? { ...source, codexForkHeader: header.codexForkHeader } : source;
   }
 
-  private header(record: LocalHistoryEntry["record"]): { sessionId: string; cwd: unknown } | undefined {
+  private header(record: LocalHistoryEntry["record"]) {
     if (record.type !== "session_meta" || !this.isRecord(record.payload)) return;
-    const { id, session_id, cwd } = record.payload;
+    const { id, session_id, cwd, source, timestamp } = record.payload;
     const sessionId = [id, session_id].find((value): value is string => typeof value === "string" && value.length > 0);
-    if (sessionId) return { sessionId, cwd };
+    if (!sessionId) return;
+    const agent = this.isRecord(source) && this.isRecord(source.subagent) ? source.subagent.thread_spawn : undefined;
+    const parentSessionId = [record.payload.forked_from_id, this.isRecord(agent) && agent.parent_thread_id,
+      record.payload.forked_from_session_id, record.payload.forked_from, record.payload.parent_session_id, record.payload.parent_thread_id]
+      .find((value): value is string => typeof value === "string" && value.length > 0);
+    const at = timestamp ?? record.timestamp;
+    const codexForkHeader = parentSessionId ? { parentSessionId, ...(this.hasRecordedTimestamp(at) && { forkedAt: at }) } : undefined;
+    return { sessionId, cwd, codexForkHeader };
   }
 }

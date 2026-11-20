@@ -41,6 +41,28 @@ test("selects Codex rollouts by their first native header within the configured 
   assert.deepEqual(await sessionIds({ sessionIds: ["outside", "copied"], projectPaths: ["/other"] }), []);
 });
 
+test("discovers fork identity and creation time only from the child's own native header", async t => {
+  const root = await Rollout.create();
+  t.after(() => root.close());
+  const forkedAt = "2026-02-01T02:00:00.128Z";
+  const child = Rollout.header("child");
+  const copied = { ...Rollout.header("parent"), payload: { id: "parent", forked_from_id: "grandparent" } };
+  const reader = new LocalLLMHistoryCodex(new GlobalConfig(root.home));
+  for (const link of [
+    { forked_from_id: "parent" },
+    { forked_from: "parent" },
+    { source: { subagent: { thread_spawn: { parent_thread_id: "parent" } } } },
+  ]) {
+    await root.write([{ ...child, payload: { ...child.payload, session_id: "root", timestamp: forkedAt, ...link } }, copied]);
+    const [source] = await Array.fromAsync(reader.discoverSources());
+    assert.equal(source.sessionId, "child");
+    assert.deepEqual(source.codexForkHeader, { parentSessionId: "parent", forkedAt });
+  }
+  await root.write([child, copied]);
+  const [ordinary] = await Array.fromAsync(reader.discoverSources());
+  assert.equal(ordinary.codexForkHeader, undefined);
+});
+
 test("reads Codex batches from the specified byte and physical line, with a large UTF-8 record alone", async t => {
   const fixture = await Rollout.create();
   t.after(() => fixture.close());

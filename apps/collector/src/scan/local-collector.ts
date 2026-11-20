@@ -1,11 +1,12 @@
 import { basename, relative } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { GlobalConfig } from "../config/global-config.ts";
 import {
   LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ScanSelection, type TranscriptSource,
 } from "../history/index.ts";
-import type { Batch, CheckpointSnapshot, CollectorStorage, Harness, SessionView, StreamKey } from "../storage/collector-storage.ts";
+import type { Batch, Checkpoint, CheckpointSnapshot, CollectorStorage, Harness, SessionView, StreamKey } from "../storage/collector-storage.ts";
 import { ClaudeSessionParser } from "./claude-session-parser.ts";
-import { CodexSessionParser } from "./codex-session-parser.ts";
+import { CodexForkSources } from "./codex-fork-sources.ts";
 import type { DecodedChat } from "./decoded-chat.ts";
 import { ScanRecovery, checkpointPrefixes, readStorage, verifiedCheckpoint, type ScanRestart } from "./scan-recovery.ts";
 import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
@@ -18,6 +19,8 @@ interface TranscriptResult {
   hasStoredSession: boolean;
   rejection?: RejectedBatch;
 }
+
+type SelectParser<Entry> = (source: TranscriptSource<Entry>, checkpoint: Checkpoint | null) => ParserFormat<Entry> | Promise<ParserFormat<Entry>>;
 
 function preparePreviousCopy(chat: DecodedChat, known: SessionView | null, offset: number): boolean {
   if (!offset && !known && !chat.messages.length && !Object.keys(chat.metadata).length
@@ -55,9 +58,11 @@ export class LocalCollector {
   async scanOnce(selection: ScanSelection = {}): Promise<SessionView[]> {
     const codex = new LocalLLMHistoryCodex(this.config);
     const rejections: RejectedBatch[] = [];
-    const codexViews = await this.scanProvider("codex", codex.discoverSources(selection), () => CodexSessionParser, rejections);
+    const sources = new CodexForkSources(codex.discoverSources(selection));
+    const codexViews = await this.scanProvider("codex", sources.sources(), (source, checkpoint) => sources.format(source, checkpoint), rejections);
     const claude = new LocalLLMHistoryClaude(this.config);
-    const claudeViews = await this.scanProvider("claude", claude.discoverSources(selection), ClaudeSessionParser.forSource, rejections);
+    const claudeViews = await this.scanProvider("claude", claude.discoverSources(selection),
+      source => ClaudeSessionParser.forSource(source.previousCopy), rejections);
     const sessions = [...codexViews, ...claudeViews];
     if (rejections.length) throw new ScanRejectedError(sessions, rejections);
     return sessions;
@@ -65,7 +70,7 @@ export class LocalCollector {
 
   private async scanProvider<Entry extends SourceLine>(
     harness: Harness, transcripts: AsyncIterable<TranscriptSource<Entry>>,
-    format: (previousCopy: boolean) => ParserFormat<Entry>, rejections: RejectedBatch[],
+    selectParser: SelectParser<Entry>, rejections: RejectedBatch[],
   ): Promise<SessionView[]> {
     const sessions = new Map<string, { source: StreamKey; required: boolean }>();
     const rejectedStreams = new Set<string>();
@@ -83,7 +88,7 @@ export class LocalCollector {
       for (const [i, { source, transcript }] of sources.entries()) {
         // After a rejection, other sessions in this file can still have data from earlier scans.
         const result: TranscriptResult = stopped ? { hasStoredSession: snapshots[i].version > 0 }
-          : await this.importTranscript(source, transcript, format(transcript.previousCopy), snapshots[i], digests);
+          : await this.importTranscript(source, transcript, selectParser, snapshots[i], digests);
         if (result.rejection) {
           stopped = true;
           rejectedStreams.add(JSON.stringify(source));
@@ -117,12 +122,26 @@ export class LocalCollector {
   }
 
   private async importTranscript<Entry extends SourceLine>(
-    source: StreamKey, transcript: TranscriptSource<Entry>, format: ParserFormat<Entry>,
+    source: StreamKey, transcript: TranscriptSource<Entry>, selectParser: SelectParser<Entry>,
     start: CheckpointSnapshot, digests: ReadonlyMap<number, string>,
   ): Promise<TranscriptResult> {
     const recovery = new ScanRecovery(this.storage, transcript);
     let position: ScanRestart = start.checkpoint && !verifiedCheckpoint(start.checkpoint, digests) ? { ...start, reset: true } : start;
     for (;;) {
+      const accepted = position.reset ? null : position.checkpoint;
+      const format = await selectParser(transcript, accepted);
+      if (accepted && format.codexFork && !isDeepStrictEqual(format.codexFork, accepted.codexFork)) {
+        const corrected = await TranscriptCursor.reconcileFork(transcript, accepted, format);
+        const batch: Batch = {
+          ...corrected.usage, source, expectedVersion: position.version, expectedOffset: accepted.offset,
+          checkpoint: corrected.checkpoint, reconcileCodexForkFrom: accepted,
+          metadata: { parentSessionId: format.codexFork.parentSessionId }, messages: [],
+        };
+        const outcome = await recovery.commit(batch, accepted, 0);
+        if (outcome && "status" in outcome) return { hasStoredSession: true, rejection: outcome };
+        position = outcome ?? { version: position.version + 1, checkpoint: corrected.checkpoint };
+        continue;
+      }
       const result = await this.importFrom(source, transcript, format, position, recovery);
       if ("hasStoredSession" in result) return result;
       position = result;

@@ -66,7 +66,7 @@ BeforeAll(function () {
     usageDiagnostics: [{ code: "ambiguous-transcript-replay", sourceOrder: 1 }],
   });
   checkWireValue("CheckpointSnapshot", { version: 1, checkpoint: { ...batch.checkpoint, prefixDigest } });
-  for (const code of ["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset"]) {
+  for (const code of ["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork"]) {
     const diagnostic = { code, sourceOrder: 3 };
     const byteRange = { startOffset: 50, endOffset: 60 };
     checkWireValue("UsageDiagnostic", { ...diagnostic, byteRange });
@@ -129,6 +129,16 @@ BeforeAll(function () {
     assert.equal(contract.validate("UsageWindow.json", { ...window, boundaryObservations: invalid }), false);
   }
   checkWireValue("UsageAnchor", anchor);
+  const copied = { offset: 80, lineNumber: 3, prefixDigest: boundaries.end };
+  const fork = { parentSessionId: "parent", inheritedThrough: copied, baseline: window.end };
+  const claim = { providerId: boundaries.start, usageId: call.id, ownerSessionId: codexSource.sessionId };
+  checkWireValue("Batch", { ...batch, checkpoint: { ...batch.checkpoint, prefixDigest: boundaries.start, codexFork: fork },
+    codexCallClaims: [claim], reconcileCodexForkFrom: batch.checkpoint, upgradeFromParserState: undefined });
+  for (const invalid of [{ ...fork, inheritedThrough: { ...copied, lineNumber: 0 } }, { ...fork, inheritedThrough: undefined },
+    { ...fork, firstUncertain: { offset: 0, lineNumber: 1 } }]) {
+    assert.equal(contract.validate("CodexForkCheckpoint.json", invalid), false);
+  }
+  assert.equal(contract.validate("CodexCallClaim.json", { ...claim, providerId: "invalid" }), false);
   checkWireValue("Batch", batch);
   checkWireValue("SessionView", {
     key: { harness: codexSource.harness, sessionId: codexSource.sessionId }, metadata: {}, messages: [],

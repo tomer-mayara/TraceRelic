@@ -15,6 +15,8 @@ export interface Report {
   end?: TokenCounts;
   last?: Call;
   independent: boolean;
+  providerId?: string;
+  turnId?: string;
   invalidTotal: boolean;
 }
 
@@ -53,13 +55,36 @@ export function initialHistory(entry: UsageEntry, payload: Fields | undefined): 
   return `unverified:${jsonDigest([entry.sessionId, entry.sourceFile, entry.lineNumber, entry.timestamp])}`;
 }
 
-export function advanceContext(entry: UsageEntry, payload: Fields, previous: CallContext): CallContext {
+function advanceContext(entry: UsageEntry, payload: Fields, previous: CallContext): CallContext {
   const turnId = identifier(payload.turn_id, entry.record.turn_id);
   const sameTurn = turnId !== undefined && turnId === previous.turnId;
   return {
     turnId, model: identifier(payload.model) ?? (sameTurn ? previous.model : undefined),
     requestId: identifier(payload.request_id, entry.record.request_id) ?? (sameTurn ? previous.requestId : undefined),
   };
+}
+
+/** Keep attribution scoped to the native turn. A thread-labelled item can establish a fork's active turn. */
+export function reportContext(entry: UsageEntry, payload: Fields, previous: CallContext, includeItems = false): CallContext {
+  if (entry.record.type === "turn_context") return advanceContext(entry, payload, previous);
+  if (entry.record.type !== "event_msg") return previous;
+  switch (payload.type) {
+    case "task_started":
+    case "turn_started":
+      return advanceContext(entry, payload, previous);
+    case "item_started":
+    case "item_completed":
+      if (includeItems && typeof payload.thread_id === "string" && typeof payload.turn_id === "string") {
+        return advanceContext(entry, payload, previous);
+      }
+      return previous;
+    case "task_complete":
+    case "turn_complete":
+    case "turn_aborted":
+      return {};
+    default:
+      return previous;
+  }
 }
 
 function attribution(entry: UsageEntry, payload: Fields, info: Fields, context: CallContext) {
@@ -104,5 +129,6 @@ export function readReport(entry: UsageEntry, payload: Fields, context: CallCont
     id: (native ? "call:native:" : "call:") + jsonDigest(identity),
   } : undefined;
   const invalidTotal = supplied(info.total_token_usage) && !end;
-  return { at: entry.timestamp, sourceOrder: entry.lineNumber, end, last, independent: Boolean(native), invalidTotal };
+  return { at: entry.timestamp, sourceOrder: entry.lineNumber, end, last, independent: Boolean(native),
+    providerId: native && jsonDigest(native), turnId: fields.turnId, invalidTotal };
 }

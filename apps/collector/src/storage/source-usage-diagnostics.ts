@@ -10,6 +10,7 @@ const rules: Record<UsageDiagnosticCode, { provider?: Harness; reportsGap?: true
   "malformed-transcript-line": { reportsGap: true },
   "unsupported-codex-usage": { provider: "codex", reportsGap: true },
   "codex-counter-reset": { provider: "codex", reportsGap: true },
+  "unresolved-codex-fork": { provider: "codex", reportsGap: true },
 };
 
 function validRange(range: unknown, acceptedEnd: number): range is ByteRange {

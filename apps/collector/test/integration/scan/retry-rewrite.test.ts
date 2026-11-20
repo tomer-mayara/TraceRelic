@@ -3,6 +3,7 @@ import { stat } from "node:fs/promises";
 import { test } from "node:test";
 import { ScanPendingError } from "@tracerelic/collector/scan";
 import type { Batch } from "../../../src/storage/collector-storage.ts";
+import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
 import { RewriteScanFixture } from "../../fixtures/rewrite-scan-fixture.ts";
 
 test("a timed-out reset reports the attempted replacement bytes and preserves the old checkpoint", async t => {
@@ -58,7 +59,7 @@ test("a timed-out backfill with an append reports the entire attempted prefix", 
   await fixture.write([fixture.call("first", 120)]);
   const commit = fixture.storage.commit.bind(fixture.storage);
   const legacy = t.mock.method(fixture.storage, "commit", (batch: Batch) =>
-    commit({ ...batch, usage: [], usageAnchors: [], usageWindows: [], checkpoint: { ...batch.checkpoint, parserState: "{}" } }));
+    commit(textOnlyBatch(batch, { ...batch.checkpoint, parserState: "{}" })));
   await fixture.scan();
   legacy.mock.restore();
   await fixture.append(fixture.call("second", 30));

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { TranscriptChangedError, type TranscriptSource, type VerifiedPrefix } from "../history/index.ts";
 import {
   type Batch, type ByteRange, type Checkpoint, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
@@ -18,7 +19,10 @@ export async function readStorage<T>(source: StreamKey, read: () => Promise<T>, 
 export function checkpointPrefixes(checkpoint: Checkpoint | null): VerifiedPrefix[] {
   if (!checkpoint?.prefixDigest) return [];
   const accepted = { offset: checkpoint.offset, prefixDigest: checkpoint.prefixDigest };
-  return checkpoint.replayThrough ? [accepted, checkpoint.replayThrough] : [accepted];
+  const prefixes = checkpoint.replayThrough ? [accepted, checkpoint.replayThrough] : [accepted];
+  const fork = checkpoint.codexFork?.inheritedThrough;
+  if (fork?.prefixDigest && fork.offset > accepted.offset) prefixes.push({ offset: fork.offset, prefixDigest: fork.prefixDigest });
+  return prefixes;
 }
 
 export function verifiedCheckpoint(checkpoint: Checkpoint, digests: ReadonlyMap<number, string>): boolean {
@@ -27,7 +31,8 @@ export function verifiedCheckpoint(checkpoint: Checkpoint, digests: ReadonlyMap<
 
 function sameCheckpoint(left: Checkpoint | null, right: Checkpoint | null): boolean {
   return left?.offset === right?.offset && left?.prefixDigest === right?.prefixDigest && left?.parserState === right?.parserState
-    && left?.replayThrough?.offset === right?.replayThrough?.offset && left?.replayThrough?.prefixDigest === right?.replayThrough?.prefixDigest;
+    && left?.replayThrough?.offset === right?.replayThrough?.offset && left?.replayThrough?.prefixDigest === right?.replayThrough?.prefixDigest
+    && isDeepStrictEqual(left?.codexFork, right?.codexFork);
 }
 
 export interface ScanRestart extends CheckpointSnapshot {

@@ -13,6 +13,7 @@ behavior:
   - test/acceptance/scan/preserve-known-usage.feature
   - test/acceptance/scan/retry-lost-connection.feature
   - test/acceptance/scan/isolate-rejected-batch.feature
+  - test/acceptance/scan/codex-fork.feature
   - test/acceptance/scan/codex-token-counts.feature
   - test/acceptance/scan/claude-usage.feature
   - test/acceptance/scan/two-chats.feature

@@ -30,6 +30,25 @@ export interface Checkpoint {
   parserState: string;
   prefixDigest?: PrefixDigest;
   replayThrough?: VerifiedPrefix;
+  codexFork?: CodexForkCheckpoint;
+}
+
+export interface ForkPosition {
+  offset: Count;
+  lineNumber: Count;
+}
+
+export interface CodexForkCheckpoint {
+  parentSessionId: Identifier;
+  inheritedThrough?: ForkPosition & { prefixDigest?: PrefixDigest };
+  baseline?: TokenCounts;
+  firstUncertain?: ForkPosition;
+}
+
+export interface CodexCallClaim {
+  providerId: PrefixDigest;
+  usageId: Identifier;
+  ownerSessionId: Identifier;
 }
 
 export interface CheckpointSnapshot {
@@ -94,7 +113,7 @@ export interface ByteRange {
 
 export type UsageDiagnosticCode = "invalid-claude-usage" | "unidentified-claude-call"
   | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration" | "ambiguous-transcript-replay"
-  | "malformed-transcript-line" | "unsupported-codex-usage" | "codex-counter-reset";
+  | "malformed-transcript-line" | "unsupported-codex-usage" | "codex-counter-reset" | "unresolved-codex-fork";
 
 export interface UsageDiagnostic {
   code: UsageDiagnosticCode;
@@ -143,6 +162,8 @@ export interface Batch {
   branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
+  codexCallClaims?: CodexCallClaim[];
+  reconcileCodexForkFrom?: Checkpoint;
   claudeUsageReports?: ClaudeUsageReport[];
   usageDiagnostics?: UsageDiagnostic[];
   usageAnchors?: UsageAnchor[];

@@ -526,6 +526,17 @@ Feature: Separate parent and child usage
 1. **Unit.** Compare the fork prefix. Test both an inherited counter and a verified fresh child counter. A missing or cyclic parent link cannot establish ownership.
 2. **Integration.** Read the child first, then the parent. Repeat with the parent initially unavailable. Keep child text and independently identified calls. Revisit the uncertain range when the parent becomes available.
 
+| LC-10 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [Codex fork scenario](../../apps/collector/test/acceptance/scan/codex-fork.feature) through `scan --once`. Match the child's copied reports against the selected parent at the fork. Preserve child text and count the child's own work with inherited or verified fresh counters. Test both discovery orders, a missing or cyclic parent, a late parent and repeated scans. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | Expose the native parent in session metadata. For an unresolved fork, report the earliest uncertain usage line and byte range and save the parent ID with the checkpoint. Keep independently attributable calls and the existing coverage rules. Check the session, diagnostic and checkpoint against the generated schemas. |
+| Architecture | The Codex reader identifies the first native session header. The scanner compares selected, captured transcripts and decides which usage belongs to the child. Workspace storage applies ownership and checkpoint changes together. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) records the source's fork header. The [storage contract](local-collector/storage.tsp) adds optional fork evidence, native call ownership and a version-checked correction at the accepted byte. Test earlier checkpoints, late evidence, repeated claims and atomic failures. Run `bun run check:collector-storage` and `bun run check:collector-scan`. |
+
+Use the child's own header to identify the thread and its fork time. Compare the ordered usage reports at the fork, even when the copy has new outer timestamps. Use the last matched parent counters as the inherited baseline. A child can establish a fresh counter with a zero reading or a verified first call that accounts for its entire counter. A lower total alone cannot establish a fresh counter.
+
+If the parent is missing, unselected, cyclic, or its evidence disagrees, keep the child text and withhold disputed usage. A native call in a turn tied independently to the child can still count. Compare new parent evidence with the saved decision on a later scan, including when the child has no new bytes. A verified prefix remains available when a later selection omits the parent. If a selected parent contradicts that prefix, withdraw the disputed child usage. If the first uncertain row was beyond the last accepted byte, locate it again in the current child file. [Codex session and turn fields](https://github.com/openai/codex/blob/ea8ccc1d20ff65398e02490ac34f8c1012848625/codex-rs/protocol/src/protocol.rs) · [Fork prefix comparison](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/token_usage/codex.rs#L549-L609)
+
 #### LC-11 · Count Claude fork and subagent calls once
 
 ```gherkin

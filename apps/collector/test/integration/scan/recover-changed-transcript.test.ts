@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { LocalLLMHistoryCodex, type ReadPosition, type ScanSelection } from "@tracerelic/collector/history";
 import type { Batch } from "../../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
+import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
 import { RewriteScanFixture } from "../../fixtures/rewrite-scan-fixture.ts";
 
 test("moving a rollout to the archive verifies the old prefix and resumes at its saved byte", async t => {
@@ -92,9 +93,9 @@ test("a shortened file rebuilds a digestless text-only checkpoint and preserves 
   const commit = fixture.storage.commit.bind(fixture.storage);
   const older = t.mock.method(fixture.storage, "commit", (batch: Batch) => {
     const { lineNumber, decoder } = JSON.parse(batch.checkpoint.parserState);
-    return commit({ ...batch, usage: [], usageWindows: [], usageAnchors: [], checkpoint: {
+    return commit(textOnlyBatch(batch, {
       offset: batch.checkpoint.offset, parserState: JSON.stringify({ version: 1, lineNumber, decoder: decoder.chat }),
-    } });
+    }));
   });
   const original = await fixture.scan();
   older.mock.restore();

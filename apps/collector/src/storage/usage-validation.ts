@@ -1,6 +1,14 @@
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import type { ClaudeUsageReport, TokenCounts, Usage, UsageStatus } from "./collector-storage.ts";
 
+export function definedFields<T extends object>(fields: T): T {
+  const copy = { ...fields };
+  for (const key in copy) {
+    if (copy[key] === undefined) delete copy[key];
+  }
+  return copy;
+}
+
 export function isCount(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }

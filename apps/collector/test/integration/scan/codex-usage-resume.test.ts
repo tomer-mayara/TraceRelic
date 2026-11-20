@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Batch, StreamKey } from "../../../src/storage/collector-storage.ts";
+import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 
 test("repeated cumulative reports resume from 200 and count the next 30 tokens once", async t => {
@@ -37,7 +38,7 @@ for (const append of [false, true]) {
       source = batch.source;
       const state = JSON.parse(batch.checkpoint.parserState);
       const parserState = JSON.stringify({ version: 1, lineNumber: state.lineNumber, decoder: state.decoder.chat ?? state.decoder });
-      return commit({ ...batch, usage: [], usageWindows: [], checkpoint: { ...batch.checkpoint, parserState } });
+      return commit(textOnlyBatch(batch, { ...batch.checkpoint, parserState }));
     });
     await fixture.scan();
     old.mock.restore();
