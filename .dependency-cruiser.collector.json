@@ -1,6 +1,54 @@
 {
   "forbidden": [
     {
+      "name": "api-connects-to-postgres-through-the-collector-database",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/(?!storage/collector-database\\.ts$)" },
+      "to": { "path": "(^|/)(pg|pg-pool)(/|$)", "dependencyTypesNot": ["type-only"] }
+    },
+    {
+      "name": "http-handlers-do-not-open-databases",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/collector-api\\.ts$" },
+      "to": { "path": "^apps/api/src/storage/", "reachable": true }
+    },
+    {
+      "name": "http-client-uses-the-wire-contract-and-storage-port",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/storage/http-collector-storage\\.ts$" },
+      "to": { "path": "^apps/(?!collector/src/storage/(collector-storage|collector-wire-contract)\\.ts$)", "reachable": true }
+    },
+    {
+      "name": "collector-api-depends-on-storage",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/" },
+      "to": { "path": "^apps/collector/src/(?!storage/)" }
+    },
+    {
+      "name": "http-handlers-use-the-storage-port",
+      "severity": "error",
+      "from": { "path": "^apps/api/src/collector-api\\.ts$" },
+      "to": { "path": "^apps/collector/src/storage/(?!(collector-storage|collector-wire-contract)\\.ts$)", "reachable": true }
+    },
+    {
+      "name": "schedule-runs-the-scan-through-its-handler",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/scan/scheduled-scanner\\.ts$" },
+      "to": { "path": "^apps/collector/src/(history/|storage/(?!collector-storage\\.ts$)|scan/local-collector\\.ts$)" }
+    },
+    {
+      "name": "scanner-reads-files-through-history",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/scan/" },
+      "to": { "path": "^(node:)?fs(/promises)?$" }
+    },
+    {
+      "name": "scanner-uses-only-the-storage-port",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/scan/" },
+      "to": { "path": "^apps/collector/src/storage/(?!collector-storage\\.ts$)", "reachable": true }
+    },
+    {
       "name": "collector-uses-storage-port",
       "severity": "error",
       "from": { "path": "^apps/collector/src/" },

@@ -1,0 +1,240 @@
+import assert from "node:assert/strict";
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import { test } from "node:test";
+import { ScanRejectedError } from "@tracerelic/collector/scan";
+import { captureCollectorCli } from "../../fixtures/capture-collector-cli.ts";
+import { ClaudeProjectFixture } from "../../fixtures/claude-project-fixture.ts";
+import { CodexRolloutFixture } from "../../fixtures/codex-rollout-fixture.ts";
+import { MissingSourceFixture, RejectSecondBatch } from "../../fixtures/missing-source-fixture.ts";
+
+test("the CLI reports a disappearance once, preserves the accepted call, and restores presence at the same byte", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const { file, source, storage } = f.transcript;
+  const accepted = await f.acknowledge(70, 420, 420);
+  const bytes = await readFile(file);
+  await rm(file);
+  const result = await captureCollectorCli(t, f.args, storage);
+  const report = f.missing(420, 420);
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.stderr.map(line => JSON.parse(line)), [report]);
+  const missing = await storage.readSession(source);
+  assert.deepEqual(result.stdout.map(line => JSON.parse(line)), [[missing]]);
+  assert.equal(missing?.observedTotalTokens, 70);
+  assert.equal(missing.coverage, "reported");
+  assert.deepEqual(missing.missingSources, [report]);
+  assert.equal(missing.usageDiagnostics, undefined);
+  const absent = await storage.readCheckpoint(source);
+  assert.deepEqual(absent, { version: accepted.version + 1, checkpoint: accepted.checkpoint });
+  const repeat = await captureCollectorCli(t, f.args, storage);
+  assert.deepEqual(repeat, { code: 0, stderr: [], stdout: result.stdout });
+  assert.deepEqual(await storage.readCheckpoint(source), absent);
+
+  await writeFile(file, bytes);
+  const [present] = await f.scan();
+  assert.deepEqual(present.missingSources ?? [], []);
+  assert.deepEqual(present.usage, missing.usage);
+  assert.equal(present.coverage, "reported");
+  const restored = await storage.readCheckpoint(source);
+  assert.deepEqual(restored, { version: absent.version + 1, checkpoint: accepted.checkpoint });
+  assert.deepEqual(await f.scan(), [present]);
+  assert.deepEqual(await storage.readCheckpoint(source), restored);
+  await rm(file);
+  await f.scan();
+  assert.deepEqual(f.reports, [report]);
+});
+
+test("a missing-suffix gap survives a return at the old accepted byte and clears after the full suffix is collected", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const { file } = f.transcript;
+  await f.acknowledge(70, 420, 500);
+  const bytes = await readFile(file);
+  await rm(file);
+  assert.equal((await f.scan())[0]?.coverage, "partial");
+  await writeFile(file, bytes.subarray(0, 420));
+  const [short] = await f.scan();
+  assert.deepEqual(short.missingSources ?? [], []);
+  assert.equal(short.coverage, "partial");
+  assert.equal(short.observedTotalTokens, 70);
+  await appendFile(file, bytes.subarray(420));
+  const [recovered] = await f.scan();
+  assert.deepEqual(recovered.missingSources ?? [], []);
+  assert.equal(recovered.coverage, "reported");
+  assert.equal(recovered.observedTotalTokens, 70);
+  assert.deepEqual(f.reports, [f.missing(420, 500)]);
+});
+
+test("an archived rollout and an unavailable archive directory each leave the original source present", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const { file, root, source, storage } = f.transcript;
+  const accepted = await f.acknowledge(70, 420, 420);
+  const archive = join(root.home, "archived_sessions");
+  await mkdir(archive);
+  const moved = join(archive, basename(file));
+  await rename(file, moved);
+  const [present] = await f.scan();
+  assert.equal(present?.observedTotalTokens, 70);
+  assert.deepEqual(present.missingSources ?? [], []);
+  assert.deepEqual(await storage.readCheckpoint(source), accepted);
+  await rm(moved);
+  await rm(archive, { recursive: true });
+  await writeFile(archive, "not a directory");
+  await assert.rejects(f.scan(), { code: "ENOTDIR" });
+  assert.deepEqual(await storage.readCheckpoint(source), accepted);
+  assert.deepEqual(f.reports, []);
+  await rm(archive);
+  await mkdir(archive);
+  assert.deepEqual((await f.scan())[0]?.missingSources, [f.missing(420, 420)]);
+});
+
+test("a fresh scan scopes inventory by installation, configured root, session and the header's project", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const { file, root, source, storage, header } = f.transcript;
+  const project = "/work/selected/nested";
+  await root.write([{ ...header, payload: { ...header.payload, cwd: project } }, f.transcript.call("known", 70)]);
+  await f.scan();
+  const accepted = await storage.readCheckpoint(source);
+  const end = accepted.checkpoint?.offset;
+  assert(end);
+  await rm(file);
+  const other = join(root.home, "other");
+  await mkdir(other);
+  const config = join(root.home, "alternate.json");
+  const args = ["scan", "--once", "--config", config];
+  for (const [codexPath, installationId] of [[root.home, "laptop"], [other, "desktop"]]) {
+    await writeFile(config, JSON.stringify({ codexPath, installationId }));
+    assert.deepEqual(await f.scan(args), []);
+  }
+  assert.deepEqual(await f.scan([...f.args, "--session", "unrelated", "--project", "/work/selected-old"]), []);
+  assert.deepEqual(await storage.readCheckpoint(source), accepted);
+  assert.deepEqual(f.reports, []);
+  const [view] = await f.scan([...f.args, "--session", "unrelated", "--project", "/work/selected"]);
+  assert.equal(view?.observedTotalTokens, 70);
+  assert.deepEqual(view.missingSources, [f.missing(end, end)]);
+  assert.deepEqual(f.reports, view.missingSources);
+});
+
+test("another installation's copy cannot report or restore a missing suffix in the original source", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const laptop = await CodexRolloutFixture.create();
+  t.after(() => laptop.close());
+  const { file, source, storage } = f.transcript;
+  await f.acknowledge(70, 420, 500);
+  const original = await readFile(file);
+  const copy = await laptop.write([]);
+  await writeFile(copy, original.subarray(0, 420));
+  const config = join(laptop.home, "collector.json");
+  await writeFile(config, JSON.stringify({ codexPath: laptop.home, installationId: "laptop" }));
+  const args = ["scan", "--once", "--config", config];
+  await rm(file);
+  const [fromLaptop] = await f.scan(args);
+  assert.equal(fromLaptop.observedTotalTokens, 70);
+  assert.deepEqual(f.reports, []);
+  const [missing] = await f.scan();
+  assert.equal(missing.coverage, "partial");
+  assert.deepEqual(f.reports, [f.missing(420, 500)]);
+  await rm(copy);
+  await f.scan(args);
+  assert.equal(f.reports.length, 2);
+  assert.deepEqual(f.reports[1], { ...f.missing(420, 420), source: { ...source, installationId: "laptop" } });
+  await writeFile(copy, original.subarray(0, 420));
+  await f.scan(args);
+  const remaining = await storage.readSession(source);
+  assert.deepEqual(remaining?.missingSources, [f.missing(420, 500)]);
+  assert.equal(remaining.coverage, "partial");
+  assert.equal(remaining.observedTotalTokens, 70);
+  assert.equal(f.reports.length, 2);
+});
+
+test("Claude scopes a missing transcript to its exact transcript project and checks for a superseded copy", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const { storage } = f.transcript;
+  const { claude, args } = await f.useClaude();
+  const reply = { ...ClaudeProjectFixture.assistant("chat", "2026-02-01T12:00:00Z", "Known text"), uuid: "native-uuid" };
+  const file = await claude.write("project", "chat", [reply]);
+  await appendFile(file, '{"unfinished":"private text');
+  const bytes = await readFile(file);
+  const project = join(claude.home, "projects", "project");
+  const source = { harness: "claude", sessionId: "chat", installationId: "desktop", streamId: "projects/project/chat.jsonl" } as const;
+  const selected = [...args, "--project", project];
+  const [original] = await f.scan(selected);
+  const accepted = await storage.readCheckpoint(source);
+  const end = accepted.checkpoint?.offset;
+  assert(end);
+  assert(end < bytes.length);
+  const earlier = file + ".superseded-2026-02-01";
+  await rename(file, earlier);
+  const [active] = await f.scan(selected);
+  assert.equal(active.observedTotalTokens, original.observedTotalTokens);
+  assert.deepEqual(active.missingSources ?? [], []);
+  assert.deepEqual(f.reports, []);
+  await rm(earlier);
+  assert.deepEqual(await f.scan([...args, "--project", project + "-other"]), []);
+  assert.deepEqual(f.reports, []);
+  const [missing] = await f.scan(selected);
+  assert.equal(missing.coverage, "reported");
+  assert.equal(missing.observedTotalTokens, original.observedTotalTokens);
+  const report = missing.missingSources?.find(item => item.source.streamId === source.streamId);
+  assert.deepEqual(report, { status: "missing", source, acceptedOffset: end, observedEnd: end });
+  assert.deepEqual(new Set(f.reports), new Set(missing.missingSources));
+  const count = f.reports.length;
+  await writeFile(file, bytes);
+  const [restored] = await f.scan(selected);
+  assert(!restored.missingSources?.some(item => item.source.streamId === source.streamId));
+  assert.equal(restored.observedTotalTokens, original.observedTotalTokens);
+  assert.equal(restored.coverage, "reported");
+  assert.deepEqual((await storage.readCheckpoint(source)).checkpoint, accepted.checkpoint);
+  assert.equal(f.reports.length, count);
+});
+
+test("missing Claude copies keep both their own working directory and the selection inherited from the current transcript", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const { storage } = f.transcript;
+  const { claude, args } = await f.useClaude();
+  const now = "2026-02-01T12:00:00Z";
+  const current = await claude.write("project", "s", [{
+    ...ClaudeProjectFixture.user("s", now, "Current prompt"), cwd: "/work/a", uuid: "current-row",
+  }]);
+  const earlier = await claude.write("project", "s.orphaned-123-copy", [{
+    ...ClaudeProjectFixture.user("s", now, "Earlier prompt"), cwd: "/work/b", uuid: "earlier-row",
+  }]);
+  const [before] = await f.scan(args);
+  assert.deepEqual(before.messages.map(row => row.text).sort(), ["Current prompt", "Earlier prompt"]);
+  const scope = { harness: "claude", root: claude.home, installationId: "desktop" } as const;
+  const forEarlier = await storage.listSources({ ...scope, projectPaths: ["/work/b"] });
+  assert.deepEqual(forEarlier.map(row => basename(row.source.streamId)), [basename(earlier)]);
+  await Promise.all([rm(current), rm(earlier)]);
+  const [missing] = await f.scan([...args, "--project", "/work/a"]);
+  assert.deepEqual(f.reports.map(report => basename(report.source.streamId)).sort(), [basename(current), basename(earlier)].sort());
+  assert.deepEqual(new Set(missing.missingSources), new Set(f.reports));
+  assert.deepEqual(missing.messages, before.messages);
+  assert.deepEqual(await f.scan([...args, "--project", "/work/a"]), [missing]);
+  assert.equal(f.reports.length, 2);
+});
+
+test("the first accepted batch remembers the last complete newline even if the next batch is rejected", async t => {
+  const f = await MissingSourceFixture.create();
+  t.after(() => f.close());
+  const { file, source } = f.transcript;
+  const storage = new RejectSecondBatch();
+  const accepted = 256 * 1024;
+  await f.transcript.write([f.transcript.call("known", 70)], accepted);
+  await f.transcript.append(f.transcript.call("pending", 25));
+  const end = (await stat(file)).size;
+  await appendFile(file, Buffer.from([0x7b, 0x22, 0xf0, 0x9f]));
+  await assert.rejects(f.scan(f.args, storage), ScanRejectedError);
+  assert.equal((await storage.readCheckpoint(source)).checkpoint?.offset, accepted);
+  await rm(file);
+  const [view] = await f.scan(f.args, storage);
+  assert.deepEqual(f.reports, [f.missing(accepted, end)]);
+  assert.deepEqual(view?.missingSources, f.reports);
+  assert.equal(view.observedTotalTokens, 70);
+  assert.equal(view.coverage, "partial");
+});

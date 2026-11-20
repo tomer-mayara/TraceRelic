@@ -5,7 +5,7 @@ const [runtime, ...args] = process.argv.slice(2);
 const preload = runtime === "bun"
   ? ["--preload", "./test/fixtures/terminal-output.ts"]
   : ["--import", "./dist/test/fixtures/terminal-output.js"];
-const drained = Promise.withResolvers<number>();
+const drained = Promise.withResolvers<void>();
 const child = spawn([runtime, ...preload, ...args], {
   serialization: "json",
   ipc(message: unknown) {
@@ -15,9 +15,10 @@ const child = spawn([runtime, ...preload, ...args], {
     process[channel].write(text);
   },
   terminal: {
-    exit(_terminal, status) { drained.resolve(status); },
+    // Log output arrives over IPC. This callback marks the end of the PTY stream.
+    exit() { drained.resolve(); },
   },
 });
-const [childStatus, terminalStatus] = await Promise.all([child.exited, drained.promise]);
+const [childStatus] = await Promise.all([child.exited, drained.promise]);
 child.terminal?.close();
-process.exitCode = childStatus || terminalStatus;
+process.exitCode = childStatus;

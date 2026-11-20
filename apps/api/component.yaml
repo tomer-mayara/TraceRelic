@@ -1,0 +1,19 @@
+name: collector-api
+spec: ../../docs/specs/local-collector.md
+behavior:
+  - test/acceptance/collector/workspace.feature
+  - test/acceptance/collector/remote-sync.feature
+  - test/acceptance/postgres/restart.feature
+  - test/acceptance/postgres/competing-writes.feature
+  - test/acceptance/postgres/write-rollback.feature
+  - ../collector/test/acceptance/storage/storage.feature
+  - ../collector/test/acceptance/scan/two-chats.feature
+interface:
+  - ../../docs/specs/collector-api/main.tsp
+  - ../../docs/specs/local-collector/storage.tsp
+dependencyRules: ../../.dependency-cruiser.collector.json
+server: src/collector-api.ts
+entrypoint: src/main.ts
+database: src/storage/collector-database.ts
+postgresStorage: src/storage/postgres-collector-storage.ts
+migrations: src/migrations

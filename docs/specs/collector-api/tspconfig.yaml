@@ -1,0 +1,15 @@
+emit:
+  - "@typespec/json-schema"
+  - "@typespec/openapi3"
+output-dir: "{project-root}/../../../apps/api/dist/contracts"
+warn-as-error: true
+options:
+  "@typespec/json-schema":
+    emitter-output-dir: "{output-dir}"
+    file-type: json
+    bundleId: collector-api.schema.json
+  "@typespec/openapi3":
+    emitter-output-dir: "{output-dir}"
+    file-type: json
+    output-file: openapi.json
+    openapi-versions: ["3.1.0"]

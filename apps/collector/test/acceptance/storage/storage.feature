@@ -23,3 +23,18 @@ Feature: Store a collector batch
     When a batch includes a message and more cached input tokens than input tokens
     Then the entire batch is rejected
     And the session and its checkpoint are absent
+
+  Scenario: Two sources write to one session
+    Given two sources start with version zero for the same session
+    When the first commits a message and the second submits its original batch
+    Then the second source has no checkpoint and sees session version 1
+
+  Scenario: A missing source keeps its last accepted byte
+    Given a source has reported 70 tokens at byte 420 of 500
+    When the collector reports that source missing
+    Then the source list and the session report it missing at byte 420
+
+  Scenario: A final Claude report keeps its measured usage across a gap
+    Given an empty remote storage fixture
+    When a final Claude report includes 131 tokens and an unsupported iteration
+    Then the session reports 131 tokens with partial coverage and the diagnostic for that source

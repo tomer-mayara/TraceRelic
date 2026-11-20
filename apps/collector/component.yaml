@@ -3,16 +3,40 @@ spec: ../../docs/specs/local-collector.md
 behavior:
   - test/acceptance/storage/storage.feature
   - test/interface/history/codex-history.feature
+  - test/interface/history/claude-history.feature
+  - test/interface/history/history-windows.feature
   - test/acceptance/config/local-config.feature
+  - test/acceptance/scan/codex-planning.feature
+  - test/acceptance/scan/claude-conversation.feature
+  - test/acceptance/scan/resume-growing-file.feature
+  - test/acceptance/scan/recover-changed-transcript.feature
+  - test/acceptance/scan/preserve-known-usage.feature
+  - test/acceptance/scan/retry-lost-connection.feature
+  - test/acceptance/scan/isolate-rejected-batch.feature
+  - test/acceptance/scan/codex-fork.feature
+  - test/acceptance/scan/claude-fork.feature
+  - test/acceptance/scan/missing-source.feature
+  - test/acceptance/scan/scheduled-scan.feature
+  - test/acceptance/scan/codex-token-counts.feature
+  - test/acceptance/scan/claude-usage.feature
+  - test/acceptance/scan/two-chats.feature
+  - ../api/test/acceptance/collector/remote-sync.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp
   - ../../docs/specs/local-collector/history.tsp
   - ../../docs/specs/local-collector/config.tsp
+  - ../../docs/specs/local-collector/scan.tsp
+  - ../../docs/specs/collector-api/main.tsp
 dependencyRules: ../../.dependency-cruiser.collector.json
 storagePort: src/storage/collector-storage.ts
+memoryStorage: src/storage/in-memory-collector-storage.ts
+httpStorage: src/storage/http-collector-storage.ts
+wireContract: src/storage/collector-wire-contract.ts
 storageFixture: test/fixtures/in-memory-collector-storage.ts
 historyReader: src/history/index.ts
 configFile: ../../tracerelic.config.json
 configSchema: src/config/global-config-schema.ts
 configLoader: src/config/global-config-loader.ts
 cli: src/cli.ts
+scanner: src/scan/local-collector.ts
+scheduler: src/scan/scheduled-scanner.ts

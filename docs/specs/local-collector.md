@@ -2,7 +2,7 @@
 
 A developer can read a saved Codex or Claude Code chat and see how many tokens it used. A planning chat counts even if it never edits a file. Show the measured total, the text, and any known gap. Keep enough evidence to link a turn to a feature or pull request later.
 
-**First delivery.** Build one local scanner. Test it against the existing in-memory storage fixture. **Remote delivery.** Send the same records to the TraceRelic API. The API owns the database. Supabase Postgres is a candidate. Pricing, PR detection, and feature attribution come later.
+**First delivery.** Build one local scanner. Test it against the existing in-memory storage fixture. **Remote delivery.** Send the same records to the TraceRelic API. The API owns the PostgreSQL database. Pricing, PR detection, and feature attribution come later.
 
 ## First end-to-end scenario to implement
 
@@ -23,9 +23,9 @@ Feature: Read token use for a planning chat
 
 **Codex.** Under the configured `codexPath`, find `rollout-*.jsonl` in `sessions/` and `archived_sessions/`. Read the ID from `session_meta.payload.id` or `session_id` in the same payload. A move to the archive keeps the same source. [Rollout discovery](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/streams/agents/codex.rs#L96-L125)
 
-**Claude Code.** LC-00b adds the Claude provider root to the local configuration. Under that directory (usually `~/.claude`), read `projects/<project>/<session>.jsonl` and `projects/<project>/<session>/subagents/agent-*.jsonl`. Read `sessionId`. For a subagent, also read its agent ID from the record or filename. Orphaned and superseded transcripts are earlier copies. Use them to recover identifiable records in the same session. Skip tool-result files and prompt history. [Claude directory layout](https://code.claude.com/docs/en/claude-directory) · [Subagent files](https://code.claude.com/docs/en/sub-agents)
+**Claude Code.** Under the configured `claudePath` (usually `~/.claude`), read `projects/<project>/<session>.jsonl` and `projects/<project>/<session>/subagents/agent-*.jsonl`. Read `sessionId`. For a subagent, also read its agent ID from the record or filename. Orphaned and superseded transcripts are earlier copies. Use them to recover identifiable records in the same session. Skip tool-result files and prompt history. [Claude directory layout](https://code.claude.com/docs/en/claude-directory) · [Subagent files](https://code.claude.com/docs/en/sub-agents)
 
-The local CLI takes a JSON file with `--config <file>`. At startup it loads one `GlobalConfig` and passes it to the reader. A relative `codexPath` starts at the directory containing the file. The supplied configuration uses `~/.codex`. [Local configuration](../../tracerelic.config.json) · [Configuration contract](local-collector/config.tsp)
+The local CLI takes a JSON file with `--config <file>`. At startup it loads one `GlobalConfig` and passes it to the readers. Relative provider paths start at the directory containing the file. The supplied configuration selects `~/.codex` and `~/.claude`. A configuration with only `codexPath` reads only Codex. [Local configuration](../../tracerelic.config.json) · [Configuration contract](local-collector/config.tsp)
 
 Map selected projects, sessions, or a whole provider root to the destination workspace. A provider home can contain chats for more than one workspace. A selected chat can have no Git metadata.
 
@@ -91,7 +91,7 @@ Use one scan operation under `apps/collector`. The command `scan --once` runs it
 
 ### Existing fixture and planned changes
 
-Today, `readCheckpoint(source)` returns an offset and parser state, or `null`. `commit(batch)` compares `expectedOffset` and requires the next offset to advance. `readSession(key)` returns the stored messages, latest usage per ID, metadata, total and coverage. A fixture instance represents one workspace. Keep that instance alive when a test restarts the scanner. [Storage interface](../../apps/collector/src/storage/collector-storage.ts) · [In-memory fixture](../../apps/collector/test/fixtures/in-memory-collector-storage.ts) · [Existing contract](local-collector/storage.tsp)
+`readCheckpoint(source)` returns the session version and the source checkpoint. A new session starts at version zero. A source that has never committed has a null checkpoint. `commit(batch)` compares both `expectedVersion` and `expectedOffset`, requires the next offset to advance, and increments the session version on success. `readSession(key)` returns the stored messages, latest usage per ID, metadata, total and coverage. A fixture instance represents one workspace. Keep that instance alive when a test restarts the scanner. [Storage interface](../../apps/collector/src/storage/collector-storage.ts) · [In-memory fixture](../../apps/collector/test/fixtures/in-memory-collector-storage.ts) · [Storage contract](local-collector/storage.tsp)
 
 Keep the existing outcomes `committed`, `conflict` and `invalid`. Require RFC 3339 timestamps and nonnegative safe integer counts, including the session total. Cache reads and writes are disjoint parts of inclusive input. Reasoning is part of output. An identical message is safe to replay. Conflicting content under an immutable message ID rejects the batch. A higher usage revision replaces the prior observation. Equal revisions must agree. An invalid batch changes nothing.
 
@@ -113,16 +113,21 @@ Use synthetic files in a temporary directory. Run the scanner against the fixtur
 
 Track new sessions, rejected lines and batches, known gaps, version conflicts, and the age of the oldest pending source. Log identifiers and byte ranges. Keep chat text in the stored conversation. At the API, measure commit outcomes and latency. Set a production service objective after measurements exist.
 
-Use the repository's pinned Node and Bun versions. Run the checks below from the repository root. The storage check builds the project, compiles TypeSpec, checks dependency rules, and runs the four implemented storage scenarios. Keep those behaviors when updating the test steps for the revised interface. When the client and API share generated models, check in CI that they match TypeSpec. [Storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) · [Component manifest](../../apps/collector/component.yaml) · [Dependency rules](../../.dependency-cruiser.collector.json) · [Repository checks](../../README.md#run-the-checks)
+Use the repository's pinned Node and Bun versions. Run the checks below from the repository root. The storage check builds the project, compiles TypeSpec, checks dependency rules, and runs the storage scenarios. When the client and API share generated models, check in CI that they match TypeSpec. [Storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) · [Component manifest](../../apps/collector/component.yaml) · [Dependency rules](../../.dependency-cruiser.collector.json) · [Repository checks](../../README.md#run-the-checks)
 
 ```sh
 bun install --frozen-lockfile
 bun run check:collector-history
 bun run check:collector-storage
+bun run check:collector-scan
+bun run check:collector-api
+bun run check:collector-postgres
 bun run test
 bun run lint
 bun run habit-hooks --all
 ```
+
+The scan check runs token corrections, chat imports and growing-file scenarios. Its `@two_chats` scenario checks both providers' totals before and after a restart and append.
 
 ## Tickets
 
@@ -200,6 +205,13 @@ Feature: Read local Claude Code history
 1. **Interface.** Run the LC-00a date assertions against `LocalLLMHistoryClaude` with native Claude fixtures. Check a plain user string and an assistant row with content blocks and `message.usage`.
 2. **Interface.** Read two project files through one configured Claude root. Add a nested subagent file that repeats its parent's `sessionId`. Check that the child has its own session key.
 
+| LC-00b constraint | Decision and check |
+| --- | --- |
+| Behavior | Read records from all projects under the configured Claude root within the same half-open date window as Codex. The CLI returns records from the configured providers. Run the [two-project scenario](../../apps/collector/test/interface/history/claude-history.feature) and the [startup scenarios](../../apps/collector/test/acceptance/config/local-config.feature) with `bun run check:collector-history`. |
+| Observability | Each result includes the original timestamp, file path and one-based line number. Filesystem errors reach the caller. Run the reader interface tests with `bun run test`. |
+| Architecture | Both readers receive the resolved configuration and share the date filter and complete JSONL record reader. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply to both. Run `bun run check:collector-deps`. |
+| Interface | The [config contract](local-collector/config.tsp) adds an optional `claudePath` with the same path rules as `codexPath`. The [history contract](local-collector/history.tsp) retains the original Claude row, including its content and usage. A child that repeats its parent's session ID uses a key formed from both the parent and agent IDs. Run `bun run check:collector-history` for the [collector manifest](../../apps/collector/component.yaml) scenarios and schema checks. |
+
 #### LC-00c · Check date boundaries and repeat reads for both providers
 
 ```gherkin
@@ -223,6 +235,13 @@ Feature: Use adjacent history windows
 2. **Interface.** Read an unfinished final line. The first query omits it. Append the newline and repeat the query twice. Each later result contains the record once in source order.
 3. **Interface.** Give the reader a regular file as its configured root. The call reports the filesystem error. This distinguishes a failed read from a successful empty result.
 
+| LC-00c constraint | Decision and check |
+| --- | --- |
+| Behavior | Both providers assign a midnight record to the day that starts at that instant. Run the [adjacent-window scenario](../../apps/collector/test/interface/history/history-windows.feature) with `bun run check:collector-history`. Run `bun run test` for empty windows and reads before and after a writer finishes a line. |
+| Observability | A successful empty read returns an empty list. Invalid dates raise `RangeError`. A regular file used as a provider root raises a filesystem error. The shared interface tests check each outcome on both readers. |
+| Architecture | Each query reads the provider files independently of storage. The existing [dependency rules](../../.dependency-cruiser.collector.json) cover both readers. Run `bun run check:collector-deps`. |
+| Interface | The [history contract](local-collector/history.tsp) specifies equal endpoints and the newline that completes a record. The [collector manifest](../../apps/collector/component.yaml) includes the two-provider scenario in the existing history check. |
+
 ### Fixture-backed collector
 
 #### LC-01 · Read a Codex planning chat
@@ -243,6 +262,13 @@ Feature: Import visible Codex chat text
 2. **Unit.** Give two blocks the same timestamp and mirror a message in both event formats. Keep the original order and one visible copy. Check a missing branch and a later branch switch.
 3. **Integration.** Reuse the Codex reader's discovery and decoding in the real `scan --once` handler. Read the stored chat through `readSession`.
 
+| LC-01 constraint | Decision and check |
+| --- | --- |
+| Behavior | `collector scan --once --config <file>` reads active and archived Codex rollouts. Repeat `--session <id>` or `--project <directory>` to select sessions for the destination workspace. Either match selects a session. With neither option the command selects the configured root. The [planning chat scenario](../../apps/collector/test/acceptance/scan/codex-planning.feature) and the [two-chat scenario](../../apps/collector/test/acceptance/scan/two-chats.feature) run in `bun run check:collector-scan`. |
+| Observability | The command writes the selected session views as JSON. A planning chat with no measurements has unknown coverage and a null total. Storage rejections identify the source and attempted byte range. The command and storage checks exercise these outcomes. |
+| Architecture | One scanner uses the [Codex reader](../../apps/collector/src/history/local-llm-history-codex.ts) and the [storage port](../../apps/collector/src/storage/collector-storage.ts). Each injected storage instance represents one workspace. The standalone command uses process-local memory for this delivery. The [dependency rules](../../.dependency-cruiser.collector.json) keep the storage implementation outside the scanner. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) defines source selection, the Codex reader's complete records and byte positions, and the stored session results. The [storage contract](local-collector/storage.tsp) adds optional message positions, turn and request IDs, recorded context and the position of a branch observation. An undated branch change has an order within its source. A branch from another source supersedes the current hint only when recorded times establish which came later. Earlier batches can omit the new fields. Run `bun run test`, `bun run check:collector-storage` and `bun run check:collector-scan`. |
+
 #### LC-02 · Read Claude Code text blocks
 
 ```gherkin
@@ -259,6 +285,13 @@ Feature: Preserve Claude Code conversations
 1. **Unit.** Decode a plain string and a block array. Use the row UUID and block position when present. Test identical prompts, tool results and images separately.
 2. **Integration.** Scan mixed roots with equal Codex and Claude session IDs. Read two separate sessions. Verify an orphaned copy does not create a third session.
 
+| LC-02 constraint | Decision and check |
+| --- | --- |
+| Behavior | Running `scan --once` twice preserves two identical prompts and each visible answer block in source order. The Claude row UUID and original block index identify text across copies. Within a single source, rows without a UUID use stable fields and an occurrence number. The [conversation scenario](../../apps/collector/test/acceptance/scan/claude-conversation.feature) runs in `bun run check:collector-scan`. |
+| Observability | The command returns one session view per provider and session ID. An earlier copy with no recoverable records adds no session. Raw tool output, thinking and attachments stay out of the conversation. Until token accounting is available, Claude text has unknown coverage and a null total. Run `bun run test` for stored views and replay. |
+| Architecture | The existing scanner reads the configured Claude projects through the [Claude history reader](../../apps/collector/src/history/local-llm-history-claude.ts) and commits through the [storage port](../../apps/collector/src/storage/collector-storage.ts). The existing [dependency rules](../../.dependency-cruiser.collector.json) cover both providers. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds Claude transcripts with their native session identity, source positions and prior-copy flag. Select a session by its first recorded working directory or the exact transcript project directory. Earlier copies of that selected file can recover identifiable rows for the same session even if its working directory changed. The storage contract already carries positions and context. Run `bun run check:collector-scan` for schema agreement and `bun run check:collector-history` for compatibility. |
+
 #### LC-03 · Resume at a complete record
 
 ```gherkin
@@ -269,6 +302,7 @@ Feature: Resume a growing file
     When I scan once, finish the second line and scan with a fresh collector
     Then the first scan stores only the first message
     And the second scan stores "café" once and acknowledges its ending newline
+    And both checkpoints record the accepted line and session version
 ```
 
 **Needs** LC-01. **First failure** The scanner advances past incomplete bytes or loses the second message.
@@ -276,6 +310,17 @@ Feature: Resume a growing file
 1. **Interface.** Read across both a batch boundary and a multibyte character. Return completed lines and the next unread byte. Read a large valid record in chunks and allow it to occupy a batch by itself.
 2. **Interface.** Update the storage contract and fixture. If two writers use the same version, only the first write succeeds. A new source in an existing session must see that session's current version.
 3. **Integration.** Restart against the same fixture. Restore the parser state and byte offset saved with the first batch.
+
+| LC-03 constraint | Decision and check |
+| --- | --- |
+| Behavior | A fresh scanner resumes both providers after the last accepted newline. A split UTF-8 character waits for its full line. Read bounded batches by bytes and give an oversized record a batch of its own. Run the [growing-file scenario](../../apps/collector/test/acceptance/scan/resume-growing-file.feature) with `bun run check:collector-scan` and the reader and restart tests with `bun run test`. |
+| Observability | Each acknowledged source has a next byte, a physical line number and versioned parser state. Reading a checkpoint returns the session version even for a new source. The [concurrent-writer scenario](../../apps/collector/test/acceptance/storage/storage.feature) checks that a rejected batch leaves both records and progress intact. Run `bun run check:collector-storage` and `bun run test`. |
+| Architecture | The history readers own discovery and bounded local file reads. Provider decoders carry forward the context, occurrence counts and mirror evidence needed by the next batch. The scanner coordinates the readers and the [storage port](../../apps/collector/src/storage/collector-storage.ts). The [dependency rules](../../.dependency-cruiser.collector.json) keep file access in history and storage behind the port. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds sources, absolute byte and line positions, and batches. The [storage contract](local-collector/storage.tsp) requires the expected session version and source offset on each commit. A successful append advances both atomically. The [configuration](local-collector/config.tsp) can name an installation that shares storage with others. Omitted IDs preserve existing source keys. A scanner can rebuild the earlier empty parser state from the accepted prefix. Run `bun run check:collector-history`, `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+An internal batch boundary must preserve the text blocks, native IDs and positions that LC-01 would import from the same complete Codex file. A lookup over the unread portion can match copies that cross a batch boundary. Keep only their identifying details and block positions. A copy appended after a scan keeps its earlier accepted message. Check both cases in `bun run test`.
+
+Codex discovery reads through the first valid session header. A Claude file can contain several session IDs. Discovery reads its records to identify the sessions and their first working directories. An ID-only selection can stop once it finds all requested IDs in that file. Each selected session then imports from its own saved byte.
 
 #### LC-04 · Reconcile Codex token counts
 
@@ -300,6 +345,17 @@ Feature: Account for each measured Codex token once
 2. **Integration.** Restart between the 20-token call and the next snapshot. Preserve the baseline and the calls already counted. Leave the interval's turn and model unset if they are unknown.
 3. **Integration.** Import the coarse and detailed copies in both orders. Replace an interval and add its parts together. A failed replacement keeps the original total.
 
+| LC-04 constraint | Decision and check |
+| --- | --- |
+| Behavior | Import measured Codex input and output once across appends, restarts and copies. Keep an identified last call and attribute the remaining change to an interval. Refine a coarse interval only when the parts cover it. Run the [Codex usage scenarios](../../apps/collector/test/acceptance/scan/codex-token-counts.feature) with `bun run check:collector-scan` and the decoder and restart tests with `bun run test`. |
+| Observability | The session view shows each call or interval, inclusive input and output, any reliable breakdowns, the measured total and coverage. A missing measurement stays unknown. Withhold an uncertain addition and flag a gap. Existing service objectives apply. Run `bun run test` and `bun run check:collector-storage`. |
+| Architecture | The Codex decoder derives measurements from transcript records. The scanner submits them and its checkpoint through the [storage port](../../apps/collector/src/storage/collector-storage.ts). Storage reconciles verified counter ranges inside the session transaction. The existing [dependency rules](../../.dependency-cruiser.collector.json) keep the decoder and scanner independent of the storage adapter. Run `bun run check:collector-deps`. |
+| Interface | The [storage contract](local-collector/storage.tsp) adds call and interval kinds, optional call attribution and cumulative windows whose parts must conserve input and output. Older untyped observations remain readable. Competing writers use the existing version check. The [scan contract](local-collector/scan.tsp) records Codex counter state in a version 2 checkpoint. A conditional upgrade at the accepted byte can backfill a text-only checkpoint. Run `bun run check:collector-storage`, `bun run check:collector-scan` and `bun run test`. |
+
+Copies can share a counter history when they start with the same native session header and recorded creation time. A fragment or an inherited header starts from its first reliable snapshot. A counter reset starts a separate range. When origins or overlapping counter ranges cannot be matched, keep the established measurements and report partial coverage. Store the last reliable baseline and the separately observed calls since that baseline with the checkpoint.
+
+A separate call report carries its source's last known counter when available. If another copy already covers that range, storage retains the call pending a closing snapshot. The published total and the coarse interval stay intact until the finer parts account for the same input and output. Exercise this intermediate state in the copy integration tests.
+
 #### LC-05 · Apply Claude usage corrections
 
 ```gherkin
@@ -318,6 +374,17 @@ Feature: Keep one measurement per Claude request
 1. **Unit.** Test the two reports in both arrival orders, an explicit final correction downward, and conflicting provisional counts. Select an entire report. Check the cache-duration breakdown and an advisor iteration without adding executor iterations twice.
 2. **Integration.** Separate the reports with a restart. Have two collectors propose different updates from the same stored version. Reload the winner on conflict and apply the comparison again.
 
+| LC-05 constraint | Decision and check |
+| --- | --- |
+| Behavior | Scan assistant usage even when a row contains only a tool call. Preserve one measurement per request and one per advisor iteration. A final report can reduce a count. Run the [Claude correction scenario](../../apps/collector/test/acceptance/scan/claude-usage.feature) and the [cross-provider restart scenario](../../apps/collector/test/acceptance/scan/two-chats.feature) in `bun run check:collector-scan`. |
+| Observability | The session shows accepted measurements, their status and revisions, and the measured total. Keep an unresolved call out of the total, flag a gap, and preserve independent calls. A diagnostic identifies the source, line and unsupported or invalid usage evidence. Existing service objectives apply. Check the returned view in `bun run test` and `bun run check:collector-storage`. |
+| Architecture | The Claude parser reads native reports. The scanner sends them through the storage port. Storage compares them with accepted session evidence inside the version-checked transaction. A competing Claude correction reloads the winning checkpoint and compares again. The [dependency rules](../../.dependency-cruiser.collector.json) enforce these boundaries in `bun run check:collector-deps`. |
+| Interface | The [storage contract](local-collector/storage.tsp) adds whole Claude observations, optional native IDs, completion status, cache-write durations and source diagnostics. Older usage remains readable. The [scan contract](local-collector/scan.tsp) marks Claude usage as imported in version 2. A text-only checkpoint can backfill its accepted prefix. Check both schemas and rollback with `bun run check:collector-storage`, `bun run check:collector-scan` and `bun run test`. |
+
+Match both native identifiers when supplied. A single identifier can match only one known request. A correction keeps the first accepted ID, time and position. Compare all comparable counts together. A replay of a weaker or disputed observation cannot restore a withdrawn count. A later final or unambiguously stronger report can resolve the call. Keep recorded gaps as specified in the coverage rules.
+
+Use the provider's advisor iteration ID when present. Otherwise use the iteration's position in the request's ordered iteration list. If an unfamiliar iteration type appears, retain the measured calls and report its source line. On a competing correction, retry from the winning checkpoint. A second conflict at the same saved position returns the affected byte range for a later scan.
+
 #### LC-06 · Recover after a move or rewrite
 
 ```gherkin
@@ -335,6 +402,23 @@ Feature: Recover a changed transcript
 1. **Interface.** Move a rollout into the archive. Reuse its checkpoint. Change bytes in the middle of a same-length copy with an identical tail. Verify the saved prefix before accepting it.
 2. **Integration.** Exercise truncation, a reset from an older parser, and an unsupported newer state. Replay verified IDs from zero or pause as specified. Test a rewrite that removes one of two identical, unidentified records. Preserve known history and flag the ambiguous match.
 
+| LC-06 constraint | Decision and check |
+| --- | --- |
+| Behavior | Verify every accepted byte before a fresh scan resumes an append or archive move. Replay a changed or shortened transcript from its start. The [rewrite scenario](../../apps/collector/test/acceptance/scan/recover-changed-transcript.feature) covers a stale write at byte 420. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | The checkpoint reports the accepted byte, SHA-256 digest and session version. The session retains accepted records and records a coverage gap when identical rows cannot be matched. An unsupported parser state reports its source and byte and keeps its checkpoint. Check the saved checkpoint, session view and error in `bun run test`. Existing service objectives apply. |
+| Architecture | History streams the raw prefix once for the saved positions in one physical file. The scanner decides whether to resume or rebuild. Storage accepts an explicit reset in the same transaction as the new records and checkpoint. The [collector dependency rules](../../.dependency-cruiser.collector.json) cover these boundaries. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) supplies raw prefix digests and records fallback occurrence bounds for later appends. The [storage contract](local-collector/storage.tsp) accepts an optional digest for compatibility and an explicit reset that compares the previous checkpoint. Normal writes advance the source. Run `bun run check:collector-history`, `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+If a replacement keeps only some of several identical rows without native IDs, retain the accepted rows. Record `ambiguous-transcript-replay` at the affected source line. Reserve the accepted IDs so an identical row appended after recovery receives a new ID.
+
+When the scanner counts repeated rows ahead of a replay batch, save the last byte and digest used for that decision until the scanner has accepted that byte. A restart verifies both positions in one pass. A change in the pending bytes requires a fresh replay.
+
+Use parser state version 3 when resuming requires these matching decisions. Earlier parsers pause on that version. Ordinary checkpoints continue to use the version 2 decoder.
+
+A Codex call in a replacement can overlap a cumulative interval accepted from the earlier file. Compare the two histories as separate copies. Keep the accepted interval until the replacement establishes where the call belongs.
+
+Discovery needs a complete record that identifies the session. If truncation removes that record, keep the accepted history and checkpoint. Verify the file again when a complete identifying record returns.
+
 #### LC-07 · Keep reading after a bad usage record
 
 ```gherkin
@@ -351,6 +435,21 @@ Feature: Preserve known data across a gap
 
 1. **Unit.** Test a counter reset, unsupported usage, an unfinished line and known bookkeeping. Flag only a possible loss of usage. Resume from the next reliable baseline.
 2. **Integration.** Commit the gap with the known records. Check `unknown` before any measurement, `partial` afterward, and a diagnostic with no message text.
+
+| LC-07 constraint | Decision and check |
+| --- | --- |
+| Behavior | A damaged complete line preserves earlier measurements and later messages and calls. The [damaged-line scenario](../../apps/collector/test/acceptance/scan/preserve-known-usage.feature) checks 70 plus 20 tokens with partial coverage. Blank lines, unfinished writes and known bookkeeping add no gap. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | The session reports a code, logical source, line number and exact half-open byte range. A session with no measurements reports unknown coverage and a null total. Record the diagnostic and known usage with the checkpoint. Replaying the same range reports it once. Check returned data and rollback in `bun run test` and `bun run check:collector-storage`. Existing service objectives apply. |
+| Architecture | History identifies unreadable physical lines. Provider decoders decide whether a valid usage record gives a measurement or establishes a new baseline. The scanner passes source positions and known records to storage in the same write. The existing [dependency rules](../../.dependency-cruiser.collector.json) enforce these boundaries in `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds the first byte of each batch entry, damaged line ranges and a checkpoint state for a pending Codex baseline. The [storage contract](local-collector/storage.tsp) adds range-bearing diagnostics for unreadable lines, unsupported Codex usage and counter resets. Existing line-only diagnostics remain readable. Run `bun run check:collector-history`, `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+A damaged line includes its terminating newline in the reported range. If a Claude file contains several sessions, an unreadable line may have belonged to any selected session in that file. A valid record with a session ID belongs only to that session.
+
+After a possible break in the Codex counters, keep independently identified calls. The next reliable cumulative snapshot establishes a baseline. Count subsequent verified differences. An empty rate-limit update or a missing optional breakdown does not interrupt the counters.
+
+JSON whitespace before a fresh Codex session header preserves its starting baseline. A preceding unreadable or unidentified record still leaves the origin uncertain.
+
+If another copy saw a counter reset hidden in the damaged line, both may later contain the same native snapshots. Match both boundary reports within the same verified session history to count the interval once. If the second copy has reached only part of the interval, keep the accepted measurement and any independent calls outside it. Equal token counts alone cannot establish a match.
 
 #### LC-08 · Retry a write after a lost connection
 
@@ -373,6 +472,17 @@ Feature: Sync after a lost connection
 1. **Unit.** Simulate a timeout and a version conflict. Discard unconfirmed parser state and read the stored checkpoint. Use a test clock for retry delays.
 2. **Integration.** Drop the request, then drop only the reply. Reuse both cases for the HTTP client in LC-15.
 
+| LC-08 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [lost connection scenario](../../apps/collector/test/acceptance/scan/retry-lost-connection.feature) through `scan --once`. Drop the request and the reply separately. A fresh scan against the same storage must return both calls once, 150 tokens and the accepted end byte. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | An unresolved write reports pending work, its logical source, the attempted byte range and the suggested retry time. Check the report against its schema and use a test clock to check the delay. Confirm that a transport failure preserves the session's measured coverage. Existing service objectives apply. |
+| Architecture | The scanner reconciles through the existing storage port. The adapter identifies transport failures. The transcript and the accepted checkpoint supply the retry data. The [collector dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) defines the pending report. Successful scans still return selected sessions. The [storage contract](local-collector/storage.tsp) retains its three commit outcomes and documents that a lost reply leaves the outcome unknown. Run `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+After a write times out or loses its connection, read the stored checkpoint and session version. If storage confirms progress, verify the winning bytes and resume from its parser state. If the read fails or the write is still unconfirmed, end the one-time scan with a pending report. The CLI writes that JSON report to standard error and exits with status 75 (temporary failure). A fresh scan can retry immediately after reconnection. Suggest a one-second delay to automatic callers.
+
+On a version conflict, rebuild the affected batch from the winning checkpoint. Stop a repeated conflict at the same saved position and report it for a later scan. If another writer accepted a different file, preserve its checkpoint for a fresh capture.
+
 #### LC-09 · Isolate a rejected batch
 
 ```gherkin
@@ -390,6 +500,17 @@ Feature: Continue scanning other sources
 1. **Unit.** Return `invalid` for A. Stop that file for this scan and report its byte range. Avoid an immediate retry of the same batch.
 2. **Integration.** Use the fixture's real rejection. Verify that accepted messages, usage and metadata in A survive and that B commits.
 
+| LC-09 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [rejected batch scenario](../../apps/collector/test/acceptance/scan/isolate-rejected-batch.feature) through `scan --once`. Storage rejects changed text under an accepted message ID. Keep A's last accepted batch and checkpoint, and import B's 12-token call. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | Report each invalid batch once with its logical source and exact half-open byte range. The CLI writes the report to standard error and the accepted session views to standard output. Check both outputs, the exit status and the absence of transcript content in the report. Existing service objectives apply. |
+| Architecture | Storage owns validation and rejects the whole write atomically. The scanner stops work on the affected file, then advances discovery. The CLI presents the scanner's results. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds `RejectedBatch` and the accepted sessions and rejections available in `ScanRejectedError`. The [storage contract](local-collector/storage.tsp) already defines `invalid`. Check the generated schema, the command output and storage atomicity with `bun run check:collector-scan`, `bun run check:collector-storage` and `bun run test`. |
+
+Keep earlier commits from the rejected file, including batches accepted during this scan. Skip its remaining bytes and any active or archive copy of the same logical stream for this invocation. Other files with independent streams can still contribute to the same session. A later scan can start from the accepted checkpoint after the source is corrected.
+
+Report a rejection as soon as storage returns `invalid`. After the remaining files have been scanned, the CLI prints the available stored sessions and exits with status 1. A first write that fails has no stored session of its own. If a later connection failure leaves work pending, the CLI also reports that condition and exits with status 75.
+
 #### LC-10 · Count a Codex fork's own work
 
 ```gherkin
@@ -406,6 +527,17 @@ Feature: Separate parent and child usage
 
 1. **Unit.** Compare the fork prefix. Test both an inherited counter and a verified fresh child counter. A missing or cyclic parent link cannot establish ownership.
 2. **Integration.** Read the child first, then the parent. Repeat with the parent initially unavailable. Keep child text and independently identified calls. Revisit the uncertain range when the parent becomes available.
+
+| LC-10 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [Codex fork scenario](../../apps/collector/test/acceptance/scan/codex-fork.feature) through `scan --once`. Match the child's copied reports against the selected parent at the fork. Preserve child text and count the child's own work with inherited or verified fresh counters. Test both discovery orders, a missing or cyclic parent, a late parent and repeated scans. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | Expose the native parent in session metadata. For an unresolved fork, report the earliest uncertain usage line and byte range and save the parent ID with the checkpoint. Keep independently attributable calls and the existing coverage rules. Check the session, diagnostic and checkpoint against the generated schemas. |
+| Architecture | The Codex reader identifies the first native session header. The scanner compares selected, captured transcripts and decides which usage belongs to the child. Workspace storage applies ownership and checkpoint changes together. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) records the source's fork header. The [storage contract](local-collector/storage.tsp) adds optional fork evidence, native call ownership and a version-checked correction at the accepted byte. Test earlier checkpoints, late evidence, repeated claims and atomic failures. Run `bun run check:collector-storage` and `bun run check:collector-scan`. |
+
+Use the child's own header to identify the thread and its fork time. Compare the ordered usage reports at the fork, even when the copy has new outer timestamps. Use the last matched parent counters as the inherited baseline. A child can establish a fresh counter with a zero reading or a verified first call that accounts for its entire counter. A lower total alone cannot establish a fresh counter.
+
+If the parent is missing, unselected, cyclic, or its evidence disagrees, keep the child text and withhold disputed usage. A native call in a turn tied independently to the child can still count. Compare new parent evidence with the saved decision on a later scan, including when the child has no new bytes. A verified prefix remains available when a later selection omits the parent. If a selected parent contradicts that prefix, withdraw the disputed child usage. If the first uncertain row was beyond the last accepted byte, locate it again in the current child file. [Codex session and turn fields](https://github.com/openai/codex/blob/ea8ccc1d20ff65398e02490ac34f8c1012848625/codex-rs/protocol/src/protocol.rs) · [Fork prefix comparison](https://github.com/git-ai-project/git-ai/blob/5420ab9081d2cd57ffdafced09a8028d6dabf4bd/src/token_usage/codex.rs#L549-L609)
 
 #### LC-11 · Count Claude fork and subagent calls once
 
@@ -429,6 +561,19 @@ Feature: Keep one owner for each Claude call
 1. **Unit.** Use two native agent IDs under the same parent. Check a copied model message with a changed request ID and two genuinely separate requests. Only a verified parent match establishes a replay.
 2. **Integration.** Collect the copies from two installations. Enforce one owner for a confirmed provider call in the workspace. Test late evidence of its origin and a copy whose origin cannot be proven.
 
+| LC-11 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [Claude fork and subagent scenarios](../../apps/collector/test/acceptance/scan/claude-fork.feature) through `scan --once` in both orders. Keep the copied chat text, charge the parent's 100 tokens once, and keep the child's own 25. Check two agents, remapped UUIDs, distinct requests, two installations and a late parent with `bun run check:collector-scan` and `bun run test`. |
+| Observability | Expose the linked parent in session metadata. While a copied call has no verified owner, return `unresolved-claude-fork` at the earliest affected line and byte range for its source. Count independently identified child work. Check the session view, coverage and diagnostic against the storage schema. Existing service objectives apply. |
+| Architecture | The history reader supplies the native subagent identity. The Claude decoder sends report origins through the storage port. Workspace storage compares accepted parent and child evidence across installations and updates affected session versions in one transaction. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds the subagent's parent and agent IDs. The [storage contract](local-collector/storage.tsp) adds optional native origin and position to a Claude report, a checkpoint marker and a version-checked backfill for older writers. Test older checkpoints, invalid writes and replay with `bun run check:collector-storage` and `bun run check:collector-scan`. |
+
+An ordinary fork records the source session and the original row UUID in `forkedFrom`. A nested subagent file can use the parent's session ID for several native agents. Keep each agent's chat under its own key. Preserve its copied text even when the row UUID or request ID changed. [Claude SDK fork transform](https://github.com/anthropics/claude-agent-sdk-python/blob/69846cdf82aef59add3b14a26b4f16d1ccee26ba/src/claude_agent_sdk/_internal/session_mutations.py#L405-L442)
+
+Compare the marked original row and its provider identity, or match the full native message and request IDs in the linked parent. A row that names the original can match a changed request ID when its model message ID agrees. Separate requests can share a model message ID. Text, token amounts and a parent link alone cannot establish a replay. Keep unresolved positions with their source and parent so a later parent-only scan can settle ownership. An earlier checkpoint can supply the same evidence from its accepted bytes. Repeated scans keep the stored versions and totals stable.
+
+Apply the Claude whole-report rules to all verified observations of the owner's call. A final report found only in a verified copy can correct the owner's provisional amount. Conflicting final amounts can leave that call without a measurement while its owner remains known. Match each report's native origin before using a single provider ID to fill in a missing field. Keep a separate, fully identified child request in the child's total even when a copied report shares its model message ID.
+
 #### LC-12 · Report a missing source
 
 ```gherkin
@@ -450,6 +595,19 @@ Feature: Explain what was lost when a file disappears
 1. **Interface.** List acknowledged sources for just this installation and selection. Record a change of presence at the same offset. Reject a stale version.
 2. **Integration.** Test an archive move, an unreadable root, a change in workspace selection, a returning file and a second installation. None of these alone proves data loss.
 
+| LC-12 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [missing source scenario](../../apps/collector/test/acceptance/scan/missing-source.feature) through `scan --once` with a fresh collector and shared storage. Report the disappearance once across both scans. Keep 70 tokens in both cases. Only the 80 known, unaccepted bytes make measured coverage partial. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | Emit one `missing` report per disappearance with the logical source, accepted byte and last known complete byte. The CLI writes the report to standard error and the selected session views to standard output. The session view lists currently missing sources separately from usage diagnostics. Check the output, a repeat scan and a returning file. Existing service objectives apply. |
+| Architecture | History verifies physical locations, including the Codex archive. The scanner compares those results with the selected installation's storage inventory. Storage owns presence, its version check and coverage. The running scanner can remember a sighting during an outage. The [dependency rules](../../.dependency-cruiser.collector.json) keep filesystem access in history. Run `bun run check:collector-deps`. |
+| Interface | The [storage contract](local-collector/storage.tsp) adds an observation to a normal batch, a scoped inventory and a presence write at the accepted byte. The [scan contract](local-collector/scan.tsp) exposes the last complete newline, source selection fields and a check for absence across possible locations. Verify the schemas, stale and repeated writes, and resume with `bun run check:collector-storage`, `bun run check:collector-history` and `bun run check:collector-scan`. |
+
+Check the configured provider root, installation and original project or session selection before reporting a disappearance. A previous Claude copy can match either its own working directory or the current transcript's working directory. An unreadable or unavailable root, a file with an unreadable header, and a move into the archive cannot prove loss. One successful search of all possible locations confirms absence. A repeat search keeps the same report and version. A later sighting restores presence, including when the file has no new bytes. Keep gaps from other sources and confirmed unaccepted bytes that have not been recovered.
+
+Capture the final newline within the file size seen at discovery. Store that position with the first accepted batch so a restart can distinguish a lost complete suffix from an unfinished line. A running collector can report a source that disappeared before its first upload at byte zero when storage previously confirmed an empty checkpoint. If even the first checkpoint read was unavailable, the pending report identifies the missing source until storage can confirm the accepted byte. A fresh collector can report only sources that storage can place in its selected roots.
+
+An earlier Claude copy can return after the current file was reported missing. Match its session, current filename and accepted prefix before restoring the current source from that copy. Keep the copy's own checkpoint. A backup with different accepted bytes cannot clear an earlier loss.
+
 #### LC-13 · Run the scanner on a schedule
 
 ```gherkin
@@ -465,6 +623,17 @@ Feature: Pick up a chat created after startup
 
 1. **Unit.** Use a test clock for startup, a slow scan and shutdown. Allow one active scan per collector. Track pending age until storage accepts the work.
 2. **Integration.** Use the regular scan handler for both commands. At this milestone run LC-01 through LC-13 and `@two_chats` against temporary files and the fixture.
+
+| LC-13 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [scheduled scan scenario](../../apps/collector/test/acceptance/scan/scheduled-scan.feature) through `watch`. Scan on startup. On the next interval, read a newly created planning chat and report one new session. Exercise slow scans, retries and shutdown with a test clock. Run `bun run test` and `bun run check:collector-scan`. |
+| Observability | Write one [scheduled scan report](local-collector/scan.tsp) to standard output per pass. Count sessions first accepted by storage, including work accepted before a later failure. Keep the age of outstanding work across passes until storage confirms it. Keep source and byte-range diagnostics on standard error. Check the reports against the schema. The production service objective awaits measurements. |
+| Architecture | The command loads the configuration once and gives the scheduler the same scan handler as `scan --once`. The scheduler controls timing and shutdown. Scan reports use storage acknowledgments and the scanner's verified checkpoints to account for a lost reply. Check the [dependency rules](../../.dependency-cruiser.collector.json) with `bun run check:collector-deps`. |
+| Interface | `watch --config <file>` accepts the existing session and project selectors and an optional `--interval-ms`. The [scan contract](local-collector/scan.tsp) defines the interval and report. Check valid and invalid CLI arguments, both termination signals, generated schemas, and the LC-01 through LC-13 and `@two_chats` scenarios with `bun run test` and the collector contract checks. |
+
+The default interval is 60,000 ms. Accept whole milliseconds from 1 through 2,147,483,647. Measure intervals from startup and skip ticks that fall during a scan. An automatic retry waits until the pending report's `retryAt`. After a rejection or a failed pass, use the next regular interval. On SIGINT or SIGTERM, finish the active pass and cancel the next scan.
+
+Each report gives the pass status, the number of newly accepted sessions and the age in milliseconds of the oldest pending source or inventory request. When a reply is lost, count the new session in the pass that confirms its creation. An empty queue has age `null`. A retry that encounters the same work keeps its original age. A rejected range stays outstanding until storage accepts it. Keep chat text in the stored session.
 
 ### Remote service and durable storage
 
@@ -489,6 +658,17 @@ Feature: Keep workspace data separate
 1. **Interface.** Define versioned HTTP operations, authentication and responses in TypeSpec. Test missing credentials, malformed JSON and typed storage outcomes. Derive workspace and installation from the verified credential.
 2. **Integration.** Run the same storage cases through a local API and test credentials. A workspace in the request body cannot give access to another workspace's session or inventory.
 
+| LC-14 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [workspace scenarios](../../apps/api/test/acceptance/collector/workspace.feature) and the [five storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) over a loopback HTTP connection. Test two workspaces with the same native session ID, two installations in one workspace, and a credential that expires between requests. Run `bun run check:collector-api` and `bun run test`. |
+| Observability | Record each batch commit outcome and elapsed milliseconds with its verified workspace and installation. Use a monotonic clock. Keep token values and conversation text out of logs and errors. Test the emitted fields and all three storage outcomes. Set a production service objective after measurements exist. |
+| Architecture | Authenticate each request in `apps/api` before parsing its body or selecting storage. The handler takes a credential verifier and a workspace storage provider. The local process supplies one in-memory store per workspace. The collector and API share the [storage port](../../apps/collector/src/storage/collector-storage.ts). Run the [dependency checks](../../.dependency-cruiser.collector.json) with `bun run check:collector-deps`. |
+| Interface | The [version 1 HTTP contract](collector-api/main.tsp) defines bearer authentication, five JSON operations, and typed responses. Use the [storage models](local-collector/storage.tsp) for requests and stored records. Build OpenAPI and JSON Schema and check real HTTP results with `bun run check:collector-api`. |
+
+The bearer credential identifies one workspace and one installation and has an expiry time. Reads and writes select their workspace from that credential. On a source or inventory request the API supplies the installation. A caller may repeat the same installation ID. A different installation ID or an explicit workspace selector in the request yields HTTP 400. Missing, unknown and expired credentials all receive HTTP 401 with a bearer challenge.
+
+All five operations accept JSON by POST under `/v1/collector`. Session reads return a `session` field that is null when absent. Checkpoint reads and source lists return their storage values directly. Batch and presence writes return `committed` (200), `conflict` (409) or `invalid` (422) in the `result` field. Malformed JSON returns 400. The local service binds to loopback and loads operator-supplied credential hashes. LC-16 adds the PostgreSQL store used by the executable API.
+
 #### LC-15 · Sync through the HTTP client
 
 ```gherkin
@@ -504,6 +684,17 @@ Feature: Resume a remote upload
 
 1. **Interface.** Exercise the client with a local test transport. Map timeouts and rate limits to delayed retries. Surface invalid credentials to the caller and invalid batches to the affected source.
 2. **Integration.** Run the LC-08 lost-reply case across a real loopback connection. Restart only the scanner. Read the result through the API.
+
+| LC-15 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [remote upload scenarios](../../apps/api/test/acceptance/collector/remote-sync.feature) through the collector command and a loopback API. Drop the request and the reply in separate cases. Restart only the scanner, then read both calls, their 150-token total and the accepted end byte through the authenticated API. Run `bun run check:collector-api` and `bun run test`. |
+| Observability | Use the existing [pending, rejected and scheduled reports](local-collector/scan.tsp). A one-time scan reports an unconfirmed range or inventory selection and exits with status 75. A rate limit sets the earliest automatic retry. A rejected credential stops the command with a diagnostic that excludes the credential and response body. Check these outcomes with the client transport tests and the scanner's test clock. The service objective stays the same. |
+| Architecture | The command selects the HTTP adapter for remote scans. The scanner and scheduler recognize failures through the [storage port](../../apps/collector/src/storage/collector-storage.ts). The adapter uses the version 1 HTTP API and its generated schema. Only the API has access to server storage. Run the [dependency checks](../../.dependency-cruiser.collector.json) with `bun run check:collector-deps`. |
+| Interface | The [collector API contract](collector-api/main.tsp) describes the remote destination, the five operations and the retry header. The client validates responses and returns the [storage outcomes](local-collector/storage.tsp). Test requests, responses, timeouts, rate limits, authentication and per-source rejections with an injected transport. Build the contract and run `bun run check:collector-api`. |
+
+Set `TRACERELIC_COLLECTOR_API_URL` to the API origin and `TRACERELIC_COLLECTOR_TOKEN` to the issued bearer credential to run `scan --once` or `watch` remotely. Use HTTPS for a remote origin. The local API also accepts HTTP on loopback. With both settings absent, the CLI uses its in-memory destination. The history command reads local files independently of these settings.
+
+After a connection drops or times out, the collector reads the accepted checkpoint before it sends more data. If it cannot confirm the write, it reports pending work. For HTTP 429 or a temporary server failure, defer the next attempt by at least one second and honor a longer valid `Retry-After` value. HTTP 401 or 403 stops both one-time and scheduled scans. A typed invalid batch (422) or an upload that exceeds the API's size limit (413) stops its source and the scan continues with the other files.
 
 #### LC-16 · Keep accepted data across API restarts
 
@@ -521,6 +712,15 @@ Feature: Read stored data after a server restart
 1. **Interface.** Write the restart and LC-17 race scenarios before building the adapter. Run server-owned migrations in a disposable database. Use workspace-scoped keys for sessions and records. Scope source checkpoints by installation as well.
 2. **Integration.** After restart, compare the text, order, latest correction, coverage, ownership and source status to the fixture. Use one storage contract suite for both adapters.
 
+| LC-16 constraint | Decision and check |
+| --- | --- |
+| Behavior | Restart the packaged API with fresh connections to PostgreSQL and read the two workspaces through their credentials. Run the [restart scenario](../../apps/api/test/acceptance/postgres/restart.feature), the [first-write race](../../apps/api/test/acceptance/postgres/competing-writes.feature), and the [storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) against disposable databases with `bun run check:collector-postgres`. Compare corrected usage, message order, missing sources, ownership and subsequent writes with the in-memory adapter in `bun run test`. |
+| Observability | Keep the [API commit outcome and duration](collector-api/main.tsp). Report readiness after migrations succeed, and return the existing storage-unavailable response when a connection fails. Check that startup and request errors exclude connection strings and chat text. The service objective stays the same. |
+| Architecture | The API build includes its [versioned migrations](../../apps/api/src/migrations/001-collector-storage.sql). The executable owns the PostgreSQL pool. Store accepted writes and their session, record and source projections in one transaction. Writers in the same workspace take turns so call ownership can move between sessions. Reuse the existing merge rules and apply newly committed writes when an API writer needs to catch up. Reads use workspace-scoped database keys. Run the [dependency checks](../../.dependency-cruiser.collector.json). |
+| Interface | At startup, validate `DATABASE_URL` against the generated [PostgreSQL configuration schema](collector-api/main.tsp). The [version 1 HTTP operations](collector-api/main.tsp) and [storage port](local-collector/storage.tsp) retain their request, response and outcome types. Keep session and record identities scoped to the workspace and provider, and key each source by its installation and stream as well. Build TypeSpec and run the same storage assertions in memory and through the PostgreSQL-backed API. |
+
+Use PostgreSQL 18 from the repository's Compose setup. Before accepting requests, the API connects to the configured database and applies outstanding migrations. Store the full accepted evidence so a later correction or fork can still change the correct session after a restart. A repeated presence report at the same version can succeed without adding another write. Each API process can rebuild its writer state from the database.
+
 #### LC-17 · Make competing writes atomic
 
 ```gherkin
@@ -537,3 +737,12 @@ Feature: Apply a whole batch once
 
 1. **Interface.** Enforce the session version check and all updates in one transaction, including the first insert. Repeat with two different sources in one session. After the loser reloads, both distinct calls must survive.
 2. **Integration.** Force a failure after writing a record. Check rollback of text, usage, ownership, source state and version. Retry once from the old checkpoint. Run the fixture contract and `@two_chats` through the real client, API and database before release.
+
+| LC-17 constraint | Decision and check |
+| --- | --- |
+| Behavior | [Two writers](../../apps/api/test/acceptance/postgres/competing-writes.feature) that start from the same session version get one commit and one conflict. With different sources, the loser reads the shared version and its own checkpoint, retries once, and both calls survive. A [failed ownership transfer](../../apps/api/test/acceptance/postgres/write-rollback.feature) must leave both sessions at their prior versions. Run these cases, the [storage contract](../../apps/collector/test/acceptance/storage/storage.feature) and [two chats](../../apps/collector/test/acceptance/scan/two-chats.feature) through the HTTP client, API and disposable PostgreSQL with `bun run check:collector-postgres`. |
+| Observability | The existing [commit metric](collector-api/main.tsp) records the conflict, temporary storage failure or success, the authenticated scope, and the elapsed time. Check the failed write and retry against the emitted outcomes. The service objective stays the same. |
+| Architecture | The [PostgreSQL storage boundary](../../apps/api/src/storage/collector-database.ts) checks the stored session version when it inserts or advances a session under the workspace lock. The journal, records, affected owners, source state and accepted byte commit in the same transaction. Keep fault injection inside a disposable test database. Check the real transaction with `bun run test` and the [existing dependency rules](../../.dependency-cruiser.collector.json). |
+| Interface | The [storage contract](local-collector/storage.tsp) and [HTTP batch operation](collector-api/main.tsp) specify atomic writes. A stale version or source offset returns `conflict` (HTTP 409), including when another writer created the session first. A failed transaction preserves the previous checkpoint for retry. Compile TypeSpec and exercise the five storage operations through the real client with `bun run check:collector-postgres`. |
+
+The shared storage scenarios also check the missing-source inventory and a final Claude usage report with incomplete coverage. Each scenario exercises the storage adapter selected for that run.
