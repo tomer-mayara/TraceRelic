@@ -43,11 +43,11 @@ bun run collector scan --once --config ./tracerelic.config.json --project .
 
 Use `--project <directory>` to select sessions whose recorded working directory is that directory or a descendant. For Claude Code, you can also select the exact transcript directory under `projects/`. Repeat either option to include more sessions. Omit both options to scan all configured roots.
 
-The standalone command uses memory for one invocation. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, parser state and next byte together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
+The standalone command uses memory for one invocation. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state and next byte together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
 
 Set an optional `installationId` in the configuration when multiple installations scan into one workspace. Each installation keeps its own read position and shares the session's messages and version. Claude rows with a UUID can recover text from an earlier transcript copy. Repeated prompts within a conversation keep their separate positions.
 
-The current scanner imports text and returns `observedTotalTokens: null` with `coverage: "unknown"`. LC-04 and LC-05 add token measurements. Run `bun run check:collector-scan` for both providers and `bun run check:collector-storage` for the storage contract. [Local collector engineering spec](docs/specs/local-collector.md)
+For Codex, `observedTotalTokens` sums measured input and output. Each `usage` record identifies a call or the remaining interval between two cumulative reports. A second copy can supply more detail about the same total. An explicit zero is a measurement. Sessions without measurements have a null total and unknown coverage. A known gap makes measured coverage partial. Claude token accounting is scheduled for LC-05. [Local collector engineering spec](docs/specs/local-collector.md)
 
 ## Run the checks
 

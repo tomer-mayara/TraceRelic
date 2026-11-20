@@ -63,16 +63,44 @@ model BranchObservation {
   sourceOrder: SourceOrder;
 }
 
-model Usage {
-  id: Identifier;
-  revision: Revision;
-  at: utcDateTime;
-  `model`?: string;
+model TokenCounts {
   inputTokens: Count;
   outputTokens: Count;
   cacheReadTokens?: Count;
   cacheWriteTokens?: Count;
   reasoningTokens?: Count;
+}
+
+union UsageKind { "call", "interval" }
+
+model Usage extends TokenCounts {
+  id: Identifier;
+  revision: Revision;
+  at: utcDateTime;
+  /** A model can be recorded for a call or an older untyped observation. */
+  `model`?: string;
+  /** Older records can omit the kind. Only a call can identify a turn or request. */
+  kind?: UsageKind;
+  turnId?: Identifier;
+  requestId?: Identifier;
+}
+
+/** A single verified progression of cumulative counters. The parts together account
+ * for the change in input and output. They can include calls already stored by ID. */
+model UsageWindow {
+  /** Identifies a native counter history and, after a reset, its new range. */
+  historyId: Identifier;
+  start: TokenCounts;
+  end: TokenCounts;
+  parts: Usage[];
+}
+
+/** A separately reported call occurred after this source's last known counter.
+ * A second copy may already include it inside a coarse interval. */
+model UsageAnchor {
+  usageId: Identifier;
+  historyId: Identifier;
+  after?: TokenCounts;
 }
 
 model Batch {
@@ -85,6 +113,14 @@ model Batch {
   branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
+  /** Each anchor refers to a call in this batch's usage list. */
+  usageAnchors?: UsageAnchor[];
+  /** Storage atomically replaces a coarse interval when a verified, complete
+   * partition covers the same counters. Replaying the coarse copy keeps the detail. */
+  usageWindows?: UsageWindow[];
+  /** Upgrade an accepted Codex checkpoint at the same offset to add usage for its prefix.
+   * Supply empty messages and metadata. Compare the exact previous parser state, version and offset. */
+  upgradeFromParserState?: string;
   hasGap?: boolean;
 }
 

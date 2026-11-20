@@ -53,16 +53,37 @@ export interface BranchObservation {
   sourceOrder: SourceOrder;
 }
 
-export interface Usage {
-  id: Identifier;
-  revision: Revision;
-  at: string;
-  model?: string;
+export interface TokenCounts {
   inputTokens: Count;
   outputTokens: Count;
   cacheReadTokens?: Count;
   cacheWriteTokens?: Count;
   reasoningTokens?: Count;
+}
+
+export type UsageKind = "call" | "interval";
+
+export interface Usage extends TokenCounts {
+  id: Identifier;
+  revision: Revision;
+  at: string;
+  model?: string;
+  kind?: UsageKind;
+  turnId?: Identifier;
+  requestId?: Identifier;
+}
+
+export interface UsageWindow {
+  historyId: Identifier;
+  start: TokenCounts;
+  end: TokenCounts;
+  parts: Usage[];
+}
+
+export interface UsageAnchor {
+  usageId: Identifier;
+  historyId: Identifier;
+  after?: TokenCounts;
 }
 
 export interface Batch {
@@ -74,6 +95,9 @@ export interface Batch {
   branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
+  usageAnchors?: UsageAnchor[];
+  usageWindows?: UsageWindow[];
+  upgradeFromParserState?: string;
   hasGap?: boolean;
 }
 

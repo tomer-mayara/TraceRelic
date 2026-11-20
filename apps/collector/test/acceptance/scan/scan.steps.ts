@@ -6,6 +6,7 @@ import { fullFormats } from "ajv-formats/dist/formats.js";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
 import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ScanSelection } from "@tracerelic/collector/history";
 import type { SessionKey, SessionView } from "../../../src/storage/collector-storage.ts";
+import { CodexUsageScanFixture } from "../../fixtures/codex-usage-scan-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 
 const schemaFile = new URL(
@@ -17,9 +18,18 @@ const contract = new Ajv2020({ formats: fullFormats }).addSchema({ ...schema, $s
 
 class ScanScenario {
   fixture!: ScanCommandFixture;
+  counts!: CodexUsageScanFixture;
+  measured!: SessionView;
+  previousIds = new Set<string>();
+  detail: number[] = [];
   growing!: Awaited<ReturnType<ScanCommandFixture["writeGrowingClaudeFile"]>>;
   first!: Awaited<ReturnType<ScanScenario["scanGrowingFile"]>>;
   second!: Awaited<ReturnType<ScanScenario["scanGrowingFile"]>>;
+
+  async scanUsage(id: "desktop" | "laptop") {
+    this.measured = await this.counts.scan(id);
+    assert(contract.validate("SessionView.json", this.measured), contract.errorsText());
+  }
 
   async scanGrowingFile() {
     const views = await this.fixture.scan("--session", this.fixture.claudeKey.sessionId);
@@ -58,7 +68,9 @@ class ScanScenario {
 }
 
 setWorldConstructor(ScanScenario);
-Before(async function (this: ScanScenario) {
+Before({ tags: "@lc04" }, async function (this: ScanScenario) { this.counts = await CodexUsageScanFixture.create(); });
+After({ tags: "@lc04" }, async function (this: ScanScenario) { await this.counts?.close(); });
+Before({ tags: "not @lc04" }, async function (this: ScanScenario) {
   this.fixture = await ScanCommandFixture.create();
   await this.fixture.configure();
 });
@@ -197,4 +209,67 @@ Then("both checkpoints record the accepted line and session version", function (
     assert(contract.validate("ParserCheckpointState.json", state), contract.errorsText());
     assert.partialDeepStrictEqual(state, { version: 1, lineNumber });
   }
+});
+
+Given("the last cumulative total was {int} and a later identified call of {int} was already counted", async function (
+  this: ScanScenario, initial: number, call: number,
+) {
+  await this.counts.report("desktop", 1, initial);
+  await this.counts.report("desktop", 2, undefined, call, "earlier");
+  await this.scanUsage("desktop");
+  assert.equal(this.measured.observedTotalTokens, initial + call);
+  assert.deepEqual(this.measured.usage.map(row => [row.kind, row.inputTokens + row.outputTokens, row.requestId]).sort(),
+    [["call", call, "earlier"], ["interval", initial, undefined]]);
+  this.previousIds = new Set(this.measured.usage.map(row => row.id));
+});
+
+When("the total reaches {int} and the last call reports {int}", async function (
+  this: ScanScenario, total: number, call: number,
+) {
+  await this.counts.report("desktop", 3, total, call, "last");
+  await this.scanUsage("desktop");
+});
+
+Then("the session total is {int}", function (this: ScanScenario, total: number) {
+  assert.equal(this.measured.observedTotalTokens, total);
+});
+
+Then("the new measurements are the last call of {int} and an interval of {int}", function (
+  this: ScanScenario, call: number, interval: number,
+) {
+  assert.equal(this.measured.coverage, "reported");
+  for (const id of this.previousIds) assert(this.measured.usage.some(row => row.id === id));
+  const added = this.measured.usage.filter(row => !this.previousIds.has(row.id));
+  assert.deepEqual(added.map(row => [row.kind, row.inputTokens + row.outputTokens, row.requestId])
+    .sort(), [["call", call, "last"], ["interval", interval, undefined]]);
+  const remainder = added.find(row => row.kind === "interval");
+  assert.equal(remainder?.turnId, undefined);
+  assert.equal(remainder?.model, undefined);
+});
+
+Given("one installation recorded a verified interval of {int} tokens", async function (this: ScanScenario, total: number) {
+  await this.counts.report("desktop", 2, total);
+  await this.scanUsage("desktop");
+  assert.equal(this.measured.observedTotalTokens, total);
+  assert.deepEqual(this.measured.usage.map(row => row.kind), ["interval"]);
+});
+
+When("another copy splits it into {int} and {int} and I scan both copies again", async function (
+  this: ScanScenario, first: number, second: number,
+) {
+  this.detail = [first, second];
+  await this.counts.report("laptop", 1, first, first, "first");
+  await this.counts.report("laptop", 2, first + second, second, "second");
+  await this.scanUsage("laptop");
+  await this.scanUsage("desktop");
+  await this.scanUsage("laptop");
+});
+
+Then("the session still shows {int} tokens and the two parts account for the whole interval", function (
+  this: ScanScenario, total: number,
+) {
+  assert.equal(this.measured.observedTotalTokens, total);
+  assert.equal(this.measured.coverage, "reported");
+  assert.deepEqual(this.measured.usage.map(row => [row.kind, row.requestId, row.inputTokens, row.outputTokens]).sort(),
+    this.detail.map((tokens, index) => ["call", ["first", "second"][index], tokens * 4 / 5, tokens / 5]));
 });

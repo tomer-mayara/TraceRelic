@@ -1,9 +1,16 @@
 import type { RecordBatch } from "../history/index.ts";
-import type { BranchObservation, Message, Metadata } from "../storage/collector-storage.ts";
+import type { BranchObservation, Message, Metadata, Usage, UsageAnchor, UsageWindow } from "../storage/collector-storage.ts";
 
 type PositionedMessage = Message & { sourceOrder: number; blockIndex: number };
 
-export interface DecodedChat {
+export interface DecodedUsage {
+  usage: Usage[];
+  usageAnchors?: UsageAnchor[];
+  usageWindows: UsageWindow[];
+  hasGap: boolean;
+}
+
+export interface DecodedChat extends Partial<DecodedUsage> {
   messages: PositionedMessage[];
   metadata: Metadata;
   branchObservation?: BranchObservation;

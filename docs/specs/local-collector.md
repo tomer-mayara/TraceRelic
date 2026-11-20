@@ -125,7 +125,7 @@ bun run lint
 bun run habit-hooks --all
 ```
 
-The scan check runs the Codex planning chat and the repeated Claude prompt. It verifies every `@two_chats` step has a binding. To run the cross-provider token assertions before LC-04 and LC-05, follow the scan check with `bun run --cwd apps/collector check:scan-scenarios --tags @two_chats`.
+The scan check runs the Codex token scenarios, chat imports and growing-file scenarios. It verifies every `@two_chats` step has a binding. To exercise the cross-provider totals while Claude accounting is pending in LC-05, run `bun run --cwd apps/collector check:scan-scenarios --tags @two_chats` after the scan check.
 
 ## Tickets
 
@@ -342,6 +342,17 @@ Feature: Account for each measured Codex token once
 1. **Unit.** Test repeated totals, cumulative-only counts, and a separate last-call report followed by a cumulative report. Use the rules in [Codex](#codex). Check inclusive input, cache and reasoning fields, an explicit zero, and empty usage.
 2. **Integration.** Restart between the 20-token call and the next snapshot. Preserve the baseline and the calls already counted. Leave the interval's turn and model unset if they are unknown.
 3. **Integration.** Import the coarse and detailed copies in both orders. Replace an interval and add its parts together. A failed replacement keeps the original total.
+
+| LC-04 constraint | Decision and check |
+| --- | --- |
+| Behavior | Import measured Codex input and output once across appends, restarts and copies. Keep an identified last call and attribute the remaining change to an interval. Refine a coarse interval only when the parts cover it. Run the [Codex usage scenarios](../../apps/collector/test/acceptance/scan/codex-token-counts.feature) with `bun run check:collector-scan` and the decoder and restart tests with `bun run test`. |
+| Observability | The session view shows each call or interval, inclusive input and output, any reliable breakdowns, the measured total and coverage. A missing measurement stays unknown. Withhold an uncertain addition and flag a gap. Existing service objectives apply. Run `bun run test` and `bun run check:collector-storage`. |
+| Architecture | The Codex decoder derives measurements from transcript records. The scanner submits them and its checkpoint through the [storage port](../../apps/collector/src/storage/collector-storage.ts). Storage reconciles verified counter ranges inside the session transaction. The existing [dependency rules](../../.dependency-cruiser.collector.json) keep the decoder and scanner independent of the storage adapter. Run `bun run check:collector-deps`. |
+| Interface | The [storage contract](local-collector/storage.tsp) adds call and interval kinds, optional call attribution and cumulative windows whose parts must conserve input and output. Older untyped observations remain readable. Competing writers use the existing version check. The [scan contract](local-collector/scan.tsp) records Codex counter state in a version 2 checkpoint. A conditional upgrade at the accepted byte can backfill a text-only checkpoint. Run `bun run check:collector-storage`, `bun run check:collector-scan` and `bun run test`. |
+
+Copies can share a counter history when they start with the same native session header and recorded creation time. A fragment or an inherited header starts from its first reliable snapshot. A counter reset starts a separate range. When origins or overlapping counter ranges cannot be matched, keep the established measurements and report partial coverage. Store the last reliable baseline and the separately observed calls since that baseline with the checkpoint.
+
+A separate call report carries its source's last known counter when available. If another copy already covers that range, storage retains the call pending a closing snapshot. The published total and the coarse interval stay intact until the finer parts account for the same input and output. Exercise this intermediate state in the copy integration tests.
 
 #### LC-05 · Apply Claude usage corrections
 

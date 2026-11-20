@@ -2,8 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import type {
   Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage,
-  Message, Metadata, SessionKey, SessionView, StreamKey, Usage,
+  Message, Metadata, SessionKey, SessionView, StreamKey, Usage, UsageAnchor,
 } from "./collector-storage.ts";
+import { isCount, isIdentifier, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
+import { UsageWindows } from "./usage-windows.ts";
 
 function encodeSessionKey(key: SessionKey): string {
   return JSON.stringify([key.harness, key.sessionId]);
@@ -15,16 +17,8 @@ function encodeStreamKey(source: StreamKey): string {
   return JSON.stringify(parts);
 }
 
-function isCount(value: number): boolean {
-  return Number.isSafeInteger(value) && value >= 0;
-}
-
 function isRecordNumber(value: number): boolean {
   return isCount(value) && value > 0;
-}
-
-function isIdentifier(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
 }
 
 function hasValidMetadata(fields: Metadata | undefined): boolean {
@@ -34,22 +28,9 @@ function hasValidMetadata(fields: Metadata | undefined): boolean {
     && (fields.parentSessionId === undefined || isIdentifier(fields.parentSessionId));
 }
 
-function hasValidCounts(usage: Usage): boolean {
-  const cacheRead = usage.cacheReadTokens ?? 0;
-  const cacheWrite = usage.cacheWriteTokens ?? 0;
-  const reasoning = usage.reasoningTokens ?? 0;
-  return [usage.revision, usage.inputTokens, usage.outputTokens, cacheRead, cacheWrite, reasoning].every(isCount)
-    && usage.revision > 0
-    && cacheRead + cacheWrite <= usage.inputTokens
-    && reasoning <= usage.outputTokens;
-}
-
-function hasValidIdentity(record: Message | Usage): boolean {
-  return isIdentifier(record.id) && isRecordedTimestamp(record.at);
-}
-
 function hasValidMessage(message: Message): boolean {
-  return hasValidIdentity(message) && (message.role === "user" || message.role === "assistant")
+  return isRecord(message) && isIdentifier(message.id) && isRecordedTimestamp(message.at)
+    && (message.role === "user" || message.role === "assistant")
     && typeof message.text === "string"
     && (message.sourceOrder === undefined || isRecordNumber(message.sourceOrder))
     && (message.blockIndex === undefined || isCount(message.blockIndex))
@@ -129,16 +110,69 @@ function orderedMessages(records: Map<string, StoredMessage>): Message[] {
   return messages;
 }
 
-function mergeUsage(previous: Usage[], incoming: Usage[]): Usage[] | null {
+function mergeUsage(previous: readonly Usage[], incoming: readonly Usage[], codexCalls: ReadonlySet<string> | undefined): Usage[] | null {
   const records = new Map(previous.map((usage) => [usage.id, usage]));
   for (const entry of incoming) {
+    if (!isUsage(entry)) return null;
     const usage = definedFields(entry);
-    if (!hasValidIdentity(usage) || !hasValidCounts(usage)) return null;
     const existing = records.get(usage.id);
-    if (existing?.revision === usage.revision && !isDeepStrictEqual(existing, usage)) return null;
-    if (!existing || usage.revision > existing.revision) records.set(usage.id, usage);
+    if (existing?.revision === usage.revision && !isDeepStrictEqual(existing, usage)) {
+      const merged = codexCalls?.has(usage.id) && mergeCodexCall(existing, usage);
+      if (!merged) return null;
+      records.set(usage.id, merged);
+    } else if (!existing || usage.revision > existing.revision) records.set(usage.id, usage);
   }
   return [...records.values()];
+}
+
+interface StoredAnchor {
+  source: StreamKey;
+  anchor: UsageAnchor;
+}
+
+function mergeAnchors(previous: Map<string, StoredAnchor[]> | undefined, batch: Batch, stream: string) {
+  const anchors = new Map(previous);
+  if (!batch.usageAnchors?.length) return anchors;
+  const calls = new Set(batch.usage.filter(record => record?.kind === "call").map(record => record.id));
+  for (const anchor of batch.usageAnchors) {
+    if (!isRecord(anchor) || !isIdentifier(anchor.usageId) || !calls.has(anchor.usageId) || !isIdentifier(anchor.historyId)
+      || (anchor.after !== undefined && !isTokenCounts(anchor.after))) return null;
+    const known = anchors.get(anchor.usageId) ?? [];
+    if (known.some(entry => encodeStreamKey(entry.source) === stream && isDeepStrictEqual(entry.anchor, anchor))) continue;
+    anchors.set(anchor.usageId, [...known, { source: batch.source, anchor }]);
+  }
+  return anchors;
+}
+
+interface StoredUsage {
+  standalone: Usage[];
+  anchors: Map<string, StoredAnchor[]>;
+  windows: UsageWindows;
+}
+
+function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, stream: string) {
+  if (!Array.isArray(batch.usage) || (batch.usageWindows !== undefined && !Array.isArray(batch.usageWindows))
+    || (batch.usageAnchors !== undefined && !Array.isArray(batch.usageAnchors))) return null;
+  const anchors = mergeAnchors(previous?.measurements.anchors, batch, stream);
+  const windows = UsageWindows.merge(previous?.measurements.windows, batch.usageWindows ?? [], batch.source);
+  if (!anchors || !windows) return null;
+  const parts = windows.measurements;
+  const activeIds = new Set(parts.map(part => part.id));
+  const codexCalls = batch.source.harness === "codex" ? new Set([...anchors.keys(), ...activeIds]) : undefined;
+  const standalone = mergeUsage(previous?.measurements.standalone ?? [], batch.usage, codexCalls);
+  if (!standalone) return null;
+  const visible = standalone.filter(call => activeIds.has(call.id)
+    || !anchors.get(call.id)?.some(({ anchor, source }) => windows.mayCover(anchor, source)));
+  // Carry forward the first time and position only for IDs that survived this transaction.
+  const incoming = [...visible, ...parts];
+  const ids = new Set(incoming.map(record => record.id));
+  const surviving = previous?.view.usage.filter(record => ids.has(record.id)) ?? [];
+  const usage = mergeUsage(surviving, incoming, codexCalls);
+  if (!usage) return null;
+  const total = usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
+  if (!isCount(total)) return null;
+  const hasGap = windows.hasGap || activeIds.size !== parts.length;
+  return { stored: { standalone, anchors, windows }, usage, total, hasGap };
 }
 
 interface RecordedBranch {
@@ -200,6 +234,7 @@ interface StoredSession {
   checkpoints: Map<string, Checkpoint>;
   view: Omit<SessionView, "messages">;
   messages: Map<string, StoredMessage>;
+  measurements: StoredUsage;
   branches?: BranchHistory;
   hasGap: boolean;
 }
@@ -212,21 +247,51 @@ function coverage(records: number, hasGap: boolean): Coverage {
 function mergeSessionRecords(
   previous: StoredSession | undefined, batch: Batch, stream: string,
 ): Omit<StoredSession, "version" | "checkpoints"> | null {
-  if (!hasValidMetadata(batch.metadata)) return null;
+  if (!hasValidMetadata(batch.metadata) || !Array.isArray(batch.messages)) return null;
   const messages = mergeMessages(previous?.messages, batch.messages, stream);
-  const usage = mergeUsage(previous?.view.usage ?? [], batch.usage);
+  const measurements = mergeMeasurements(previous, batch, stream);
   const branches = mergeBranches(previous?.branches, batch, stream);
-  if (!messages || !usage || branches === null) return null;
-  const total = usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
-  if (!isCount(total)) return null;
-  const hasGap = previous?.hasGap === true || batch.hasGap === true;
+  if (!messages || !measurements || branches === null) return null;
+  const { usage, total, stored } = measurements;
+  const hasGap = previous?.hasGap === true || batch.hasGap === true || measurements.hasGap;
   const metadata = { ...previous?.view.metadata, ...definedFields(batch.metadata ?? {}) };
   if (branches) metadata.branch = branches.latest.name;
   const view = {
     key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata, usage,
     coverage: coverage(usage.length, hasGap), observedTotalTokens: usage.length ? total : null,
   };
-  return { view, messages, branches, hasGap };
+  return { view, messages, measurements: stored, branches, hasGap };
+}
+
+function parseState(state: string): unknown {
+  try { return JSON.parse(state || "{}"); } catch { return null; }
+}
+
+function parserEnvelope(value: unknown, version: number, offset: number) {
+  if (!isRecord(value) || value.version !== version || !isCount(value.lineNumber)
+    || value.lineNumber < 1 || value.lineNumber > offset || !isRecord(value.decoder)) return null;
+  return { lineNumber: value.lineNumber, decoder: value.decoder };
+}
+
+function upgradesCodexParser(current: Checkpoint, next: Checkpoint): boolean {
+  const state = parserEnvelope(parseState(next.parserState), 2, current.offset);
+  if (!state || Object.keys(state.decoder).length !== 2 || !isRecord(state.decoder.chat) || !isRecord(state.decoder.usage)) return false;
+  const old = parseState(current.parserState);
+  if (isRecord(old) && Object.keys(old).length === 0) return true;
+  const before = parserEnvelope(old, 1, current.offset);
+  return before !== null && state.lineNumber === before.lineNumber && isDeepStrictEqual(state.decoder.chat, before.decoder);
+}
+
+function checkpointFailure(batch: Batch, current: Checkpoint | undefined): "invalid" | "conflict" | undefined {
+  const { checkpoint, upgradeFromParserState } = batch;
+  if (!isRecord(checkpoint) || !isCount(checkpoint.offset) || typeof checkpoint.parserState !== "string") return "invalid";
+  if (upgradeFromParserState === undefined) return checkpoint.offset > (current?.offset ?? 0) ? undefined : "invalid";
+  if (!current || batch.source.harness !== "codex" || checkpoint.offset !== current.offset
+    || typeof upgradeFromParserState !== "string") return "invalid";
+  if (current.parserState !== upgradeFromParserState) return "conflict";
+  if (batch.messages?.length || batch.branchObservation !== undefined
+    || Object.values(batch.metadata ?? {}).some(value => value !== undefined)) return "invalid";
+  if (!upgradesCodexParser(current, checkpoint)) return "invalid";
 }
 
 export class InMemoryCollectorStorage implements CollectorStorage {
@@ -244,7 +309,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   }
 
   async commit(batch: Batch): Promise<CommitResult> {
-    const { source, checkpoint, expectedVersion, expectedOffset } = batch;
+    const { source, expectedVersion, expectedOffset } = batch;
     if (!isIdentifier(source.sessionId) || !isIdentifier(source.streamId)
       || (source.installationId !== undefined && !isIdentifier(source.installationId))) return "invalid";
     if (!isCount(expectedVersion) || !isCount(expectedOffset)) return "invalid";
@@ -253,16 +318,18 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     // Compare both values and publish the complete session in one synchronous turn.
     const previous = this.sessions.get(session);
     const currentVersion = previous?.version ?? 0;
-    const currentOffset = previous?.checkpoints.get(stream)?.offset ?? 0;
-    if (expectedVersion !== currentVersion || expectedOffset !== currentOffset) return "conflict";
+    const current = previous?.checkpoints.get(stream);
+    if (expectedVersion !== currentVersion || expectedOffset !== (current?.offset ?? 0)) return "conflict";
     const version = currentVersion + 1;
-    if (!isCount(version) || !isCount(checkpoint.offset) || checkpoint.offset <= currentOffset
-      || typeof checkpoint.parserState !== "string") return "invalid";
-    const records = mergeSessionRecords(previous, batch, stream);
+    if (!isCount(version)) return "invalid";
+    const failure = checkpointFailure(batch, current);
+    if (failure) return failure;
+    const incoming = structuredClone(batch);
+    const records = mergeSessionRecords(previous, incoming, stream);
     if (!records) return "invalid";
     const checkpoints = new Map(previous?.checkpoints);
-    checkpoints.set(stream, structuredClone(checkpoint));
-    this.sessions.set(session, { version, checkpoints, ...structuredClone(records) });
+    checkpoints.set(stream, incoming.checkpoint);
+    this.sessions.set(session, { version, checkpoints, ...records });
     return "committed";
   }
 }

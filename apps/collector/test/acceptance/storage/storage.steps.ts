@@ -6,7 +6,9 @@ import { fullFormats } from "ajv-formats/dist/formats.js";
 import type {
   Batch, CheckpointSnapshot, CollectorStorage, CommitResult, SessionKey, SessionView,
 } from "../../../src/storage/collector-storage.ts";
-import { initialPlanningBatch, observation, prompt } from "../../fixtures/collector-storage-fixture.ts";
+import {
+  codexMeasurement, codexParserState, codexSource, codexWindow, initialPlanningBatch, observation, prompt,
+} from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
 const schemaFile = new URL(
@@ -80,6 +82,45 @@ BeforeAll(function () {
     [{ messages: [{ ...message, context: { parentSessionId: "" } }] }, "/messages/0/context/parentSessionId"],
     [{ metadata: { branch: "topic" }, branchObservation: { at: message.at, sourceOrder: 0 } }, "/branchObservation/sourceOrder"],
     [{ metadata: { branch: "topic" }, branchObservation: { at: "today", sourceOrder: 1 } }, "/branchObservation/at"],
+  ];
+  for (const [fields, path] of malformed) {
+    assert.equal(contract.validate("Batch.json", { ...batch, ...fields }), false, path);
+    assert(contract.errors?.some(error => error.instancePath === path), contract.errorsText());
+  }
+});
+
+BeforeAll(function () {
+  const call = { ...codexMeasurement("call", "call", 30), model: "model", turnId: "turn", requestId: "request" };
+  const interval = codexMeasurement("interval", "interval", 20);
+  const window = codexWindow(0, 50, call, interval);
+  const anchor = { usageId: call.id, historyId: window.historyId, after: window.start };
+  const batch: Batch = {
+    source: codexSource, expectedVersion: 1, expectedOffset: 100, checkpoint: { offset: 100, parserState: codexParserState(2) },
+    messages: [], usage: [call], usageAnchors: [anchor], usageWindows: [window],
+    upgradeFromParserState: "{}",
+  };
+  checkWireValue("TokenCounts", window.end);
+  checkWireValue("UsageKind", call.kind);
+  checkWireValue("UsageWindow", window);
+  checkWireValue("UsageAnchor", anchor);
+  checkWireValue("Batch", batch);
+  checkWireValue("SessionView", {
+    key: { harness: codexSource.harness, sessionId: codexSource.sessionId }, metadata: {}, messages: [],
+    usage: [call, interval, observation(10, 2)], coverage: "reported", observedTotalTokens: 62,
+  });
+  const malformed: [object, string][] = [
+    [{ usage: [{ ...call, kind: "other" }] }, "/usage/0/kind"],
+    [{ usage: [{ ...call, turnId: "" }] }, "/usage/0/turnId"],
+    [{ usage: [{ ...call, requestId: "" }] }, "/usage/0/requestId"],
+    [{ usageAnchors: [{ ...anchor, usageId: "" }] }, "/usageAnchors/0/usageId"],
+    [{ usageAnchors: [{ ...anchor, historyId: "" }] }, "/usageAnchors/0/historyId"],
+    [{ usageAnchors: [{ ...anchor, after: { ...window.start, inputTokens: -1 } }] }, "/usageAnchors/0/after/inputTokens"],
+    [{ usageWindows: [{ ...window, historyId: "" }] }, "/usageWindows/0/historyId"],
+    [{ usageWindows: [{ ...window, start: { inputTokens: 0 } }] }, "/usageWindows/0/start"],
+    [{ usageWindows: [{ ...window, end: { ...window.end, outputTokens: -1 } }] }, "/usageWindows/0/end/outputTokens"],
+    [{ usageWindows: [{ ...window, parts: null }] }, "/usageWindows/0/parts"],
+    [{ usageWindows: [{ ...window, parts: [{ ...interval, revision: 0 }] }] }, "/usageWindows/0/parts/0/revision"],
+    [{ upgradeFromParserState: null }, "/upgradeFromParserState"],
   ];
   for (const [fields, path] of malformed) {
     assert.equal(contract.validate("Batch.json", { ...batch, ...fields }), false, path);

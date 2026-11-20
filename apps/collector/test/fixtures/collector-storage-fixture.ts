@@ -1,4 +1,6 @@
-import type { Batch, Message, StreamKey, Usage } from "../../src/storage/collector-storage.ts";
+import type {
+  Batch, Message, StreamKey, TokenCounts, Usage, UsageKind, UsageWindow,
+} from "../../src/storage/collector-storage.ts";
 
 const observedAt = "2026-01-01T00:00:00Z";
 
@@ -37,4 +39,25 @@ export function prompt(text: string): Message {
 
 export function observation(inputTokens: number, outputTokens: number, revision = 1): Usage {
   return { id: "request-1/message-1", at: observedAt, model: "example-model", revision, inputTokens, outputTokens };
+}
+
+export const codexSource: StreamKey = { harness: "codex", sessionId: "measured", streamId: "rollout" };
+
+function counters(tokens: number): TokenCounts {
+  const outputTokens = Math.floor(tokens / 5);
+  return { inputTokens: tokens - outputTokens, outputTokens };
+}
+
+export function codexMeasurement(id: string, kind: UsageKind, tokens: number): Usage {
+  return { id, kind, ...counters(tokens), at: observedAt, revision: 1 };
+}
+
+export function codexWindow(start: number, end: number, ...parts: Usage[]): UsageWindow {
+  return { historyId: "recorded-origin", start: counters(start), end: counters(end), parts };
+}
+
+export function codexParserState(version: 1 | 2, lineNumber = 2): string {
+  const chat = { context: {}, mirrors: {}, occurrences: {} };
+  const decoder = version === 1 ? chat : { chat, usage: { observations: [], disputed: [], seen: {}, pending: [] } };
+  return JSON.stringify({ version, lineNumber, decoder });
 }
