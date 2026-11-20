@@ -248,7 +248,8 @@ reader and CLI used by this stack. The fractional-bound finding also applies to 
 The original review passed 533 Node tests and 68 Cucumber scenario executions. New regression tests
 cover the failures reproduced above. The repaired workspace passes 617 Node tests and 86 Cucumber
 scenario executions across the six standalone checks. The shared scenarios run against each supported
-adapter. Workspace lint, dependency boundaries, generated contracts and Habit Hooks pass. Verification
+adapter. The history suite also runs its six compression checks under Bun. Workspace lint, dependency
+boundaries, generated contracts and Habit Hooks pass. Verification
 uses synthetic transcripts and disposable PostgreSQL 18.7 databases with Node 26.13.1 and Bun 1.4.4.
 
 A 2,800-call rollout grew its parser state to 1,053,422 bytes. The largest initial upload request was
