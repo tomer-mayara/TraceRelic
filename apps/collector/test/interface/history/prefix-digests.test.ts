@@ -1,11 +1,85 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { appendFile, open, utimes, writeFile } from "node:fs/promises";
+import { appendFile, open, readFile, utimes, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
 import { LocalLLMHistoryClaude, LocalLLMHistoryCodex } from "@tracerelic/collector/history";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
+import { CapturedTranscriptFile } from "#src/history/captured-transcript-file";
+
+test("a genuine append during discovery and again during batching keeps the selected bytes and avoids rereading them per batch", async t => {
+  const root = await Rollout.create();
+  t.after(() => root.close());
+  const rows = [Rollout.header("one"), ...Array.from({ length: 30 }, (_, n) => ({ text: String(n) }))];
+  const path = await root.write(rows);
+  const before = await readFile(path);
+  const { file } = await CapturedTranscriptFile.inspect(path, async chunks => {
+    for await (const _chunk of chunks) { await appendFile(path, "\n"); break; }
+  });
+  assert.equal(file.fileSize, before.length);
+  assert.equal(await file.completeEnd(), before.length);
+  const source = (await Array.fromAsync(new LocalLLMHistoryCodex(new GlobalConfig(root.home)).discoverSources()))[0];
+  const batches = source.readBatches({ offset: 0, lineNumber: 0 }, 1)[Symbol.asyncIterator]();
+  const first = await batches.next();
+  assert(!first.done);
+  await appendFile(path, '{"new":true}\n');
+  const handle = await open(path, "r");
+  t.after(() => handle.close());
+  const reads = t.mock.method(Object.getPrototypeOf(handle) as typeof handle, "read");
+  const later = [];
+  for (let result = await batches.next(); !result.done; result = await batches.next()) later.push(...result.value.entries);
+  assert.deepEqual(later.map(entry => entry.record), rows.slice(1));
+  const bytesRead = (await Promise.all(reads.mock.calls.map(call => call.result))).reduce((n, read) => n + (read?.bytesRead ?? 0), 0);
+  assert(bytesRead <= source.fileSize * 3, "one append must not rehash the whole transcript at every subsequent batch");
+});
+
+test("a provisional batch must match the seal even if an overlapping rewrite restores the original prefix", async t => {
+  const root = await Rollout.create();
+  t.after(() => root.close());
+  const path = await root.write([Rollout.header("one"), { text: "first" }]);
+  const bytes = await readFile(path, "utf8");
+  const [source] = await Array.fromAsync(new LocalLLMHistoryCodex(new GlobalConfig(root.home)).discoverSources());
+  const handle = await open(path, "r");
+  t.after(() => handle.close());
+  const prototype = Object.getPrototypeOf(handle) as typeof handle;
+  const read = prototype.read;
+  let replaced = false;
+  t.mock.method(prototype, "read", async function (this: typeof handle, ...args: Parameters<typeof read>) {
+    if (replaced) return Reflect.apply(read, this, args);
+    replaced = true;
+    await writeFile(path, bytes.replace("first", "wrong") + "\n");
+    const result = await Reflect.apply(read, this, args);
+    await writeFile(path, bytes + "\n");
+    return result;
+  });
+  await assert.rejects(Array.fromAsync(source.readBatches({ offset: 0, lineNumber: 0 })), { name: "TranscriptChangedError" });
+});
+
+test("a growing in-place replacement cannot change the selected header or a captured batch", async t => {
+  const root = await Rollout.create();
+  t.after(() => root.close());
+  const path = await root.write([Rollout.header("one"), { text: "retained" }, { text: "suffix" }]);
+  const before = await readFile(path);
+  const changed = (part: string, next: string) => before.toString().replace(part, next) + "extra bytes\n";
+  const reader = new LocalLLMHistoryCodex(new GlobalConfig(root.home));
+  const [captured] = await Array.fromAsync(reader.discoverSources({ sessionIds: ["one"] }));
+  await writeFile(path, changed('"one"', '"two"'));
+  await assert.rejects(Array.fromAsync(captured.readBatches({ offset: 0, lineNumber: 0 })), { name: "TranscriptChangedError" });
+
+  await writeFile(path, before);
+  const [again] = await Array.fromAsync(reader.discoverSources());
+  const batches = again.readBatches({ offset: 0, lineNumber: 0 }, 1)[Symbol.asyncIterator]();
+  const first = await batches.next();
+  assert(!first.done);
+  await writeFile(path, changed("suffix", "edited"));
+  await assert.rejects(batches.next(), { name: "TranscriptChangedError" });
+
+  await writeFile(path, before);
+  await assert.rejects(CapturedTranscriptFile.inspect(path, async chunks => {
+    for await (const _chunk of chunks) { await writeFile(path, changed('"one"', '"two"')); break; }
+  }), { name: "TranscriptChangedError" });
+});
 
 test("verifies several positions in one pass and resumes each session from the verified hash", async t => {
   const fixture = await Claude.create();

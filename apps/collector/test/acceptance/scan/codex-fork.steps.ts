@@ -39,6 +39,16 @@ When("I discover the child before the archived parent and scan twice", async fun
   assert.deepEqual(await this.fork.checkpoints(), this.progress);
 });
 
+When(/^the parent is available as (only its shorter prefix|both full and short files) and I scan again$/, async function (
+  this: ForkScenario, copies: string,
+) {
+  const before = this.progress.child;
+  await this.fork.shortenParent(copies === "both full and short files");
+  this.seen = await this.fork.scan();
+  this.progress = await this.fork.checkpoints();
+  assert.deepEqual(this.progress.child, before);
+});
+
 function checkCodexTotals(this: ForkScenario, parentTokens: number, childTokens: number) {
   assert.equal(this.seen.length, 2);
   const child = this.seen.find(view => view.key.sessionId === "child");

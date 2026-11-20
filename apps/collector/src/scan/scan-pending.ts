@@ -1,11 +1,12 @@
 import type { ByteRange, SourceScope, StreamKey } from "../storage/collector-storage.ts";
 
-type PendingTarget = { source: StreamKey; scope?: never; byteRange?: ByteRange; reason: "storage-unavailable" | "version-conflict" }
-  | { scope: SourceScope; source?: never; byteRange?: never; reason: "storage-unavailable" };
+type PendingTarget = { source: StreamKey; scope?: never; byteRange?: ByteRange; reason: "storage-unavailable" | "version-conflict" | "source-changed" }
+  | { scope: SourceScope; source?: never; byteRange?: never; reason: "storage-unavailable" | "source-changed" };
 
 export type PendingScan = PendingTarget & {
   status: "pending";
   retryAt: string;
+  sourceFile?: string;
 };
 
 function target(reason: PendingScan["reason"], key: StreamKey | SourceScope, byteRange?: ByteRange): PendingTarget {
@@ -13,7 +14,7 @@ function target(reason: PendingScan["reason"], key: StreamKey | SourceScope, byt
   const installation = installationId === undefined ? {} : { installationId };
   if ("root" in key) {
     const { root, projectPaths, sessionIds } = key;
-    return { reason: "storage-unavailable", scope: { harness, root, ...installation, ...(sessionIds && { sessionIds: [...sessionIds] }),
+    return { reason: reason === "source-changed" ? reason : "storage-unavailable", scope: { harness, root, ...installation, ...(sessionIds && { sessionIds: [...sessionIds] }),
       ...(projectPaths && { projectPaths: [...projectPaths] }) } };
   }
   const { sessionId, streamId } = key;
@@ -23,6 +24,14 @@ function target(reason: PendingScan["reason"], key: StreamKey | SourceScope, byt
 
 export class ScanPendingError extends Error {
   readonly pending: PendingScan;
+  private timed = false;
+
+  /** Anchor a received backoff once, even if another request or source check finishes later. */
+  useClock(now: number): void {
+    if (this.timed) return;
+    this.pending.retryAt = ScanPendingError.retryAt(now, this.retryAfterMs);
+    this.timed = true;
+  }
 
   static retryAt(now: number, retryAfterMs = 1000): string {
     // Pending reports use RFC 3339 timestamps with a four-digit year.
@@ -30,10 +39,11 @@ export class ScanPendingError extends Error {
     return new Date(Math.min(now + retryAfterMs, lastDeadline)).toISOString();
   }
 
-  constructor(reason: "storage-unavailable", key: StreamKey | SourceScope, byteRange?: ByteRange, retryAfterMs?: number);
+  constructor(reason: "storage-unavailable" | "source-changed", key: StreamKey | SourceScope, byteRange?: ByteRange, retryAfterMs?: number);
   constructor(reason: PendingScan["reason"], key: StreamKey, byteRange?: ByteRange, retryAfterMs?: number);
   constructor(reason: PendingScan["reason"], key: StreamKey | SourceScope, byteRange?: ByteRange, readonly retryAfterMs = 1000) {
-    const problem = reason === "version-conflict" ? "Storage returned conflict" : "Storage connection unavailable";
+    const problem = reason === "source-changed" ? "Transcript changed again during rediscovery"
+      : reason === "version-conflict" ? "Storage returned conflict" : "Storage connection unavailable";
     const bytes = byteRange ? `, bytes ${byteRange.startOffset}..${byteRange.endOffset}` : "";
     super(`${problem} for ${"root" in key ? key.root : key.streamId}${bytes}`);
     this.name = "ScanPendingError";

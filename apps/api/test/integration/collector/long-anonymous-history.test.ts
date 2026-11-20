@@ -1,0 +1,37 @@
+import assert from "node:assert/strict";
+import { appendFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { test } from "node:test";
+import { CollectorCommand } from "@tracerelic/collector/command";
+import { ClaudeProjectFixture as Claude } from "#collector-fixture/claude-project-fixture";
+import { DurableApiFixture } from "../../fixtures/durable-api-fixture.ts";
+
+test("17,000 anonymous messages retain their IDs and a repeated prompt after the API and scanner restart", async t => {
+  const api = await DurableApiFixture.open();
+  const root = await Claude.create();
+  t.after(() => Promise.all([api.close(), root.close()]));
+  const config = join(root.home, "collector.json");
+  await writeFile(config, JSON.stringify({ codexPath: root.home, claudePath: root.home, installationId: "desktop" }));
+  const key = { harness: "claude", sessionId: "long" } as const;
+  const at = "2026-01-01T00:00:00Z";
+  const row = (i: number) => Claude.user(key.sessionId, at, "Question " + i);
+  const file = await root.write("project", key.sessionId, Array.from({ length: 17_000 }, (_, i) => row(i)));
+  const args = ["scan", "--once", "--config", config];
+  const initial = await api.start();
+  await new CollectorCommand(initial.a).run(args);
+  const before = await initial.a.readSession(key);
+  assert.equal(before?.messages.length, 17_000);
+  await appendFile(file, JSON.stringify(row(0)) + "\n");
+  const fresh = await api.restart();
+  await new CollectorCommand(fresh.a).run(args);
+  const after = await fresh.a.readSession(key);
+  assert.equal(after?.messages.length, 17_001);
+  assert.deepEqual(after.messages.slice(0, -1), before.messages);
+  assert.equal(after.messages.at(-1)?.text, before.messages[0].text);
+  assert.equal(new Set(after.messages.map(row => row.id)).size, 17_001);
+  const source = { ...key, streamId: "projects/project/long.jsonl", installationId: "desktop" };
+  const accepted = await fresh.a.readCheckpoint(source);
+  assert(accepted.checkpoint);
+  await new CollectorCommand(fresh.a).run(args);
+  assert.deepEqual(await fresh.a.readCheckpoint(source), accepted);
+});

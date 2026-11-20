@@ -1,20 +1,25 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseError, Pool, type PoolClient, type QueryResultRow } from "pg";
-import { matchesSourceScope, StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint,
+import type { CollectorScope } from "../collector-credentials.ts";
+import { legacyScannerLine, matchesSourceScope, sourceHistoryDiagnostic, StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint,
   type CheckpointSnapshot, type Message, type PresenceWrite, type SessionKey, type SessionView,
   type SourceScope, type StreamKey, type Usage } from "@tracerelic/collector/storage";
+import type { PersistedSession, RecordChanges, SessionRecords } from "./collector-projection.ts";
 
 export type CollectorWrite = { kind: "batch"; value: Batch } | { kind: "presence"; value: PresenceWrite };
 
-export interface PersistedSession { version: number; view: SessionView }
+type SourceAliasWrite = { kind: "alias"; value: { source: StreamKey; target: string; expectedVersion: number } };
+export type JournalWrite = CollectorWrite | SourceAliasWrite;
 
 export class SessionVersionConflict extends Error {
   constructor() { super("Collector session version conflict"); }
 }
 
 export interface CollectorTransaction {
-  entriesAfter(position: string, limit?: number): Promise<{ position: string; write: CollectorWrite }[]>;
+  saveAlias(write: SourceAliasWrite, summary: PersistedSession["summary"]): Promise<string>;
+  recordsFor(key: SessionKey): Promise<SessionRecords>;
+  entriesAfter(position: string, limit?: number): Promise<{ position: string; write: JournalWrite }[]>;
   save(write: CollectorWrite, sessions: readonly PersistedSession[], checkpoint: Checkpoint,
     inventory: AcknowledgedSource | null): Promise<string>;
 }
@@ -50,23 +55,82 @@ class Queries {
   }
 }
 
+/** Migration 3 updates projections that would otherwise wait indefinitely for the collector to reconnect. */
+async function flagUnverifiedHistory(sql: Queries): Promise<void> {
+  // A JSON wire string can contain NUL or unpaired surrogates. Select candidates by text and decode the
+  // original JSON in the application, just as the journal reader does. A cursor bounds the working set.
+  await sql.rows(`DECLARE prior_sources NO SCROLL CURSOR FOR
+    SELECT workspace_key, checkpoint, inventory, NULL::json AS write FROM tracerelic_collector.sources
+      WHERE inventory::text LIKE '%"missing"%'
+    UNION ALL
+    SELECT workspace_key, NULL::json, NULL::json, entry FROM tracerelic_collector.writes
+      WHERE entry::text LIKE '%"resetFrom"%'`);
+  type Row = { workspace_key: Buffer; checkpoint: Checkpoint | null; inventory: AcknowledgedSource | null; write: CollectorWrite | null };
+  for (;;) {
+    const rows = await sql.rows<Row>("FETCH FORWARD 32 FROM prior_sources");
+    if (!rows.length) break;
+    for (const { workspace_key, checkpoint, inventory, write } of rows) {
+      const reset = write?.kind === "batch" && write.value.resetFrom;
+      const source = reset ? write.value.source : inventory?.presence === "missing" && inventory.source;
+      const prior = reset || checkpoint;
+      if (!source || !prior || legacyScannerLine(prior) === undefined) continue;
+      const key = sessionKey(workspace_key, source);
+      const [row] = await sql.rows<{ summary: Omit<SessionView, "messages" | "usage"> }>(
+        "SELECT summary FROM tracerelic_collector.sessions WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 FOR UPDATE", key);
+      const summary = row.summary;
+      const diagnostics = summary.usageDiagnostics ?? [];
+      if (diagnostics.some(d => d.code === "unverified-source-history" && d.streamId === source.streamId && d.installationId === source.installationId)) continue;
+      const coverage = summary.observedTotalTokens === null ? "unknown" : "partial";
+      await sql.rows("UPDATE tracerelic_collector.sessions SET summary=$4 WHERE workspace_key=$1 AND harness=$2 AND session_key=$3",
+        [...key, JSON.stringify({ ...summary, coverage, usageDiagnostics: [...diagnostics, sourceHistoryDiagnostic(source)] })]);
+    }
+  }
+  await sql.rows("CLOSE prior_sources");
+}
+
 class WorkspaceTransaction implements CollectorTransaction {
   constructor(private readonly workspace: Buffer, private readonly sql: Queries) {}
 
-  entriesAfter(position: string, limit?: number): Promise<{ position: string; write: CollectorWrite }[]> {
+  private async append(write: JournalWrite) {
+    const [entry] = await this.sql.rows<{ position: string }>(
+      "INSERT INTO tracerelic_collector.writes (workspace_key, entry) VALUES ($1, $2) RETURNING position::text",
+      [this.workspace, JSON.stringify(write)]);
+    return entry.position;
+  }
+
+  async saveAlias(write: SourceAliasWrite, summary: PersistedSession["summary"]) {
+    const { source, target, expectedVersion } = write.value;
+    const key = sessionKey(this.workspace, source);
+    const [saved] = await this.sql.rows(`UPDATE tracerelic_collector.sessions SET summary=$4
+      WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 AND version=$5 RETURNING 1`,
+    [...key, JSON.stringify(summary), expectedVersion]);
+    if (!saved) throw new SessionVersionConflict();
+    await this.sql.rows(`INSERT INTO tracerelic_collector.source_aliases
+      (workspace_key,harness,session_key,installation_key,stream_key,target) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [...key, identity(source.installationId), identity(source.streamId), JSON.stringify(target)]);
+    return this.append(write);
+  }
+
+  entriesAfter(position: string, limit?: number): Promise<{ position: string; write: JournalWrite }[]> {
     return this.sql.rows(`SELECT position::text AS position, entry AS write FROM tracerelic_collector.writes AS w
       WHERE workspace_key = $1 AND w.position > $2::bigint ORDER BY w.position LIMIT $3`, [this.workspace, position, limit ?? null]);
+  }
+
+  async recordsFor(key: SessionKey): Promise<SessionRecords> {
+    const [row] = await this.sql.rows<SessionRecords>(`SELECT
+        COALESCE(json_agg(payload ORDER BY ordinal) FILTER (WHERE kind='message'), '[]') AS messages,
+        COALESCE(json_agg(payload ORDER BY ordinal) FILTER (WHERE kind='usage'), '[]') AS usage
+      FROM tracerelic_collector.records WHERE workspace_key=$1 AND harness=$2 AND session_key=$3`, sessionKey(this.workspace, key));
+    return row;
   }
 
   async save(write: CollectorWrite, sessions: readonly PersistedSession[], checkpoint: Checkpoint,
     inventory: AcknowledgedSource | null): Promise<string> {
     const { source, expectedVersion } = write.value;
-    const sourceSession = sessions.find(({ view: { key } }) => key.harness === source.harness && key.sessionId === source.sessionId);
+    const sourceSession = sessions.find(({ summary: { key } }) => key.harness === source.harness && key.sessionId === source.sessionId);
     if (!sourceSession) throw new Error("Accepted collector write has no source session");
-    const [entry] = await this.sql.rows<{ position: string }>(
-      "INSERT INTO tracerelic_collector.writes (workspace_key, entry) VALUES ($1, $2) RETURNING position::text",
-      [this.workspace, JSON.stringify(write)]);
-    await this.saveSession(sourceSession, expectedVersion, entry.position);
+    const position = await this.append(write);
+    await this.saveSession(sourceSession, expectedVersion, position);
     for (const peer of sessions) {
       if (peer !== sourceSession) await this.saveSession(peer, peer.version - 1);
     }
@@ -75,14 +139,13 @@ class WorkspaceTransaction implements CollectorTransaction {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
       ON CONFLICT (workspace_key, harness, session_key, installation_key, stream_key) DO UPDATE
       SET root_key = EXCLUDED.root_key, checkpoint = EXCLUDED.checkpoint, inventory = EXCLUDED.inventory`,
-    [...sessionKey(this.workspace, source), identity(source.installationId), identity(source.streamId), entry.position,
+    [...sessionKey(this.workspace, source), identity(source.installationId), identity(source.streamId), position,
       inventory && identity(inventory.location.root), JSON.stringify(checkpoint), inventory && JSON.stringify(inventory)]);
-    return entry.position;
+    return position;
   }
 
-  private async saveSession({ version, view }: PersistedSession, expectedVersion: number, firstPosition?: string): Promise<void> {
-    const key = sessionKey(this.workspace, view.key);
-    const { messages, usage, ...summary } = view;
+  private async saveSession({ version, summary, messages, usage }: PersistedSession, expectedVersion: number, firstPosition?: string): Promise<void> {
+    const key = sessionKey(this.workspace, summary.key);
     const values = [...key, JSON.stringify(summary)];
     // A source can create a session. An ownership transfer must find an existing peer at its expected version.
     const [saved] = expectedVersion === 0 && firstPosition !== undefined
@@ -97,27 +160,35 @@ class WorkspaceTransaction implements CollectorTransaction {
     await this.saveRecords(key, "usage", usage);
   }
 
-  private async saveRecords(key: ReturnType<typeof sessionKey>, kind: "message" | "usage", rows: readonly (Message | Usage)[]) {
-    // Apply the record and order changes for this session in one round trip per kind.
-    await this.sql.rows(`WITH desired AS (
+  private async saveRecords(key: ReturnType<typeof sessionKey>, kind: "message" | "usage", { upserts, removed }: RecordChanges<Message | Usage>) {
+    if (!upserts.length && !removed.length) return;
+    await this.sql.rows(`WITH changed AS (
         SELECT decode(record_key, 'hex') AS record_key, payload, ordinal
-        FROM unnest($5::text[], $6::text[]) WITH ORDINALITY AS r(record_key, payload, ordinal)
+        FROM unnest($5::text[], $6::text[], $7::bigint[]) AS r(record_key, payload, ordinal)
       ), upserted AS (
-        INSERT INTO tracerelic_collector.records AS old (workspace_key, harness, session_key, kind, record_key, ordinal, payload)
-        SELECT $1,$2,$3,$4,record_key,ordinal,payload::json FROM desired
+        INSERT INTO tracerelic_collector.records (workspace_key, harness, session_key, kind, record_key, ordinal, payload)
+        SELECT $1,$2,$3,$4,record_key,ordinal,payload::json FROM changed
         ON CONFLICT (workspace_key, harness, session_key, kind, record_key) DO UPDATE
         SET ordinal = EXCLUDED.ordinal, payload = EXCLUDED.payload
-        WHERE (old.ordinal, old.payload::text) IS DISTINCT FROM (EXCLUDED.ordinal, EXCLUDED.payload::text)
       )
-      DELETE FROM tracerelic_collector.records AS old
-      WHERE old.workspace_key = $1 AND old.harness = $2 AND old.session_key = $3 AND old.kind = $4
-        AND NOT EXISTS (SELECT 1 FROM desired WHERE desired.record_key = old.record_key)`,
-    [...key, kind, rows.map(row => identity(row.id).toString("hex")), rows.map(row => JSON.stringify(row))]);
+      DELETE FROM tracerelic_collector.records
+      WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 AND kind=$4
+        AND record_key IN (SELECT decode(id,'hex') FROM unnest($8::text[]) AS id)`,
+    [...key, kind, upserts.map(({ record }) => identity(record.id).toString("hex")), upserts.map(({ record }) => JSON.stringify(record)),
+      upserts.map(({ ordinal }) => ordinal), removed.map(id => identity(id).toString("hex"))]);
   }
+}
+
+async function lookupAlias(sql: Queries, workspace: Buffer, source: StreamKey): Promise<string | undefined> {
+  const [row] = await sql.rows<{ target: string }>(`SELECT target FROM tracerelic_collector.source_aliases
+    WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 AND installation_key=$4 AND stream_key=$5`,
+  [...sessionKey(workspace, source), identity(source.installationId), identity(source.streamId)]);
+  return row?.target;
 }
 
 export class PostgresCollectorDatabase {
   private readonly sql: Queries;
+  private expiration?: NodeJS.Timeout;
 
   private constructor(private readonly pool: Pool) {
     this.sql = new Queries(pool);
@@ -131,6 +202,8 @@ export class PostgresCollectorDatabase {
     const database = new PostgresCollectorDatabase(new Pool({ connectionString: url, connectionTimeoutMillis: 5000 }));
     try {
       await database.migrate();
+      await database.expireUploads();
+      database.expiration = setInterval(() => { void database.expireUploads().catch(() => {}); }, 3_600_000).unref();
       return database;
     } catch (error) {
       await database.close();
@@ -138,7 +211,34 @@ export class PostgresCollectorDatabase {
     }
   }
 
-  close(): Promise<void> { return databaseCall(() => this.pool.end()); }
+  close(): Promise<void> {
+    clearInterval(this.expiration);
+    return databaseCall(() => this.pool.end());
+  }
+
+  private expireUploads() { return this.sql.rows("DELETE FROM tracerelic_collector.upload_parts WHERE expires_at < now()"); }
+
+  async putPart(scope: CollectorScope, upload: string, index: number, data: Buffer): Promise<boolean> {
+    const rows = await this.sql.rows(`INSERT INTO tracerelic_collector.upload_parts AS existing
+      (workspace_key,installation_key,upload,part_index,payload,expires_at) VALUES ($1,$2,$3,$4,$5,now()+interval '1 day')
+      ON CONFLICT (workspace_key,installation_key,upload,part_index) DO UPDATE SET payload=excluded.payload, expires_at=excluded.expires_at
+      WHERE existing.payload=excluded.payload OR existing.expires_at<now() RETURNING 1`, [identity(scope.workspaceId), identity(scope.installationId), upload, index, data]);
+    return rows.length === 1;
+  }
+
+  async parts(scope: CollectorScope, upload: string, count: number): Promise<Buffer[] | undefined> {
+    const rows = await this.sql.rows<{ index: number; payload: Buffer }>(`SELECT part_index::float8 AS index,payload
+      FROM tracerelic_collector.upload_parts WHERE workspace_key=$1 AND installation_key=$2 AND upload=$3 AND expires_at>=now()
+      ORDER BY part_index`, [identity(scope.workspaceId), identity(scope.installationId), upload]);
+    if (rows.length === count && rows.every((row, index) => row.index === index)) return rows.map(row => row.payload);
+  }
+
+  async discardParts(scope: CollectorScope, upload: string) {
+    await this.sql.rows("DELETE FROM tracerelic_collector.upload_parts WHERE workspace_key=$1 AND installation_key=$2 AND upload=$3",
+      [identity(scope.workspaceId), identity(scope.installationId), upload]);
+  }
+
+  canonical(workspaceId: string, source: StreamKey) { return lookupAlias(this.sql, identity(workspaceId), source); }
 
   private async migrate(): Promise<void> {
     await this.transaction(async sql => {
@@ -148,11 +248,14 @@ export class PostgresCollectorDatabase {
       await sql.rows(`CREATE TABLE IF NOT EXISTS tracerelic_collector.schema_migrations
         (version integer PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())`);
       const versions = await sql.rows<{ version: number }>("SELECT version FROM tracerelic_collector.schema_migrations ORDER BY version");
-      if (versions.some(row => row.version !== 1)) throw new Error("Unsupported collector database version");
-      if (versions.length) return;
-      const file = new URL("../migrations/001-collector-storage.sql", import.meta.url);
-      await sql.rows(await readFile(file, "utf8"));
-      await sql.rows("INSERT INTO tracerelic_collector.schema_migrations (version) VALUES (1)");
+      const migrations = ["001-collector-storage.sql", "002-collector-wire.sql", flagUnverifiedHistory];
+      if (versions.some((row, index) => row.version !== index + 1 || row.version > migrations.length)) throw new Error("Unsupported collector database version");
+      for (let index = versions.length; index < migrations.length; index++) {
+        const migration = migrations[index];
+        if (typeof migration === "string") await sql.rows(await readFile(new URL("../migrations/" + migration, import.meta.url), "utf8"));
+        else await migration(sql);
+        await sql.rows("INSERT INTO tracerelic_collector.schema_migrations (version) VALUES ($1)", [index + 1]);
+      }
     });
   }
 
@@ -194,13 +297,17 @@ export class PostgresCollectorDatabase {
   }
 
   async readCheckpoint(workspaceId: string, source: StreamKey): Promise<CheckpointSnapshot> {
-    const [snapshot] = await this.sql.rows<CheckpointSnapshot>(`SELECT s.version::float8 AS version, src.checkpoint
+    const [snapshot] = await this.sql.rows<CheckpointSnapshot & { inventory: AcknowledgedSource | null }>(`SELECT s.version::float8 AS version, src.checkpoint, src.inventory
       FROM tracerelic_collector.sessions s LEFT JOIN tracerelic_collector.sources src
         ON (s.workspace_key, s.harness, s.session_key) = (src.workspace_key, src.harness, src.session_key)
         AND src.installation_key = $4 AND src.stream_key = $5
       WHERE s.workspace_key = $1 AND s.harness = $2 AND s.session_key = $3`,
     [...sessionKey(identity(workspaceId), source), identity(source.installationId), identity(source.streamId)]);
-    return snapshot ?? { version: 0, checkpoint: null };
+    if (!snapshot) return { version: 0, checkpoint: null };
+    const { version, checkpoint, inventory } = snapshot;
+    const observedThrough = inventory?.unrecovered ?? (inventory && inventory.observedEnd > (checkpoint?.offset ?? 0)
+      ? { offset: inventory.observedEnd, ...(inventory.observedPrefixDigest && { prefixDigest: inventory.observedPrefixDigest }) } : undefined);
+    return { version, checkpoint, ...(observedThrough && { observedThrough }) };
   }
 
   async listSources(workspaceId: string, scope: SourceScope): Promise<AcknowledgedSource[]> {
@@ -208,6 +315,9 @@ export class PostgresCollectorDatabase {
       `SELECT s.version::float8 AS version, src.inventory
        FROM tracerelic_collector.sources src JOIN tracerelic_collector.sessions s USING (workspace_key, harness, session_key)
        WHERE src.workspace_key = $1 AND src.harness = $2 AND src.installation_key = $3 AND src.root_key = $4
+         AND NOT EXISTS (SELECT 1 FROM tracerelic_collector.source_aliases a
+           WHERE (a.workspace_key,a.harness,a.session_key,a.installation_key,a.stream_key)
+             = (src.workspace_key,src.harness,src.session_key,src.installation_key,src.stream_key))
        ORDER BY s.first_position, src.first_position`,
       [identity(workspaceId), scope.harness, identity(scope.installationId), identity(scope.root)]);
     return rows.filter(({ inventory }) => matchesSourceScope(scope, inventory.source, inventory.location))

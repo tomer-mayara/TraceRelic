@@ -66,6 +66,8 @@ model TranscriptSourceInfo {
   previousCopy: boolean;
   /** Only the child's own native Codex header supplies this link. */
   codexForkHeader?: CodexForkHeader;
+  /** End of the first valid native Codex header in the sealed prefix. */
+  codexHeaderEnd?: Count;
   /** Native parent and agent of a selected Claude subagent transcript. */
   claudeSubagent?: ClaudeSubagent;
   /** First working directory used for project selection, when available. */
@@ -93,6 +95,8 @@ model ScannedEntry<Entry extends {}> {
   ...Entry;
   /** Inclusive byte position of this complete physical record. */
   startOffset: Count;
+  /** For conversation records, identifies this exact occurrence across verified file copies. */
+  recordPrefixDigest?: PrefixDigest;
   /** A native Codex session header can follow leading blank lines. */
   afterBlankPrefix?: true;
 }
@@ -112,7 +116,10 @@ model RecordBatch<Entry extends {}> {
 model CodexRecordBatch is RecordBatch<CodexRolloutEntry>;
 model ClaudeRecordBatch is RecordBatch<ClaudeTranscriptEntry>;
 
-/** Start at zero or a saved next position. Read within the captured file size.
+/** Start at zero or a saved next position. Read within the captured logical file size.
+ * Selection, logical bytes and their SHA-256 proof belong to one capture.
+ * A true append leaves that extent unchanged; an in-place rewrite invalidates the capture.
+ * Plain and Zstandard Codex representations use the same uncompressed offsets and hashes.
  * A record larger than the batch budget occupies its own batch. If the file is
  * replaced or truncated during reading, report the source path and discard the pending batch. */
 interface SourceBatches<Entry extends {}> {
@@ -132,8 +139,10 @@ interface LocalLLMHistoryCodex extends LocalLLMHistory {
 }
 
 interface LocalLLMHistoryClaude extends LocalLLMHistory {
-  /** Check transcript paths in the accessible Claude root, including possible earlier copies. */
-  confirmedAbsent(paths: Identifier[]): Identifier[];
+  /** Ignore a backup's current-name alias only when its identity or accepted prefix has been disproved. */
+  confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
+  /** Identify every readable session in backups of the acknowledged relative paths. */
+  recoveryCandidates(paths: Identifier[]): ClaudeRecoveryCandidate[];
   discoverSources(selection?: ScanSelection): TranscriptSourceInfo[];
   /** Yield complete records grouped by file and effective session ID.
    * Include earlier copies of a selected file for the same session.
@@ -141,14 +150,22 @@ interface LocalLLMHistoryClaude extends LocalLLMHistory {
   readTranscripts(selection?: ScanSelection): ClaudeTranscript[];
 }
 
+model ClaudeRecoveryCandidate {
+  currentPath: Identifier;
+  path: Identifier;
+  sources: TranscriptSourceInfo[];
+}
+
 /** A one-time scan could not confirm its work. An explicit new scan can retry immediately. */
 @TypeSpec.JsonSchema.extension("oneOf", #[#{ required: #["source"] }, #{ required: #["scope"] }])
 @TypeSpec.JsonSchema.extension("dependentSchemas", #{
-  scope: #{ `not`: #{ required: #["byteRange"] }, properties: #{ reason: #{ `const`: "storage-unavailable" } } }
+  scope: #{ `not`: #{ required: #["byteRange"] }, properties: #{ reason: #{ `enum`: #["storage-unavailable", "source-changed"] } } }
 })
 model PendingScan {
   status: "pending";
-  reason: "storage-unavailable" | "version-conflict";
+  reason: "storage-unavailable" | "version-conflict" | "source-changed";
+  /** Local capture still changing after a bounded rediscovery. */
+  sourceFile?: Identifier;
   source?: StreamKey;
   /** The selected inventory is unavailable before a particular source can be identified. */
   scope?: SourceScope;
@@ -207,4 +224,6 @@ interface LocalCollector {
    * Emit one MissingSource for each newly confirmed disappearance in the selection.
    * After scanning, raise a scan error carrying RejectedScan if any batch was rejected. */
   scanOnce(selection?: ScanSelection): SessionView[];
+  /** Run the same import and presence checks for watch without fetching the final conversation views. */
+  scanForChanges(selection?: ScanSelection): void;
 }

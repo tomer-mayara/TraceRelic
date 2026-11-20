@@ -1,13 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
-import type { ClaudeIdentity, ClaudeOriginReports, LocatedOrigin, NativeCall } from "./claude-origin-reports.ts";
-import type { ClaudeUsageReport, SourceUsageDiagnostic } from "./collector-storage.ts";
+import type { ClaudeIdentity, ClaudeOriginReports, LocatedOrigin, NativeCall, OwnedReport } from "./claude-origin-reports.ts";
+import type { SourceUsageDiagnostic } from "./collector-storage.ts";
 
 interface Owner extends ClaudeIdentity {
   sessionId: string;
   key: string;
 }
 
-function rekey(report: ClaudeUsageReport, owner: Owner): ClaudeUsageReport {
+function rekey(report: OwnedReport, owner: Owner): OwnedReport {
   const { requestId: _, messageId: __, ...fields } = report;
   return { ...fields, ...(owner.requestId && { requestId: owner.requestId }), ...(owner.messageId && { messageId: owner.messageId }) };
 }
@@ -16,7 +16,7 @@ function rekey(report: ClaudeUsageReport, owner: Owner): ClaudeUsageReport {
 export class ClaudeSessionOwnership {
   readonly assigned = new Map<string, Owner | null>();
   readonly diagnostics = new Map<string, SourceUsageDiagnostic>();
-  readonly contributions = new Map<string, ClaudeUsageReport[]>();
+  readonly contributions = new Map<string, OwnedReport[]>();
 
   constructor(sessionId: string, records: ClaudeOriginReports, parent?: ClaudeOriginReports, known?: ClaudeSessionOwnership) {
     for (const call of records.calls.values()) this.assigned.set(call.key, this.owner(sessionId, call, parent, known));
@@ -24,7 +24,8 @@ export class ClaudeSessionOwnership {
       const owner = this.assigned.get(callKey);
       if (owner) {
         const reports = this.contributions.get(owner.sessionId) ?? [];
-        reports.push(owner.sessionId === sessionId ? report : rekey(report, owner));
+        const located: OwnedReport = { ...report, origin };
+        reports.push(owner.sessionId === sessionId ? located : rekey(located, owner));
         this.contributions.set(owner.sessionId, reports);
       } else if (origin) this.note(origin);
     }

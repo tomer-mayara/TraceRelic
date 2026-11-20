@@ -1,13 +1,18 @@
 import { basename, join } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
+import { compatibleCodexCopies, type CodexCopy } from "./codex-rollout-copies.ts";
 import { type DirectoryListing, listDirectory, TranscriptDirectories } from "./transcript-directories.ts";
 import {
-  LocalLLMHistory, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry, type TranscriptSource,
+  LocalLLMHistory, type LocalHistoryEntry, type ScanSelection, type SourceDiscoveryOptions, type Transcript, type TranscriptEntry, type TranscriptSource,
 } from "./local-llm-history.ts";
 
 export type CodexSelection = ScanSelection;
 export type CodexRolloutEntry = TranscriptEntry<"codex">;
 export type CodexRollout = Transcript<CodexRolloutEntry>;
+
+export function codexRolloutName(sourceFile: string): string {
+  return basename(sourceFile).replace(/\.jsonl\.zst$/, ".jsonl");
+}
 
 export class LocalLLMHistoryCodex extends LocalLLMHistory {
   private readonly config: GlobalConfig;
@@ -17,20 +22,35 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
     this.config = config;
   }
 
-  async readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]> {
-    const inRange = this.dateFilter(fromDate, toDate);
+  protected async readWindow(inRange: (timestamp: string) => boolean): Promise<readonly LocalHistoryEntry[]> {
     const entries: LocalHistoryEntry[] = [];
-    for await (const sourceFile of this.rolloutFiles()) {
-      let sessionId: string | undefined;
-      for await (const { record, lineNumber } of this.readRecords(sourceFile)) {
-        sessionId ??= this.header(record)?.sessionId;
-        const { timestamp } = record;
-        if (sessionId && typeof timestamp === "string" && inRange(timestamp)) {
-          entries.push({ harness: "codex", sessionId, sourceFile, record, lineNumber, timestamp });
+    for await (const { paths, mixed } of this.representations()) {
+      const copies: CodexCopy<LocalHistoryEntry[]>[] = [];
+      for (const sourceFile of paths) {
+        if (mixed) {
+          const { file, result } = await this.inspectFile(sourceFile, rows => this.dateRecords(sourceFile, rows, inRange));
+          copies.push({ file, sessionId: result.sessionId, value: result.entries });
+        } else {
+          const result = await this.dateRecords(sourceFile, this.readRecords(sourceFile), inRange);
+          for (const row of result.entries) entries.push(row);
         }
       }
+      for (const result of await compatibleCodexCopies(copies)) for (const row of result) entries.push(row);
     }
     return entries;
+  }
+
+  private async dateRecords(sourceFile: string, rows: AsyncIterable<Pick<LocalHistoryEntry, "record" | "lineNumber">>, inRange: (at: string) => boolean) {
+    const entries: LocalHistoryEntry[] = [];
+    let sessionId: string | undefined;
+    for await (const { record, lineNumber } of rows) {
+      sessionId ??= this.header(record)?.sessionId;
+      const { timestamp } = record;
+      if (sessionId && typeof timestamp === "string" && inRange(timestamp)) {
+        entries.push({ harness: "codex", sessionId, sourceFile, record, lineNumber, timestamp });
+      }
+    }
+    return { entries, sessionId };
   }
 
   async *readRollouts(selection: CodexSelection = {}): AsyncGenerator<CodexRollout> {
@@ -40,10 +60,16 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
     }
   }
 
-  async *discoverSources(selection: CodexSelection = {}): AsyncGenerator<TranscriptSource<CodexRolloutEntry>> {
-    for await (const sourceFile of this.rolloutFiles()) {
-      const source = await this.discoverRollout(sourceFile, selection);
-      if (source) yield source;
+  async *discoverSources(selection: CodexSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<TranscriptSource<CodexRolloutEntry>> {
+    for await (const { paths, mixed } of this.representations(options.sourceFile)) {
+      const copies: CodexCopy<TranscriptSource<CodexRolloutEntry>>[] = [];
+      for (const sourceFile of paths) {
+        for await (const source of this.discoverFileSafely(this.discoverRollout(sourceFile, selection), options)) {
+          if (mixed) copies.push({ file: source, sessionId: source.sessionId, value: source });
+          else yield source;
+        }
+      }
+      yield* await compatibleCodexCopies(copies, options);
     }
   }
 
@@ -51,8 +77,19 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
     return TranscriptDirectories.absent(this.config.codexPath, paths, list => this.rolloutNames(list));
   }
 
+  /** A session-only scan may inspect the native ID at an old location without importing the other chat. */
+  async *identitiesAt(paths: ReadonlySet<string>): AsyncGenerator<{ path: string; sessionId: string }> {
+    for await (const sourceFile of this.rolloutFiles()) {
+      const path = codexRolloutName(sourceFile);
+      if (!paths.has(path)) continue;
+      for await (const source of this.discoverFileSafely(this.discoverRollout(sourceFile, {}), { onChanged: () => {} })) {
+        yield { path, sessionId: source.sessionId };
+      }
+    }
+  }
+
   private async *rolloutNames(list: DirectoryListing) {
-    for await (const path of this.rolloutFiles(list)) yield basename(path);
+    for await (const path of this.rolloutFiles(list)) yield codexRolloutName(path);
   }
 
   private async *rolloutFiles(list = listDirectory): AsyncGenerator<string> {
@@ -61,19 +98,36 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
     }
   }
 
-  private async *rolloutsIn(directory: string, list: DirectoryListing, optional = false): AsyncGenerator<string> {
-    for (const entry of await list(directory, optional)) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) yield* this.rolloutsIn(path, list);
-      else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) yield path;
+  private async *representations(selected?: string) {
+    const groups = new Map<string, string[]>();
+    for await (const file of this.rolloutFiles()) {
+      const name = codexRolloutName(file);
+      if (selected && name !== codexRolloutName(selected)) continue;
+      const paths = groups.get(name) ?? [];
+      paths.push(file);
+      groups.set(name, paths);
+    }
+    for (const paths of groups.values()) {
+      const plain = paths.filter(path => !path.endsWith(".zst"));
+      const compressed = paths.filter(path => path.endsWith(".zst"));
+      yield { paths: [...plain, ...compressed], mixed: plain.length > 0 && compressed.length > 0 };
     }
   }
 
-  private async discoverRollout(sourceFile: string, selection: CodexSelection): Promise<TranscriptSource<CodexRolloutEntry> | undefined> {
+  private async *rolloutsIn(directory: string, list: DirectoryListing, optional = false): AsyncGenerator<string> {
+    const entries = await list(directory, optional);
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) yield* this.rolloutsIn(path, list);
+      else if (entry.isFile() && /^rollout-.*\.jsonl(?:\.zst)?$/.test(entry.name)) yield path;
+    }
+  }
+
+  private async *discoverRollout(sourceFile: string, selection: CodexSelection): AsyncGenerator<TranscriptSource<CodexRolloutEntry>> {
     const { file, result: header } = await this.inspectFile(sourceFile, async records => {
       for await (const { record, lineNumber, endOffset, afterBlankPrefix } of records) {
         const identity = this.header(record);
-        if (identity) return { ...identity, lineNumber, blankPrefixHeaderEnd: afterBlankPrefix ? endOffset : undefined };
+        if (identity) return { ...identity, lineNumber, endOffset, blankPrefixHeaderEnd: afterBlankPrefix ? endOffset : undefined };
       }
     });
     if (!header || !this.selected(selection, header.sessionId, header.cwd)) return;
@@ -82,7 +136,7 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
       blankPrefixHeaderEnd: header.blankPrefixHeaderEnd,
       matches: (_record, lineNumber) => lineNumber >= header.lineNumber,
     });
-    return header.codexForkHeader ? { ...source, codexForkHeader: header.codexForkHeader } : source;
+    yield { ...source, codexHeaderEnd: header.endOffset, ...(header.codexForkHeader && { codexForkHeader: header.codexForkHeader }) };
   }
 
   private header(record: LocalHistoryEntry["record"]) {

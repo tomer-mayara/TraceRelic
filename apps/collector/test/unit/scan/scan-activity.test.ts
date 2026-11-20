@@ -108,6 +108,25 @@ test("only a successful query of the same inventory clears its pending age", asy
   assert.equal(activity.finishPass({ status: "complete" }).oldestPendingAgeMs, null);
 });
 
+test("the age of a file changing before selection survives a successful inventory read", async () => {
+  let now = 7;
+  const activity = new ScanActivity(new PresenceConnection(), () => now);
+  const pending = new ScanPendingError("source-changed", inventoryScope).pending;
+  pending.sourceFile = "/history/sessions/rollout-moving.jsonl";
+  const outcome = { status: "pending" as const, retryAt: pending.retryAt };
+  activity.beginPass();
+  activity.pending(pending);
+  assert.equal(activity.finishPass(outcome).oldestPendingAgeMs, 0);
+  now = 18;
+  activity.beginPass();
+  await activity.listSources(inventoryScope);
+  activity.pending(pending);
+  assert.equal(activity.finishPass(outcome).oldestPendingAgeMs, 11);
+  activity.beginPass();
+  await activity.listSources(inventoryScope);
+  assert.equal(activity.finishPass({ status: "complete" }).oldestPendingAgeMs, null);
+});
+
 test("storage can accept all the bytes of a shorter repaired capture", async () => {
   const activity = new ScanActivity(new RejectingBatchStorage(batch => batch.checkpoint.offset === 23), () => 0);
   const sourceObservation = { location: { root: "/home", path: source.streamId }, observedEnd: 17 };

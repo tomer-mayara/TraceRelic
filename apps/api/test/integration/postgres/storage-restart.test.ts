@@ -39,7 +39,8 @@ test("a fresh connection reads ordered messages, corrected usage and each instal
   const [seen] = await fixture.compare(store => store.listSources({ ...inventoryScope, installationId: "laptop" }));
   assert.deepEqual([seen.source, seen.presence, seen.acceptedOffset], [laptop, "present", 70]);
   assert.equal(await fixture.compare(store => store.recordPresence(presence(4, "missing", 500))), "committed");
-  assert.deepEqual(await fixture.compare(store => store.readCheckpoint(desktop)), { version: 4, checkpoint: measuredSource().checkpoint });
+  assert.deepEqual(await fixture.compare(store => store.readCheckpoint(desktop)),
+    { version: 4, checkpoint: measuredSource().checkpoint, observedThrough: { offset: 500 } });
   assert.deepEqual(await fixture.compare(store => store.readCheckpoint(laptop)), { version: 4, checkpoint: { offset: 70, parserState: "laptop" } });
   const current = observation(5, 4, 3);
   await fixture.commit(batch(4, 70, { source: laptop, usage: [current] }));

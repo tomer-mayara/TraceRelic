@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
@@ -23,7 +24,8 @@ for (const [prefixMatches, extraBytes] of [[true, 0], [true, 80], [false, 80]] a
     if (extraBytes) {
       await writeFile(file, original + suffix);
       assert.equal(await storage.recordPresence({ source: ack.source, location: ack.location,
-        expectedVersion: ack.version, expectedOffset: offset, presence: "present", observedEnd: end }), "committed");
+        expectedVersion: ack.version, expectedOffset: offset, presence: "present", observedEnd: end,
+        observedPrefixDigest: createHash("sha256").update(original + suffix).digest("hex") }), "committed");
     }
     await rm(file);
     const [missing] = await fixture.scan(args);

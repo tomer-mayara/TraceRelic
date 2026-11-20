@@ -1,8 +1,22 @@
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
-import type { AcknowledgedSource, Batch, CheckpointSnapshot, CommitResult, PresenceWrite, SessionKey, SessionView,
-  SourceScope, StreamKey } from "./collector-storage.ts";
+export { legacyScannerLocation } from "./collector-storage.ts";
+import { recordedPathDialect } from "@tracerelic/shared";
+import type { BatchPart, PackedBatch } from "./collector-batch-wire.ts";
+export { batchPartBytes, collectorRequestBytes, decodeBase64, fitsWireRecords, packBatch, stateBytes, unpackBatch, wireDigest } from "./collector-batch-wire.ts";
+export type { BatchPart, PackedBatch } from "./collector-batch-wire.ts";
+import { legacyScannerLocation, type AcknowledgedSource, type Batch, type CheckpointSnapshot, type CommitResult, type Harness,
+  type PresenceWrite, type SessionKey, type SessionView, type SourceLocation, type SourceScope, type StreamKey } from "./collector-storage.ts";
+
+/** Recognize the two documented scanner keys. Other storage clients may use arbitrary stream IDs. */
+export function legacyScannerStream(harness: Harness, { root, path }: SourceLocation): string | undefined {
+  const dialect = recordedPathDialect(root);
+  if (!dialect) return;
+  const candidate = harness === "codex" ? JSON.stringify([root, path]) : dialect.join(root, path);
+  const parsed = legacyScannerLocation(harness, candidate);
+  if (parsed?.root === root && parsed.path === path) return candidate;
+}
 
 export interface CollectorCredentialRecord {
   tokenSha256: string;
@@ -12,6 +26,8 @@ export interface CollectorCredentialRecord {
 }
 
 interface CollectorModels {
+  BatchPart: BatchPart;
+  PackedBatch: PackedBatch;
   CollectorCredentialRecord: CollectorCredentialRecord;
   CollectorDatabaseConfig: { DATABASE_URL: string };
   SessionKey: SessionKey;

@@ -37,6 +37,16 @@ When("I read February 1 history with that configuration", function (this: Config
   this.result = this.fixture.history(this.path);
 });
 
+Given("both configured providers recorded a chat at {string}", async function (this: ConfigScenario, at: string) {
+  this.path = await this.fixture.writeConfig("..", "../claude");
+  await this.fixture.writeChat(this.fixture.configured, "c1", at);
+  await this.fixture.writeClaudeChat("h1", at);
+});
+
+When("I read the configured history from {string} to {string}", function (this: ConfigScenario, from: string, to: string) {
+  this.result = this.fixture.run(["history", "--config", this.path, "--from", from, "--to", to]);
+});
+
 Then("the collector returns only the chat {string}", function (this: ConfigScenario, id: string) {
   assert.equal(this.result.status, 0, this.result.stderr);
   const history: unknown = JSON.parse(this.result.stdout);

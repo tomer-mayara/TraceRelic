@@ -1,4 +1,5 @@
 import type { Batch, CodexCallClaim, Usage } from "./collector-storage.ts";
+import type { CodexCallAliases } from "./codex-call-aliases.ts";
 import { isIdentifier, isNativeCodexCall, isRecord } from "./usage-validation.ts";
 
 type ParentLookup = (sessionId: string) => string | undefined;
@@ -20,7 +21,11 @@ interface OwnershipUpdate {
   bindings: SessionCallBindings;
   decisions: Map<string, Ownership>;
   transfers: Set<string>;
+  receipt?: ClaimReceipt;
+  replacement?: CodexCallOwners;
 }
+
+interface ClaimReceipt { source: string; sessionId: string; claims: readonly CodexCallClaim[]; previous?: ClaimReceipt }
 
 class SessionCallBindings {
   readonly providerIds = new Map<string, string>();
@@ -54,26 +59,31 @@ interface Ownership {
 
 /** The stored call IDs remain session-local. This index limits each native ID to one workspace owner. */
 export class CodexCallOwners {
-  private readonly decisions = new Map<string, Ownership>();
-  private readonly contested = new Set<string>();
-  private readonly bySession = new Map<string, SessionCallBindings>();
+  private decisions = new Map<string, Ownership>();
+  private contested = new Set<string>();
+  private bySession = new Map<string, SessionCallBindings>();
+  private receipts?: ClaimReceipt;
 
-  visible(sessionId: string, usage: Usage[]): Usage[] {
+  visible(sessionId: string, usage: Usage[], aliases?: CodexCallAliases): Usage[] {
     const bindings = this.bySession.get(sessionId);
     if (!bindings) return usage;
     return usage.filter(record => {
-      const providerId = bindings.providerIds.get(record.id);
+      const id = aliases?.canonical(record.id) ?? record.id;
+      const providerId = bindings.providerIds.get(id) ?? bindings.providerIds.get(record.id);
       return providerId === undefined || this.decisions.get(providerId)?.owner === sessionId;
     });
   }
 
-  prepare(batch: Batch, stored: readonly Usage[], parentOf: ParentLookup, newProof: boolean): OwnershipUpdate | null | undefined {
+  prepare(batch: Batch, stored: readonly Usage[], parentOf: ParentLookup, newProof: boolean, generation = 0): OwnershipUpdate | null | undefined {
     const claims = batch.codexCallClaims;
     if (claims !== undefined && (!Array.isArray(claims) || batch.source.harness !== "codex")) return null;
+    const source = JSON.stringify([batch.source.sessionId, batch.source.streamId, batch.source.installationId, generation]);
+    if (batch.repairEvidenceFrom || batch.reconcileCodexForkFrom) return this.repair(batch, stored, parentOf, source, generation);
     if (!claims?.length && (!newProof || !this.contested.size)) return;
     const { sessionId } = batch.source;
     const known = this.bySession.get(sessionId);
     const update: OwnershipUpdate = { sessionId, bindings: new SessionCallBindings(), decisions: new Map(), transfers: new Set() };
+    if (claims?.length) update.receipt = { source, sessionId, claims, previous: this.receipts };
     const calls = new Set([...stored, ...batch.usage, ...(batch.usageWindows ?? []).flatMap(window => window.parts)]
       .filter(isNativeCodexCall).map(record => record.id));
     for (const claim of claims ?? []) {
@@ -82,6 +92,35 @@ export class CodexCallOwners {
     }
     this.resolveTransfers(update, parentOf, newProof);
     return update;
+  }
+
+  private repair(batch: Batch, stored: readonly Usage[], parentOf: ParentLookup, source: string, generation: number): OwnershipUpdate | null {
+    const replacement = new CodexCallOwners();
+    const retained: ClaimReceipt[] = [];
+    for (let write = this.receipts; write; write = write.previous) if (write.source !== source) retained.push(write);
+    for (const write of retained.reverse()) {
+      const bindings = replacement.bySession.get(write.sessionId) ?? new SessionCallBindings();
+      for (const claim of write.claims) {
+        if (!bindings.bind(claim)) return null;
+        replacement.recordCandidate(replacement.decisions, claim);
+      }
+      replacement.bySession.set(write.sessionId, bindings);
+      replacement.receipts = { ...write, previous: replacement.receipts };
+    }
+    for (const [id, decision] of replacement.decisions) if (decision.candidates) replacement.contested.add(id);
+    const next = replacement.prepare({ ...batch, repairEvidenceFrom: undefined, reconcileCodexForkFrom: undefined },
+      stored, parentOf, true, generation);
+    if (next === null) return null;
+    if (next) replacement.publish(next);
+    const transfers = new Set<string>();
+    for (const [id, before] of this.decisions) {
+      const after = replacement.decisions.get(id);
+      if (before.owner !== after?.owner) {
+        transfers.add(before.owner);
+        if (after) transfers.add(after.owner);
+      }
+    }
+    return { sessionId: batch.source.sessionId, bindings: new SessionCallBindings(), decisions: new Map(), transfers, replacement };
   }
 
   private recordCandidate(decisions: Map<string, Ownership>, { providerId, ownerSessionId }: CodexCallClaim): void {
@@ -124,6 +163,14 @@ export class CodexCallOwners {
   }
 
   publish(update: OwnershipUpdate): void {
+    if (update.replacement) {
+      this.decisions = update.replacement.decisions;
+      this.contested = update.replacement.contested;
+      this.bySession = update.replacement.bySession;
+      this.receipts = update.replacement.receipts;
+      return;
+    }
+    if (update.receipt) this.receipts = update.receipt;
     const bindings = this.bySession.get(update.sessionId) ?? new SessionCallBindings();
     bindings.merge(update.bindings);
     this.bySession.set(update.sessionId, bindings);

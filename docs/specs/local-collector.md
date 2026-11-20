@@ -20,10 +20,12 @@ are preserved at the reviewed revision.
 | `watch --config <file>` | Run the same import at startup and on a schedule. Emit one small status report per pass. The same selectors apply. |
 
 Load the JSON config once. Relative provider paths start at the config file's directory and `~/` expands
-to the user's home. Codex uses `rollout-*.jsonl` under `sessions/` and `archived_sessions/`. The header
-supplies the session ID. Claude uses project JSONL files and nested `subagents/agent-*.jsonl`. Use the
+to the user's home. Codex uses `rollout-*.jsonl` and `rollout-*.jsonl.zst` under `sessions/` and
+`archived_sessions/`. The header supplies the session ID. Read compressed files at logical uncompressed
+byte offsets. Use the recorded path syntax for project matching and preserve the supplied precision of
+RFC 3339 date-window bounds. Claude uses project JSONL files and nested `subagents/agent-*.jsonl`. Use the
 row's session ID and distinguish an agent that repeats its parent's ID. Scan recognized orphaned and
-superseded copies for recovery. Preserve the date reader's existing JSONL file selection. Omit
+superseded copies for recovery. Omit
 `claudePath` for Codex-only operation. [Configuration](local-collector/config.tsp) ·
 [History interface](local-collector/history.tsp) ·
 [CLI examples](../../README.md#read-local-codex-and-claude-code-history)
@@ -45,13 +47,17 @@ text, time or position alone cannot prove a copy. Keep the first verified order 
 timestamps across sources establish no order.
 
 Prefer Codex's completed visible user or assistant item when the rollout supplies one. Older rollouts
-can pair a `response_item` with a visible `event_msg` mirror. Show each block once across batches,
-appends and restarts. Claude accepts a plain content string or typed text blocks. Omit tool output,
+can pair a `response_item` with a visible `event_msg` mirror. Paginated chats use completed user and
+assistant items and respect the assistant item's display decision. Show each block once across batches,
+appends and restarts. A verified line prefix can link a joined event to its original native text blocks
+across installations. Claude accepts a plain content string or typed text blocks. Its complete generated
+`<tick>` and `<goal>` envelopes are omitted. Ordinary text that quotes them remains visible. Omit tool output,
 injected system or environment messages, reasoning and attachments from the conversation. An assistant
 row containing only tool use may still supply token usage. Keep the turn or request, working directory,
 repository and branch that the evidence supports. The most recently recorded branch supplies the session
 hint.
 [Codex rollout policy](https://github.com/openai/codex/blob/ea8ccc1d20ff65398e02490ac34f8c1012848625/codex-rs/rollout/src/policy.rs#L134-L156)
+· [Codex answer display](https://github.com/openai/codex/blob/ea8ccc1d20ff65398e02490ac34f8c1012848625/codex-rs/protocol/src/items/display.rs)
 · [Codex conversation scenarios](../../apps/collector/test/acceptance/scan/codex-planning.feature) ·
 [Claude conversation scenarios](../../apps/collector/test/acceptance/scan/claude-conversation.feature)
 
@@ -172,6 +178,14 @@ evidence. [Claude fork scenario](../../apps/collector/test/acceptance/scan/claud
    inventory entry.
    [Missing-source scenario](../../apps/collector/test/acceptance/scan/missing-source.feature)
 
+On the first verified scan of an older checkpoint, re-decode the accepted prefix and replace that
+source generation's messages, metadata and usage in one version-checked write. Keep replay reservations
+and independent source contributions. Mark the checkpoint with `evidenceVersion: 1`. When a current
+native Codex session proves an old message was filed in the wrong session, compare both source versions
+and the corroborating message positions before removing the old contribution. Keep any unverified
+measurements and report `unverified-source-history` against the original source. A missing or replaced
+legacy generation also carries that diagnostic when its records cannot be verified.
+
 `watch` uses a 60,000 ms default interval, allows one active pass and skips elapsed ticks. Preserve
 pending age until work is resolved. Honor the longest applicable retry deadline, including a valid
 `Retry-After`. A rejected or failed pass uses the next regular interval. On shutdown, finish the active
@@ -189,8 +203,10 @@ installation. Sessions are shared within the workspace. Checkpoints and inventor
 installation-scoped. An explicit workspace selector or conflicting installation receives 400. Invalid or
 expired credentials receive 401. The client stops on 401 or 403. On a dropped connection, read the
 checkpoint immediately to confirm the write. For a 429 or temporary HTTP server error, wait at least
-one second and honor a longer valid `Retry-After`. Size remote writes by encoded bytes,
-including checkpoint state. Continue other files after an indivisible oversized record.
+one second and honor a longer valid `Retry-After`. Each request can carry up to 1 MiB of encoded JSON.
+Large batches can reference verified ranges of the stored parser state or stage parts under the same
+credential. Check both the transferred and reconstructed bytes at finalization, then atomically commit
+the whole batch. Uncommitted parts expire after one day. Continue other files after an indivisible oversized record.
 [HTTP contract](collector-api/main.tsp) ·
 [Remote sync](../../apps/api/test/acceptance/collector/remote-sync.feature)
 
@@ -198,7 +214,9 @@ Only the API connects to PostgreSQL. Apply migrations before listening. Store su
 restore corrections and ownership after restart. In one transaction, compare the session version and
 source offset and commit records, ownership, presence and checkpoint. Stale competing writers get a
 conflict, including on first insert. A failed transaction leaves the previous state available for retry.
-Repeated acknowledged presence at its current version keeps the version stable. Record commit outcome,
+Repeated acknowledged presence at its current version keeps the version stable. Project only record
+inserts, updates, order changes and removals. A cold writer rebuilds ownership from the journal.
+An ordinary presence update only changes the summary and source inventory. Record commit outcome,
 authenticated scope and duration. Keep chat text, credentials and connection strings out of operational
 logs. A production service target awaits measurements.
 [Restart](../../apps/api/test/acceptance/postgres/restart.feature) ·

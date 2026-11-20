@@ -107,18 +107,48 @@ alias WriteReply = JsonReply<200, WriteResult<"committed">>
 @post @route("/session")
 op readSession(@body key: SessionKey): JsonReply<200, SessionResult> | RequestError;
 
-/** Read the credential's installation checkpoint and the workspace session version. */
+/** Read the credential's installation checkpoint and the workspace session version. Both verified scanner keys address the same source. */
 @post @route("/checkpoint")
 op readCheckpoint(@body source: StreamKey): JsonReply<200, CheckpointSnapshot> | RequestError;
 
-/** List sources for the credential's installation, root and selection. */
+/** List sources for the credential's installation, root and selection. Fold scanner keys only when the recorded location, generation,
+ * full checkpoint and current loss evidence agree. Preserve opaque IDs and divergent histories. */
 @post @route("/sources")
 op listSources(@body scope: SourceScope): JsonReply<200, AcknowledgedSource[]> | RequestError;
 
 /** Commit the batch for the credential's installation. A stale session version or source offset
- * returns 409. A successful response acknowledges the records and checkpoint together. */
+ * returns 409. A successful response acknowledges the records and checkpoint together.
+ * Every request body is at most 1 MiB. Large batches use versioned literal bytes or copies from
+ * the JSON-encoded accepted parser-state string. Retransmitted parts are idempotent and transferred under the same credential scope.
+ * Uncommitted parts expire after one day. Only the final write changes collector data. */
 @post @route("/batches")
-op commit(@body batch: Batch): WriteReply;
+op commit(@body batch: Batch | BatchPart | PackedBatch): WriteReply | JsonReply<202, WriteResult<"staged">>;
+
+@TypeSpec.JsonSchema.jsonSchema
+model BatchPart {
+  transfer: "part-v1";
+  upload: PrefixDigest;
+  index: Count;
+  /** Base64 of up to 512 KiB of the transfer. Repeating identical bytes is idempotent. */
+  @maxLength(699052) data: string;
+}
+
+@TypeSpec.JsonSchema.jsonSchema
+model PackedBatch {
+  transfer: "commit-v1";
+  source: StreamKey;
+  expectedVersion: Count;
+  /** SHA-256 of the complete encoded transfer. */
+  upload: PrefixDigest;
+  /** Number of authenticated, zero-based parts. Inline data contains the whole transfer instead. */
+  parts?: PositiveCount;
+  inline?: string;
+  /** Original UTF-8 JSON size and digest, verified before storage receives the batch. */
+  decodedBytes: PositiveCount;
+  decodedSha256: PrefixDigest;
+  /** With a base, the transfer is a JSON array of base64 literals or [offset,length] copy ranges. */
+  base?: PrefixDigest;
+}
 
 /** Apply a version-checked presence update to the credential's installation. */
 @post @route("/presence")

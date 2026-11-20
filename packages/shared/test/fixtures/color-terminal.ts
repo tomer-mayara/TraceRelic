@@ -7,7 +7,8 @@ export class ColorTerminal extends PassThrough {
   constructor(t: TestContext, colorSettings: NodeJS.ProcessEnv = {}) {
     super();
     this.setEncoding("utf8");
-    const stderr = Object.getOwnPropertyDescriptor(process, "stderr")!;
+    const stderr = Object.getOwnPropertyDescriptor(process, "stderr");
+    if (!stderr) throw new Error("Expected the test process to provide stderr");
     Object.defineProperty(process, "stderr", { configurable: true, value: this });
     const env = process.env;
     process.env = { ...env, TERM: "xterm-256color" };

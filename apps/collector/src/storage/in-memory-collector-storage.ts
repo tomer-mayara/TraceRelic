@@ -1,17 +1,19 @@
+import { SessionMessages } from "./session-messages.ts";
+import { SessionMetadata } from "./session-metadata.ts";
 import { isDeepStrictEqual } from "node:util";
-import { isRecordedTimestamp, recordedInstant } from "../recorded-timestamp.ts";
-import type {
-  AcknowledgedSource, Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage,
-  Message, Metadata, MissingSource, PresenceWrite, SessionKey, SessionView, SourceScope, StreamKey, Usage, UsageAnchor,
+import {
+  legacyScannerLocation, sourceHistoryDiagnostic, type AcknowledgedSource, type Batch, type Checkpoint,
+  type CheckpointSnapshot, type CollectorStorage, type CommitResult, type Coverage, type MissingSource, type PresenceWrite,
+  type SessionKey, type SessionView, type SourceScope, type SourceUsageDiagnostic, type StreamKey, type Usage,
 } from "./collector-storage.ts";
 import { checkpointFailure } from "./checkpoint-validation.ts";
 import { ClaudeCallOwners } from "./claude-call-owners.ts";
-import { ClaudeUsageLedger } from "./claude-usage-ledger.ts";
 import { CodexCallOwners } from "./codex-call-owners.ts";
+import { codexSourceIdentity } from "./codex-source-identity.ts";
+import { mergeMeasurements, type StoredUsage, type UsageWrite } from "./session-usage.ts";
 import { StoredSource } from "./source-inventory.ts";
 import { SourceUsageDiagnostics } from "./source-usage-diagnostics.ts";
-import { definedFields, isCount, isIdentifier, isNativeCodexCall, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
-import { UsageWindows } from "./usage-windows.ts";
+import { isCount, isIdentifier, isRecord } from "./usage-validation.ts";
 
 function encodeSessionKey(key: SessionKey): string {
   return JSON.stringify([key.harness, key.sessionId]);
@@ -31,313 +33,15 @@ function hasValidPosition(write: Pick<Batch, "source" | "expectedVersion" | "exp
     && isCount(write.expectedVersion) && isCount(write.expectedOffset);
 }
 
-function isRecordNumber(value: number): boolean {
-  return isCount(value) && value > 0;
-}
-
-function hasValidMetadata(fields: Metadata | undefined): boolean {
-  if (fields === undefined) return true;
-  if (fields === null || typeof fields !== "object" || Array.isArray(fields)) return false;
-  return [fields.cwd, fields.branch, fields.repository].every(value => value === undefined || typeof value === "string")
-    && (fields.parentSessionId === undefined || isIdentifier(fields.parentSessionId));
-}
-
-function hasValidMessage(message: Message): boolean {
-  return isRecord(message) && isIdentifier(message.id) && isRecordedTimestamp(message.at)
-    && (message.role === "user" || message.role === "assistant")
-    && typeof message.text === "string"
-    && (message.sourceOrder === undefined || isRecordNumber(message.sourceOrder))
-    && (message.blockIndex === undefined || isCount(message.blockIndex))
-    && (message.turnId === undefined || isIdentifier(message.turnId))
-    && (message.requestId === undefined || isIdentifier(message.requestId))
-    && hasValidMetadata(message.context);
-}
-
-interface StoredMessage {
-  streamId: string;
-  value: Message;
-}
-
-function conflictingFields<T extends object>(known: T, incoming: T): boolean {
-  for (const key in incoming) {
-    if (known[key] !== undefined && incoming[key] !== undefined && known[key] !== incoming[key]) return true;
-  }
-  return false;
-}
-
-function replayMessage(known: StoredMessage, incoming: Message, streamId: string): StoredMessage | null {
-  const { sourceOrder, blockIndex, context, ...fields } = incoming;
-  const previous = known.value;
-  if (conflictingFields(previous, fields) || conflictingFields(previous.context ?? {}, context ?? {})) return null;
-  const value = { ...fields, ...previous };
-  if (context) value.context = { ...context, ...previous.context };
-  const positioned = previous.sourceOrder !== undefined || previous.blockIndex !== undefined;
-  const sameRecord = sourceOrder === undefined || previous.sourceOrder === undefined || sourceOrder === previous.sourceOrder;
-  if (!positioned || (streamId === known.streamId && sameRecord)) {
-    if (sourceOrder !== undefined) value.sourceOrder ??= sourceOrder;
-    if (blockIndex !== undefined) value.blockIndex ??= blockIndex;
-  }
-  return { streamId: positioned ? known.streamId : streamId, value };
-}
-
-function mergeMessages(
-  previous: Map<string, StoredMessage> | undefined, incoming: Message[], streamId: string,
-): Map<string, StoredMessage> | null {
-  const messages = new Map(previous);
-  for (const entry of incoming) {
-    if (!hasValidMessage(entry)) return null;
-    const value = definedFields(entry);
-    if (value.context) value.context = definedFields(value.context);
-    const existing = messages.get(value.id);
-    const next = existing ? replayMessage(existing, value, streamId) : { streamId, value };
-    if (!next) return null;
-    messages.set(value.id, next);
-  }
-  return messages;
-}
-
-function orderedMessages(records: Map<string, StoredMessage>): Message[] {
-  const messages: Message[] = [];
-  const positions = new Map<string, number[]>();
-  for (const { streamId, value } of records.values()) {
-    if (value.sourceOrder !== undefined) {
-      const slots = positions.get(streamId) ?? [];
-      slots.push(messages.length);
-      positions.set(streamId, slots);
-    }
-    messages.push(value);
-  }
-  // Order only the slots whose records share a source. Leave unrelated and unpositioned messages in place.
-  for (const slots of positions.values()) {
-    const ordered = slots.map(slot => messages[slot]).sort((left, right) =>
-      (left.sourceOrder ?? 0) - (right.sourceOrder ?? 0) || (left.blockIndex ?? 0) - (right.blockIndex ?? 0));
-    slots.forEach((slot, index) => { messages[slot] = ordered[index]; });
-  }
-  return messages;
-}
-
-function mergeUsage(previous: readonly Usage[], incoming: readonly Usage[], codexCalls: ReadonlySet<string> | undefined): Usage[] | null {
-  const records = new Map(previous.map((usage) => [usage.id, usage]));
-  for (const entry of incoming) {
-    if (!isUsage(entry)) return null;
-    const usage = definedFields(entry);
-    const existing = records.get(usage.id);
-    if (existing?.revision === usage.revision && !isDeepStrictEqual(existing, usage)) {
-      const merged = codexCalls?.has(usage.id) && mergeCodexCall(existing, usage);
-      if (!merged) return null;
-      records.set(usage.id, merged);
-    } else if (!existing || usage.revision > existing.revision) records.set(usage.id, usage);
-  }
-  return [...records.values()];
-}
-
-interface StoredAnchor {
-  source: StreamKey;
-  generation: number;
-  anchor: UsageAnchor;
-}
-
-type UsageInput = Pick<Batch, "source" | "usage" | "usageAnchors" | "usageWindows">;
-
-/** Keep just the measurement inputs needed to remove one stream's mistaken fork attribution. */
-interface CodexUsageWrite {
-  previous?: CodexUsageWrite;
-  input: UsageInput;
-  stream: string;
-  generation: number;
-}
-
-function rememberUsage(previous: CodexUsageWrite | undefined, batch: UsageInput, stream: string, generation: number) {
-  const { source, usage, usageWindows, usageAnchors } = batch;
-  if (source.harness !== "codex" || (!usage.length && !usageWindows?.length && !usageAnchors?.length)) return previous;
-  return { previous, input: { source, usage, usageWindows, usageAnchors }, stream, generation };
-}
-
-function mergeAnchors(previous: Map<string, StoredAnchor[]> | undefined, batch: UsageInput, stream: string, generation: number) {
-  const anchors = new Map(previous);
-  if (!batch.usageAnchors?.length) return anchors;
-  const calls = new Set(batch.usage.filter(record => record?.kind === "call").map(record => record.id));
-  for (const anchor of batch.usageAnchors) {
-    if (!isRecord(anchor) || !isIdentifier(anchor.usageId) || !calls.has(anchor.usageId) || !isIdentifier(anchor.historyId)
-      || (anchor.after !== undefined && !isTokenCounts(anchor.after))) return null;
-    const known = anchors.get(anchor.usageId) ?? [];
-    if (known.some(entry => entry.generation === generation && encodeStreamKey(entry.source) === stream
-      && isDeepStrictEqual(entry.anchor, anchor))) continue;
-    anchors.set(anchor.usageId, [...known, { source: batch.source, generation, anchor }]);
-  }
-  return anchors;
-}
-
-interface StoredUsage {
-  standalone: Usage[];
-  anchors: Map<string, StoredAnchor[]>;
-  windows: UsageWindows;
-  claude?: ClaudeUsageLedger;
-  order?: ReadonlySet<string>;
-}
-
-interface MeasurementState {
-  measurements: StoredUsage;
-  view: { usage: Usage[] };
-}
-
-function previousNativeAnchors(previous: MeasurementState | undefined, anchors: Map<string, StoredAnchor[]>,
-  stream: string, generation: number): StoredAnchor[] {
-  if (!previous || !anchors.size) return [];
-  const accepted = new Set(previous.measurements.windows.pendingNativeIds);
-  if (generation) {
-    for (const call of previous.view.usage) {
-      if (!isNativeCodexCall(call)) continue;
-      const placements = anchors.get(call.id) ?? [];
-      if (placements.some(entry => entry.generation < generation && encodeStreamKey(entry.source) === stream)) accepted.add(call.id);
-    }
-  }
-  return [...accepted].flatMap(id => anchors.get(id) ?? []);
-}
-
-function mergeRecordedUsage(previous: MeasurementState | undefined, batch: UsageInput, stream: string, generation: number) {
-  if (!Array.isArray(batch.usage) || (batch.usageWindows !== undefined && !Array.isArray(batch.usageWindows))
-    || (batch.usageAnchors !== undefined && !Array.isArray(batch.usageAnchors))) return null;
-  const anchors = mergeAnchors(previous?.measurements.anchors, batch, stream, generation);
-  if (!anchors) return null;
-  const retained = batch.usageWindows?.length || batch.usageAnchors?.length ? previousNativeAnchors(previous, anchors, stream, generation) : [];
-  const windows = UsageWindows.merge(previous?.measurements.windows, batch.usageWindows ?? [], batch.source, generation, retained);
-  if (!windows) return null;
-  const parts = windows.measurements;
-  const activeIds = new Set(parts.map(part => part.id));
-  const codexCalls = batch.source.harness === "codex" ? new Set([...anchors.keys(), ...activeIds]) : undefined;
-  const standalone = mergeUsage(previous?.measurements.standalone ?? [], batch.usage, codexCalls);
-  if (!standalone) return null;
-  const visible = standalone.filter(call => activeIds.has(call.id) || !windows.mayCoverCall(anchors.get(call.id) ?? []));
-  // Carry forward the first time and position only for IDs that survived this transaction.
-  const incoming = [...visible, ...parts];
-  const ids = new Set(incoming.map(record => record.id));
-  const surviving = previous?.view.usage.filter(record => ids.has(record.id)) ?? [];
-  const usage = mergeUsage(surviving, incoming, codexCalls);
-  if (!usage) return null;
-  const hasGap = windows.hasGap || activeIds.size !== parts.length;
-  return { stored: { standalone, anchors, windows }, usage, hasGap };
-}
-
-function combineClaudeUsage(previous: StoredSession | undefined, ordinary: Usage[], claude: ClaudeUsageLedger) {
-  // Only native evidence can resolve a previously withdrawn Claude measurement.
-  if (ordinary.some(record => claude.measurementIds.has(record.id))) return null;
-  const order = new Set(previous?.measurements.order ?? previous?.view.usage.map(record => record.id));
-  for (const record of ordinary) order.add(record.id);
-  // A call can be observed and withdrawn within a single transaction. Keep its first position.
-  for (const id of claude.measurementIds) order.add(id);
-  if (!ordinary.length) return { order, usage: [...claude.measurements] };
-  const active = new Map(ordinary.map(record => [record.id, record]));
-  for (const record of claude.measurements) active.set(record.id, record);
-  const usage: Usage[] = [];
-  for (const id of order) {
-    const record = active.get(id);
-    if (record) usage.push(record);
-  }
-  return { order, usage };
-}
-
-function retainOtherUsage(writes: CodexUsageWrite | undefined, stream: string, generation: number) {
-  const retained: CodexUsageWrite[] = [];
-  for (let write = writes; write; write = write.previous) {
-    if (write.stream !== stream || write.generation !== generation) retained.push(write);
-  }
-  let state: MeasurementState | undefined;
-  let history: CodexUsageWrite | undefined;
-  for (const write of retained.reverse()) {
-    const recorded = mergeRecordedUsage(state, write.input, write.stream, write.generation);
-    if (!recorded) return null;
-    state = { measurements: recorded.stored, view: { usage: recorded.usage } };
-    history = { ...write, previous: history };
-  }
-  return { state, history };
-}
-
-function mergeMeasurements(previous: StoredSession | undefined, batch: Batch, stream: string, generation: number) {
-  const reports = batch.claudeUsageReports;
-  if (reports !== undefined && !Array.isArray(reports)) return null;
-  let state: MeasurementState | undefined = previous;
-  let history = previous?.codexUsageWrites;
-  if (batch.reconcileCodexForkFrom) {
-    const retained = retainOtherUsage(history, stream, generation);
-    if (!retained) return null;
-    ({ state, history } = retained);
-  }
-  const recorded = mergeRecordedUsage(state, batch, stream, generation);
-  if (!recorded) return null;
-  history = rememberUsage(history, batch, stream, generation);
-  const stored: StoredUsage = recorded.stored;
-  let usage = recorded.usage;
-  let claude = previous?.measurements.claude;
-  if (reports?.length) {
-    if (batch.source.harness !== "claude" || (batch.checkpoint.claudeCallOrigins && reports.some(report => !report?.origin))) return null;
-    const next = ClaudeUsageLedger.merge(claude, reports, batch.source.sessionId);
-    if (!next) return null;
-    claude = next;
-  }
-  if (claude) {
-    const combined = combineClaudeUsage(previous, usage, claude);
-    if (!combined) return null;
-    usage = combined.usage;
-    stored.order = combined.order;
-    stored.claude = claude;
-  }
-  return { stored, usage, history, hasGap: recorded.hasGap };
-}
-
-interface RecordedBranch {
-  streamId: string;
-  name: string;
-  sourceOrder: number;
-  instant?: { second: number; fraction: string };
-}
-
-interface BranchHistory {
-  byStream: Map<string, RecordedBranch>;
-  latest: RecordedBranch;
-}
-
-function recordedBranch(streamId: string, name: string, observation: BranchObservation): RecordedBranch | null {
-  const { at, sourceOrder } = observation;
-  if (!isRecordNumber(sourceOrder)) return null;
-  const branch = { streamId, name, sourceOrder };
-  if (at === undefined) return branch;
-  const instant = recordedInstant(at);
-  return instant ? { ...branch, instant } : null;
-}
-
-function mergeBranches(
-  previous: BranchHistory | undefined, batch: Batch, streamId: string,
-): BranchHistory | null | undefined {
-  const observation = batch.branchObservation;
-  if (observation === undefined) return previous;
-  if (!observation || !batch.metadata?.branch) return null;
-  const candidate = recordedBranch(streamId, batch.metadata.branch, observation);
-  if (!candidate) return null;
-  const known = previous?.byStream.get(streamId);
-  if (known && known.sourceOrder >= candidate.sourceOrder) return previous;
-  const byStream = new Map(previous?.byStream);
-  byStream.set(streamId, candidate);
-  let latest = previous && previous.latest.streamId !== streamId ? previous.latest : candidate;
-  for (const branch of byStream.values()) {
-    const time = branch.instant;
-    const current = latest.instant;
-    if (!time || !current) continue;
-    if (time.second > current.second || (time.second === current.second && time.fraction > current.fraction)) {
-      latest = branch;
-    }
-  }
-  return { byStream, latest };
-}
-
 interface StoredSession {
   version: number;
   checkpoints: Map<string, StoredSource>;
   view: Pick<SessionView, "key" | "metadata" | "usage" | "usageDiagnostics">;
-  messages: Map<string, StoredMessage>;
+  messages: SessionMessages;
   measurements: StoredUsage;
-  codexUsageWrites?: CodexUsageWrite;
-  branches?: BranchHistory;
+  usageWrites?: UsageWrite;
+  sourceEvidence: Map<string, { hasGap: boolean; diagnostics?: SourceUsageDiagnostic[] }>;
+  metadata: SessionMetadata;
   hasGap: boolean;
 }
 
@@ -353,22 +57,29 @@ function totalTokens(usage: readonly Usage[]): number {
 function mergeSessionRecords(
   previous: StoredSession | undefined, batch: Batch, stream: string, generation: number,
 ): Omit<StoredSession, "version" | "checkpoints"> | null {
-  if (!hasValidMetadata(batch.metadata) || !Array.isArray(batch.messages)) return null;
-  const messages = mergeMessages(previous?.messages, batch.messages, stream);
+  if (!Array.isArray(batch.messages)) return null;
+  const messages = SessionMessages.apply(previous?.messages, batch, stream, generation);
   const measurements = mergeMeasurements(previous, batch, stream, generation);
-  // Physical line numbers establish branch order only within one version of a transcript.
-  const branches = mergeBranches(previous?.branches, batch, JSON.stringify([stream, generation]));
-  const diagnostics = SourceUsageDiagnostics.merge(previous?.view.usageDiagnostics, batch);
-  if (!messages || !measurements || branches === null || !diagnostics) return null;
+  const sourceEvidence = new Map(previous?.sourceEvidence);
+  const key = JSON.stringify([stream, generation]);
+  const metadata = SessionMetadata.apply(previous?.metadata, batch, key, batch.expectedVersion + 1);
+  let prior = batch.repairEvidenceFrom ? undefined : sourceEvidence.get(key);
+  if (batch.reconcileCodexForkFrom && prior?.diagnostics?.some(row => row.code === "unresolved-codex-fork")) {
+    const remaining = prior.diagnostics.filter(row => row.code !== "unresolved-codex-fork");
+    prior = { diagnostics: remaining, hasGap: prior.hasGap && remaining.length > 0 };
+  }
+  const diagnostics = SourceUsageDiagnostics.merge(prior?.diagnostics, batch);
+  if (!messages || !measurements || !metadata || !diagnostics) return null;
   const { usage, stored } = measurements;
-  const hasGap = previous?.hasGap === true || batch.hasGap === true || measurements.hasGap || diagnostics.hasGap;
-  const metadata = { ...previous?.view.metadata, ...definedFields(batch.metadata ?? {}) };
-  if (branches) metadata.branch = branches.latest.name;
+  sourceEvidence.set(key, { hasGap: prior?.hasGap === true || batch.hasGap === true || diagnostics.hasGap, diagnostics: diagnostics.values });
+  const hasGap = measurements.hasGap || [...sourceEvidence.values()].some(value => value.hasGap);
+  const values = SourceUsageDiagnostics.combine([...sourceEvidence.values()].flatMap(value => value.diagnostics ?? []),
+    [...stored.ambiguous?.values() ?? []].filter((row): row is SourceUsageDiagnostic => row !== undefined));
   const view = {
-    key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata, usage,
-    ...(diagnostics.values && { usageDiagnostics: diagnostics.values }),
+    key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata: metadata.fields, usage,
+    ...(values?.length && { usageDiagnostics: values }),
   };
-  return { view, messages, measurements: stored, branches, hasGap, codexUsageWrites: measurements.history };
+  return { view, messages, measurements: stored, metadata, hasGap, usageWrites: measurements.history, sourceEvidence };
 }
 
 /** A write can advance the session that supplied the data and another session that owns a call. */
@@ -376,8 +87,66 @@ export interface SessionRevision extends SessionKey { version: number }
 
 export class InMemoryCollectorStorage implements CollectorStorage {
   private readonly sessions = new Map<string, StoredSession>();
+  private readonly aliases = new Map<string, string>();
   private readonly codexOwners = new CodexCallOwners();
   private claudeOwners = new ClaudeCallOwners();
+
+  async canonicalSource(source: StreamKey) { return this.aliases.get(encodeStreamKey(source)); }
+
+  async mergeSourceAlias(source: StreamKey, target: string, version: number): Promise<boolean> {
+    if (!source.installationId) return false;
+    const key = encodeSessionKey(source), alias = encodeStreamKey(source);
+    const registered = this.aliases.get(alias);
+    if (registered !== undefined) return registered === target;
+    const where = legacyScannerLocation(source.harness, source.streamId);
+    const session = this.sessions.get(key);
+    const left = session?.checkpoints.get(alias);
+    const canonical = encodeStreamKey({ ...source, streamId: target });
+    const right = session?.checkpoints.get(canonical);
+    if (!where || where.path !== target || !session || session.version !== version || !left || !right || !left.sharesEvidence(right)) return false;
+    const stored = left.selected(undefined, version);
+    if (stored?.location.root !== where.root || stored.location.path !== where.path) return false;
+    for (const stream of [alias, canonical]) {
+      const evidence = session.sourceEvidence.get(JSON.stringify([stream, left.generation]));
+      if (evidence?.hasGap || evidence?.diagnostics?.length) return false;
+    }
+    // Each source alone must corroborate the published records. Retire the redundant inputs so a later
+    // verified repair of the canonical generation cannot resurrect text or calls under the old spelling.
+    if (!this.withoutAliasEvidence(session, right)) return false;
+    const retained = this.withoutAliasEvidence(session, left);
+    if (!retained) return false;
+    const checkpoints = new Map(session.checkpoints);
+    checkpoints.delete(alias);
+    retained.publish();
+    this.sessions.set(key, { ...session, ...retained.records, checkpoints });
+    this.aliases.set(alias, target);
+    return true;
+  }
+
+  private withoutAliasEvidence(session: StoredSession, candidate: StoredSource) {
+    const { checkpoint, source, generation } = candidate;
+    const remove: Batch = { source, expectedVersion: session.version, expectedOffset: checkpoint.offset,
+      checkpoint, repairEvidenceFrom: checkpoint, messages: [], usage: [] };
+    const records = mergeSessionRecords(session, remove, encodeStreamKey(source), generation);
+    if (!records || records.hasGap !== session.hasGap || !isDeepStrictEqual(records.view, session.view)
+        || !isDeepStrictEqual(records.messages.ordered(), session.messages.ordered())) return;
+    if (source.harness === "claude") {
+      const ownership = this.claudeOwners.prepare(remove, records.measurements.claude?.measurements ?? [], undefined, generation);
+      if (!ownership || ownership.changedSessions.size) return;
+      const before = this.claudeOwners.view(source.sessionId, session.view.usage, session.measurements.order);
+      const after = ownership.owners.view(source.sessionId, records.view.usage, records.measurements.order);
+      if (!isDeepStrictEqual(before, after)) return;
+      return { records, publish: () => { this.claudeOwners = ownership.owners; } };
+    }
+    const ownership = this.codexOwners.prepare(remove, records.view.usage, id => this.verifiedParent(id, session), false, generation);
+    if (ownership === null || ownership?.transfers.size) return;
+    if (ownership?.replacement) {
+      const before = this.codexOwners.visible(source.sessionId, session.view.usage, session.measurements.aliases);
+      const after = ownership.replacement.visible(source.sessionId, records.view.usage, records.measurements.aliases);
+      if (!isDeepStrictEqual(before, after)) return;
+    }
+    return { records, publish: () => { if (ownership) this.codexOwners.publish(ownership); } };
+  }
 
   async listSources(scope: SourceScope): Promise<AcknowledgedSource[]> {
     const selected: AcknowledgedSource[] = [];
@@ -404,43 +173,67 @@ export class InMemoryCollectorStorage implements CollectorStorage {
 
   async recordPresence(update: PresenceWrite, changed?: SessionRevision[]): Promise<CommitResult> {
     if (!hasValidPosition(update)) return "invalid";
+    const alias = this.aliases.get(encodeStreamKey(update.source));
+    if (alias !== undefined) return this.recordPresence({ ...update, source: { ...update.source, streamId: alias } }, changed);
     const key = encodeSessionKey(update.source);
     const stream = encodeStreamKey(update.source);
     const session = this.sessions.get(key);
     const current = session?.checkpoints.get(stream);
     if (!current || !session) return "invalid";
     if (session.version !== update.expectedVersion || current.checkpoint.offset !== update.expectedOffset) return "conflict";
-    const next = current.record(update);
+    const repair = codexSourceIdentity(update, { file: current, messages: session.messages, stream, version: session.version },
+      source => this.messageSource(source));
+    if (typeof repair === "string") return repair;
+    const next = current.record(update, repair.status);
     if (!next) return "invalid";
     if (next === current) return "committed";
     const version = session.version + 1;
-    if (!isCount(version)) return "invalid";
+    if (!isCount(version) || (repair.advancePeer && !this.advancePeers(update.source, new Set([repair.advancePeer]), changed))) return "invalid";
     const checkpoints = new Map(session.checkpoints).set(stream, next);
-    this.saveSession(key, { ...session, version, checkpoints }, changed);
+    this.saveSession(key, { ...session, version, checkpoints, messages: repair.messages ?? session.messages }, changed);
     return "committed";
   }
 
-  async readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot> {
+  private messageSource(source: StreamKey) {
     const session = this.sessions.get(encodeSessionKey(source));
-    const checkpoint = session?.checkpoints.get(encodeStreamKey(source))?.checkpoint ?? null;
-    return { version: session?.version ?? 0, checkpoint: structuredClone(checkpoint) };
+    if (!session) return;
+    const alias = this.aliases.get(encodeStreamKey(source));
+    const stream = encodeStreamKey(alias ? { ...source, streamId: alias } : source);
+    return { version: session.version, messages: session.messages, stream, file: session.checkpoints.get(stream) };
+  }
+
+  async readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot> {
+    const alias = this.aliases.get(encodeStreamKey(source));
+    if (alias !== undefined) return this.readCheckpoint({ ...source, streamId: alias });
+    const session = this.sessions.get(encodeSessionKey(source));
+    const stream = session?.checkpoints.get(encodeStreamKey(source));
+    const observedThrough = stream?.observedThrough;
+    return { version: session?.version ?? 0, checkpoint: structuredClone(stream?.checkpoint ?? null),
+      ...(observedThrough && { observedThrough: structuredClone(observedThrough) }) };
   }
 
   async readSession(key: SessionKey): Promise<SessionView | null> {
     const stored = this.sessions.get(encodeSessionKey(key));
     if (!stored) return null;
     const { usage, diagnostics, hasGap } = key.harness === "claude" ? this.claudeOwners.view(key.sessionId, stored.view.usage, stored.measurements.order)
-      : { usage: this.codexOwners.visible(key.sessionId, stored.view.usage), diagnostics: [], hasGap: false };
+      : { usage: this.codexOwners.visible(key.sessionId, stored.view.usage, stored.measurements.aliases), diagnostics: [], hasGap: false };
     let partial = stored.hasGap || hasGap === true || diagnostics.length > 0;
     const missingSources: MissingSource[] = [];
+    const historyDiagnostics: SourceUsageDiagnostic[] = [];
     for (const source of stored.checkpoints.values()) {
       partial ||= source.hasGap;
+      if (source.unverifiedHistory || source.unverifiedIdentity) {
+        historyDiagnostics.push(sourceHistoryDiagnostic(source.source));
+        partial = true;
+      }
       const missing = source.missing();
       if (missing) missingSources.push(missing);
     }
-    return structuredClone({ ...stored.view, usage, messages: orderedMessages(stored.messages),
+    return structuredClone({ ...stored.view, usage, messages: stored.messages.ordered(),
       coverage: coverage(usage.length, partial), observedTotalTokens: usage.length ? totalTokens(usage) : null,
-      ...(diagnostics.length && { usageDiagnostics: [...stored.view.usageDiagnostics ?? [], ...diagnostics] }),
+      ...((diagnostics.length || historyDiagnostics.length) && {
+        usageDiagnostics: SourceUsageDiagnostics.combine(stored.view.usageDiagnostics ?? [], diagnostics, historyDiagnostics),
+      }),
       ...(missingSources.length && { missingSources }),
     });
   }
@@ -476,7 +269,8 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   private publishOwnership(batch: Batch, next: StoredSession, current: Checkpoint | undefined, changed?: SessionRevision[]): boolean {
     if (batch.source.harness === "claude") {
       if (batch.codexCallClaims !== undefined) return false;
-      const staged = this.claudeOwners.prepare(batch, next.measurements.claude?.measurements ?? [], next.view.metadata.parentSessionId);
+      const generation = next.checkpoints.get(encodeStreamKey(batch.source))?.generation ?? 0;
+      const staged = this.claudeOwners.prepare(batch, next.measurements.claude?.measurements ?? [], batch.metadata?.parentSessionId, generation);
       if (!staged) return false;
       const validUsage = (session: StoredSession) => {
         const projected = staged.owners.view(session.view.key.sessionId, session.view.usage, session.measurements.order);
@@ -489,7 +283,8 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     if (!isCount(totalTokens(next.view.usage))) return false;
     const newProof = batch.checkpoint.codexFork?.inheritedThrough !== undefined &&
       !isDeepStrictEqual(batch.checkpoint.codexFork, current?.codexFork);
-    const ownership = this.codexOwners.prepare(batch, next.view.usage, id => this.verifiedParent(id, next), newProof);
+    const generation = next.checkpoints.get(encodeStreamKey(batch.source))?.generation ?? 0;
+    const ownership = this.codexOwners.prepare(batch, next.view.usage, id => this.verifiedParent(id, next), newProof, generation);
     if (ownership === null) return false;
     if (!ownership) return true;
     if (!this.advancePeers(batch.source, ownership.transfers, changed)) return false;
@@ -499,6 +294,8 @@ export class InMemoryCollectorStorage implements CollectorStorage {
 
   async commit(batch: Batch, changed?: SessionRevision[]): Promise<CommitResult> {
     if (!hasValidPosition(batch)) return "invalid";
+    const alias = this.aliases.get(encodeStreamKey(batch.source));
+    if (alias !== undefined) return this.commit({ ...batch, source: { ...batch.source, streamId: alias } }, changed);
     const { source, expectedVersion, expectedOffset } = batch;
     const session = encodeSessionKey(source);
     const stream = encodeStreamKey(source);

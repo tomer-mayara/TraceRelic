@@ -44,7 +44,7 @@ function conserves(start: TokenCounts, end: TokenCounts, parts: readonly Usage[]
   });
 }
 
-function isWindow(value: unknown): value is UsageWindow {
+export function isUsageWindow(value: unknown): value is UsageWindow {
   if (!isRecord(value) || !isIdentifier(value.historyId) || !isTokenCounts(value.start)
     || !isTokenCounts(value.end) || !canFollow(value.start, value.end)
     || !Array.isArray(value.parts) || !value.parts.length) return false;
@@ -425,7 +425,7 @@ export class UsageWindows {
     const writing = new Set<string>();
     const stream = streamIdentity(source, generation);
     for (const window of incoming) {
-      if (!isWindow(window)) return null;
+      if (!isUsageWindow(window)) return null;
       const id = window.historyId;
       state.origin ??= lineage(id, stream);
       if (!matchesHistory(state, id, stream)) {
@@ -440,7 +440,7 @@ export class UsageWindows {
         writing.add(id);
       }
       if (history.add(structuredClone(window), stream)) state.epochsByStream.set(stream, id);
-      else state.hasGap = true;
+      else retainUnmatchedCalls(state, window.parts.filter(row => row.responseId));
     }
     const next = new UsageWindows(state, state, [], previous?.measurements);
     return next.preserveAcceptedCalls(previous, acceptedCalls);

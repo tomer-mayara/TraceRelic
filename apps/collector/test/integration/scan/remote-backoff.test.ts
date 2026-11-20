@@ -2,12 +2,38 @@ import assert from "node:assert/strict";
 import { rm, stat } from "node:fs/promises";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
+import { setImmediate } from "node:timers/promises";
 import { LocalCollector, ScanPendingError } from "@tracerelic/collector/scan";
-import { StorageBackoffError, type MissingSource } from "@tracerelic/collector/storage";
+import { StorageBackoffError, type MissingSource, type StreamKey } from "@tracerelic/collector/storage";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
 import { PresenceConnection } from "../../fixtures/presence-connection.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 import { ScheduledScanFixture } from "../../fixtures/scheduled-scan-fixture.ts";
+import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
+import { MissingSourceFixture } from "../../fixtures/missing-source-fixture.ts";
+
+test("staggered checkpoint replies keep the latest absolute retry deadline", async t => {
+  const files = await MissingSourceFixture.create();
+  t.after(() => files.close());
+  const { args, claude } = await files.useClaude();
+  await claude.write("project", "two", ["early", "late"].map(id => Claude.user(id, "2026-02-01T12:00:00Z", id)));
+  const storage = new PresenceConnection();
+  const wait = t.mock.method(storage, "readCheckpoint", async (source: StreamKey) => {
+    if (source.sessionId === "early") throw new StorageBackoffError(60_000);
+    await setImmediate();
+    watch.clock.advance(10_000);
+    throw new StorageBackoffError(1000);
+  });
+  t.mock.method(console, "error", () => {});
+  const watch = new ScheduledScanFixture(storage, args.slice(2), { startMs: 0 });
+  try {
+    await watch.waitForPass();
+    assert.equal(watch.reports[0].retryAt, "1970-01-01T00:01:00.000Z");
+    wait.mock.restore();
+    await watch.advance(50_000);
+    assert.equal(watch.reports[1].status, "complete");
+  } finally { await watch.stop(); }
+});
 
 test("watch defers an inventory read until its server deadline even across regular ticks", async t => {
   const files = await ScanCommandFixture.create();

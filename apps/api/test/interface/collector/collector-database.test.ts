@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
 import { StorageUnavailableError } from "@tracerelic/collector/storage";
 import { PostgresCollectorDatabase, SessionVersionConflict } from "#src/storage/collector-database";
-import { migrationVersions, projectedWrite } from "../../fixtures/collector-database-write.ts";
+import { fullProjection, migrationVersions, projectedWrite } from "../../fixtures/collector-database-write.ts";
+import { PostgresCollectorStorage } from "#src/storage/postgres-collector-storage";
 import { DisposablePostgres } from "../../fixtures/disposable-postgres.ts";
 
 let postgres: DisposablePostgres;
@@ -17,14 +18,14 @@ after(async () => {
   await postgres?.close();
 });
 
-test("concurrent startups install one migration and share lossless, workspace-scoped projections", async () => {
-  assert.deepEqual(await migrationVersions(postgres.url), [1]);
+test("concurrent startups apply the wire and storage migrations once and share lossless, workspace-scoped projections", async () => {
+  assert.deepEqual(await migrationVersions(postgres.url), [1, 2, 3]);
   const [writer, reader] = databases;
   const { write, view, inventory } = projectedWrite();
   const { checkpoint, source } = write.value;
   const { key } = view;
   const workspace = "one";
-  const position = await writer.write(workspace, tx => tx.save(write, [{ version: 1, view }], checkpoint, inventory));
+  const position = await writer.write(workspace, tx => tx.save(write, [fullProjection(1, view)], checkpoint, inventory));
   assert.deepEqual(await reader.readSession(workspace, key), view);
   assert.deepEqual(await reader.readSession("other", key), null);
   assert.deepEqual(await reader.readSession(workspace, { ...key, harness: "claude" }), null);
@@ -44,14 +45,14 @@ test("a failed transaction leaves the journal, session, records and checkpoint a
   const { write, view, inventory } = projectedWrite();
   const { checkpoint, source } = write.value;
   await assert.rejects(writer.write("rollback", async tx => {
-    await tx.save(write, [{ version: 1, view }], checkpoint, inventory);
+    await tx.save(write, [fullProjection(1, view)], checkpoint, inventory);
     assert.equal(await reader.readSession("rollback", view.key), null);
     throw new Error("fixture rolled back");
   }));
   assert.equal(await reader.readSession("rollback", view.key), null);
   assert.deepEqual(await reader.readCheckpoint("rollback", source), { checkpoint: null, version: 0 });
   assert.deepEqual(await reader.write("rollback", tx => tx.entriesAfter("0")), []);
-  await writer.write("rollback", tx => tx.save(write, [{ version: 1, view }], checkpoint, inventory));
+  await writer.write("rollback", tx => tx.save(write, [fullProjection(1, view)], checkpoint, inventory));
   assert.deepEqual(await reader.readSession("rollback", view.key), view);
 });
 
@@ -93,7 +94,7 @@ test("a stale submitter or a missing session cannot advance to the next version"
   const position = await writer.write(workspace, second.save);
   const stale = projectedWrite(1, "chat", "stale");
   await assert.rejects(reader.write(workspace, stale.save), SessionVersionConflict);
-  await assert.rejects(reader.write(workspace, tx => tx.save(stale.write, [{ version: 3, view: stale.view }],
+  await assert.rejects(reader.write(workspace, tx => tx.save(stale.write, [fullProjection(3, stale.view)],
     stale.write.value.checkpoint, stale.inventory)), SessionVersionConflict);
   assert.deepEqual(await reader.readSession(workspace, second.view.key), second.view);
   assert.deepEqual(await reader.readCheckpoint(workspace, second.write.value.source), { version: 2, checkpoint: second.write.value.checkpoint });
@@ -110,8 +111,8 @@ test("an absent or stale peer rolls back the source's version, records and journ
   const position = await writer.write(workspace, peer.save);
   const next = projectedWrite(1, "source", "uncommitted");
   const absent = projectedWrite(0, "absent");
-  await assert.rejects(reader.write(workspace, tx => next.save(tx, [{ version: 1, view: absent.view }])), SessionVersionConflict);
-  await assert.rejects(reader.write(workspace, tx => next.save(tx, [{ version: 2, view: peer.view }])), SessionVersionConflict);
+  await assert.rejects(reader.write(workspace, tx => next.save(tx, [fullProjection(1, absent.view)])), SessionVersionConflict);
+  await assert.rejects(reader.write(workspace, tx => next.save(tx, [fullProjection(2, peer.view)])), SessionVersionConflict);
   assert.equal(await reader.readSession(workspace, absent.view.key), null);
   assert.deepEqual(await reader.readSession(workspace, source.view.key), source.view);
   assert.deepEqual(await reader.readCheckpoint(workspace, source.write.value.source), { version: 1, checkpoint: source.write.value.checkpoint });
@@ -133,4 +134,19 @@ test("malformed connection settings and unavailable connections use safe diagnos
   const missingDatabase = new URL(postgres.url);
   missingDatabase.pathname += "_unavailable";
   await assert.rejects(PostgresCollectorDatabase.open(missingDatabase.href), StorageUnavailableError);
+});
+
+test("a cold write corrects the database's actual projection when a past reducer stored different records", async () => {
+  const [writer, reader] = databases;
+  const { write, view, inventory } = projectedWrite(0, "old rows", "retained");
+  const first = view.messages[0];
+  const oldMessage = { ...first, id: "old shape" };
+  const oldUsage = { ...view.usage[0], id: "retired call" };
+  const oldView = { ...view, messages: [oldMessage, { ...first, text: "old text" }], usage: [oldUsage] };
+  await writer.write("upgrade", tx => tx.save(write, [fullProjection(1, oldView)], write.value.checkpoint, inventory));
+  const store = new PostgresCollectorStorage(reader, "upgrade");
+  const next = { ...write.value, checkpoint: { ...write.value.checkpoint, offset: 101 }, expectedOffset: 100, expectedVersion: 1,
+    sourceObservation: { ...write.value.sourceObservation, observedEnd: 101 }, messages: [], usage: [] };
+  assert.equal(await store.commit(next), "committed");
+  assert.deepEqual(await reader.readSession("upgrade", view.key), view);
 });

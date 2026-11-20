@@ -11,7 +11,12 @@ export class LoopbackUploadRelay {
   private offline = false;
   checkedWhileOffline = false;
   batches = 0;
+  largestUpload = 0;
+  lastUpload = 0;
   presenceWrites = 0;
+  sessionReads = 0;
+  readonly checkpointReplies: { status: number; seconds?: number }[] = [];
+  private responses: { status: number; seconds?: number }[] = [];
 
   constructor(private readonly upstream: string) {}
 
@@ -26,11 +31,26 @@ export class LoopbackUploadRelay {
   close(): Promise<void> { return this.server[Symbol.asyncDispose](); }
   dropNextBatch(moment: DropMoment): void { this.nextDrop = moment; }
   reconnect(): void { this.offline = false; }
+  rejectCheckpoints(responses: { status: number; seconds?: number }[]): void { this.responses = [...responses]; }
 
   private forward(incoming: IncomingMessage, reply: ServerResponse): void {
     const path = incoming.url;
     const batch = path === "/v1/collector/batches";
-    if (batch) this.batches++;
+    if (path === "/v1/collector/session") this.sessionReads++;
+    if (path === "/v1/collector/checkpoint" && this.responses.length) {
+      const response = this.responses.shift();
+      if (response) {
+        this.checkpointReplies.push(response);
+        incoming.resume();
+        reply.writeHead(response.status, response.seconds === undefined ? {} : { "Retry-After": String(response.seconds) }).end();
+        return;
+      }
+    }
+    if (batch) {
+      this.batches++;
+      this.lastUpload = Number(incoming.headers["content-length"] ?? 0);
+      this.largestUpload = Math.max(this.largestUpload, this.lastUpload);
+    }
     if (this.offline) {
       if (path === "/v1/collector/checkpoint") this.checkedWhileOffline = true;
       reply.destroy();

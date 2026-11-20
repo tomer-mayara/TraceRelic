@@ -2,6 +2,7 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { StorageUnavailableError, type CollectorStorage, type CommitResult } from "@tracerelic/collector/storage";
 import type { CollectorCredentials, CollectorScope } from "./collector-credentials.ts";
 import { CollectorWireContract } from "@tracerelic/collector/wire-contract";
+import { CollectorTransfers, MemoryWireState, type CollectorWireState } from "./collector-transfers.ts";
 
 const routes = ["session", "checkpoint", "sources", "presence", "batches"] as const;
 type Route = typeof routes[number];
@@ -17,6 +18,7 @@ interface CollectorApiOptions {
   credentials: Pick<CollectorCredentials, "verify">;
   storageForWorkspace: (workspaceId: string) => CollectorStorage;
   onCommit?: (event: CommitMetric) => void;
+  wireState?: CollectorWireState;
 }
 
 function authorization(request: FastifyRequest): string | undefined {
@@ -57,8 +59,10 @@ export class CollectorApi {
   private readonly app = Fastify();
   private readonly contract = new CollectorWireContract();
   private readonly scopes = new WeakMap<FastifyRequest, CollectorScope>();
+  private readonly transfers: CollectorTransfers;
 
   constructor(private readonly options: CollectorApiOptions) {
+    this.transfers = new CollectorTransfers(options.wireState ?? new MemoryWireState(), this.contract);
     this.app.removeContentTypeParser("text/plain");
     this.app.addHook("onRequest", async (request, reply) => {
       reply.header("Cache-Control", "no-store");
@@ -97,28 +101,49 @@ export class CollectorApi {
     if (route === "batches") return this.commit(body, scope, reply);
     if (route === "presence") {
       if (!this.contract.is("PresenceWrite", body)) return writeResult(reply, "invalid");
-      return writeResult(reply, await storage().recordPresence({ ...body, source: { ...body.source, installationId } }));
+      const store = storage();
+      const source = await this.transfers.resolve(scope, body.source, store, body.location);
+      let codexIdentity = body.codexIdentity;
+      if (codexIdentity?.status === "verified") {
+        const peer = await this.transfers.resolve(scope, { ...body.source, sessionId: codexIdentity.peerSessionId, streamId: codexIdentity.peerStreamId }, store);
+        codexIdentity = { ...codexIdentity, peerStreamId: peer.streamId };
+      }
+      return writeResult(reply, await store.recordPresence({ ...body, source, ...(codexIdentity && { codexIdentity }) }));
     }
     if (route === "session" && this.contract.is("SessionKey", body)) {
-      return { session: await storage().readSession({ harness: body.harness, sessionId: body.sessionId }) };
+      return { session: await this.transfers.session(scope, storage(), { harness: body.harness, sessionId: body.sessionId }) };
     }
     if (route === "checkpoint" && this.contract.is("StreamKey", body)) {
       return storage().readCheckpoint({ ...body, installationId });
     }
     if (route === "sources" && this.contract.is("SourceScope", body)) {
-      return storage().listSources({ ...body, installationId });
+      const store = storage();
+      return this.transfers.sources(store, await store.listSources({ ...body, installationId }));
     }
     return reply.code(400).send({ error: "bad-request" });
   }
 
   private async commit(body: unknown, scope: CollectorScope, reply: FastifyReply) {
     const { installationId, workspaceId } = scope;
+    if (this.contract.is("BatchPart", body)) {
+      const staged = await this.transfers.stage(scope, body);
+      return staged ? reply.code(202).send({ result: "staged" }) : writeResult(reply, "invalid");
+    }
     const start = performance.now();
     let outcome: CommitMetric["outcome"] = "internal-error";
     try {
-      outcome = this.contract.is("Batch", body)
-        ? await this.options.storageForWorkspace(workspaceId).commit({ ...body, source: { ...body.source, installationId } })
-        : "invalid";
+      const packed = this.contract.is("PackedBatch", body) ? body : undefined;
+      const decoded = packed ? await this.transfers.decode(scope, packed, this.options.storageForWorkspace(workspaceId)) : body;
+      if (packed && (decoded === "invalid" || decoded === "conflict")) outcome = decoded;
+      else if (this.contract.is("Batch", decoded)) {
+        if (hasScopeOverride(decoded, installationId) || hasScopeOverride(decoded.source, installationId)) {
+          outcome = "invalid";
+          return reply.code(400).send({ error: "bad-request" });
+        }
+        const storage = this.options.storageForWorkspace(workspaceId);
+        outcome = await storage.commit({ ...decoded, source: await this.transfers.resolve(scope, decoded.source, storage, decoded.sourceObservation?.location) });
+      } else outcome = "invalid";
+      if (packed?.parts && outcome === "committed") await this.transfers.state.discardParts(scope, packed.upload);
       return writeResult(reply, outcome);
     } catch (error) {
       outcome = StorageUnavailableError.is(error) ? "storage-unavailable" : "internal-error";

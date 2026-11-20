@@ -20,6 +20,7 @@ interface Report {
   live: boolean;
   fresh: boolean;
   ownCallOnly: boolean;
+  ownerThread?: string;
 }
 
 type Unresolved = "insufficient" | "contradicted";
@@ -39,9 +40,9 @@ function reportAt(entry: Entry, payload: Fields, context: CallContext, turn: Cod
     through: { offset: entry.endOffset, lineNumber: entry.lineNumber },
   };
   const info = object(payload.info);
-  const rawLast = info?.last_token_usage;
+  const rawLast = entry.record.type === "token_usage_record" ? payload.usage : info?.last_token_usage;
   const last = providerCounts(rawLast);
-  const live = turn.owns(report?.turnId);
+  const live = report?.ownerThread ? report.ownerThread === entry.sessionId : turn.owns(report?.turnId);
   if (!report || report.invalidTotal || (rawLast !== undefined && rawLast !== null && !last)) {
     return { ...location, live, fresh: false, ownCallOnly: false };
   }
@@ -49,7 +50,7 @@ function reportAt(entry: Entry, payload: Fields, context: CallContext, turn: Cod
   const signature = jsonDigest([end, last, report.providerId, report.turnId]);
   const fresh = !!end && ((!end.inputTokens && !end.outputTokens) || (!!last && report.independent && sameTotals(end, last)));
   return { ...location, signature, cumulative: end, last, providerId: report.providerId, turnId: report.turnId,
-    live, fresh, ownCallOnly: !end && live && report.independent && !!report.last };
+    live, fresh, ownerThread: report.ownerThread, ownCallOnly: !end && live && report.independent && !!report.last };
 }
 
 function countsDisagree(left?: TokenCounts, right?: TokenCounts): boolean {
@@ -129,7 +130,7 @@ class ForkCapture {
     if (this.options.limit === 0 && this.sawHeader) return true;
     this.turn.observe(entry, payload);
     this.context = reportContext(entry, payload, this.context, true);
-    if (entry.record.type !== "event_msg" || payload.type !== "token_count") return false;
+    if (entry.record.type !== "token_usage_record" && (entry.record.type !== "event_msg" || payload.type !== "token_count")) return false;
     const report = reportAt(entry, payload, this.context, this.turn);
     if (!report) return false;
     const { cutoff } = this.options;
@@ -146,7 +147,7 @@ class ForkCapture {
 
   private keepReport(report: Report): boolean {
     const { findUncertain, limit } = this.options;
-    if (!report.ownCallOnly) this.firstUncertain ??= report.first;
+    if (!report.ownCallOnly && !report.ownerThread) this.firstUncertain ??= report.first;
     if (findUncertain) return this.firstUncertain !== undefined;
     const first = this.reports[0];
     if (first?.ownCallOnly && limit !== undefined) {
@@ -241,7 +242,6 @@ export class CodexForkEvidence {
 
   private async parentPrefix(parentSessionId: string, fork: Instant): Promise<ForkCapture | Unresolved> {
     let agreed: ForkCapture | undefined;
-    let parentSignature: string | undefined;
     let incomplete = false;
     for (const copy of this.sessions.get(parentSessionId) ?? []) {
       const parent = await ForkCapture.read(copy, { cutoff: fork });
@@ -254,10 +254,14 @@ export class CodexForkEvidence {
         if (origin === "contradicted") return origin;
         if (origin === "insufficient") incomplete = true;
       }
-      const signature = jsonDigest(parent.reports.map(row => row.signature));
-      if (parentSignature !== undefined && parentSignature !== signature) return "contradicted";
-      parentSignature = signature;
-      agreed = parent;
+      if (agreed) {
+        const common = Math.min(agreed.reports.length, parent.reports.length);
+        for (let i = 0; i < common; i++) {
+          if (disagree(agreed.reports[i], parent.reports[i])) return "contradicted";
+          if (agreed.reports[i].signature !== parent.reports[i].signature) incomplete = true;
+        }
+      }
+      if (!agreed || parent.reports.length > agreed.reports.length) agreed = parent;
     }
     return !incomplete && agreed ? agreed : "insufficient";
   }

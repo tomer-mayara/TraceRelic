@@ -224,6 +224,19 @@ test("installations sharing a session keep separate checkpoints and physical rec
   assert.deepEqual(view?.metadata, { branch: "newer" });
 });
 
+test("a verified occurrence cannot appropriate the ID of a different accepted message", async () => {
+  const store = new InMemoryCollectorStorage();
+  const message = { ...planning, sourceOrder: 1, blockIndex: 0 };
+  const messageOrigins = [{ sourceOrder: 1, prefixDigest: "a".repeat(64) }];
+  assert.equal(await store.commit(batch(0, 0, { messages: [message], messageOrigins })), "committed");
+  assert.equal(await store.commit(batch(1, 10, { messages: [{ ...message, id: "native:other:0", text: "Unrelated" }] })), "committed");
+  const other = { ...source, installationId: "laptop" };
+  const before = await store.readSession(source);
+  assert.equal(await store.commit(batch(2, 0, { source: other, messages: [{ ...message, id: "native:other:0" }], messageOrigins })), "invalid");
+  assert.deepEqual(await store.readSession(source), before);
+  assert.deepEqual(await store.readCheckpoint(other), { version: 2, checkpoint: null });
+});
+
 test("mutating batches and returned views does not mutate stored records or checkpoints", async () => {
   const store = new InMemoryCollectorStorage();
   const input = batch(0, 0, { messages: [{ ...planning }], usage: [request()], metadata: { cwd: "/demo" } });

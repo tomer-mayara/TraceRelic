@@ -10,3 +10,13 @@ Feature: Account for each measured Codex token once
     Given one installation recorded a verified interval of 200 tokens
     When another copy splits it into 120 and 80 and I scan both copies again
     Then the session still shows 200 tokens and the two parts account for the whole interval
+
+  Scenario: A second identifier names the same call
+    Given two copies report a 10-token Codex call and one adds a request ID
+    When the call reports are scanned in both orders
+    Then each session shows one 10-token Codex call
+
+  Scenario: Native and legacy records describe one response
+    Given a native Codex response and a legacy counter describe the same 120 tokens
+    When the native and legacy reports are scanned in both orders
+    Then each session shows one 120-token native response owned by its thread

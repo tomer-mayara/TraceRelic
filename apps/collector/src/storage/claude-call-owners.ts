@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { ClaudeOriginReports } from "./claude-origin-reports.ts";
+import { ClaudeOriginReports, type OwnedReport } from "./claude-origin-reports.ts";
 import { ClaudeOwnedMeasurements } from "./claude-owned-measurements.ts";
 import { ClaudeSessionOwnership } from "./claude-session-ownership.ts";
-import type { Batch, ClaudeUsageReport, SourceUsageDiagnostic, Usage } from "./collector-storage.ts";
+import type { Batch, SourceUsageDiagnostic, Usage } from "./collector-storage.ts";
 
 interface ClaudeProjection {
   usage: Usage[];
@@ -27,13 +27,13 @@ export class ClaudeCallOwners {
     this.measured = new Map(previous?.measured);
   }
 
-  prepare(batch: Batch, usage: readonly Usage[], parentSessionId?: string): { owners: ClaudeCallOwners; changedSessions: ReadonlySet<string> } | null {
+  prepare(batch: Batch, usage: readonly Usage[], parentSessionId?: string, generation = 0): { owners: ClaudeCallOwners; changedSessions: ReadonlySet<string> } | null {
     const { sessionId } = batch.source;
     const previous = this.records.get(sessionId);
     if (!previous && !parentSessionId && !usage.length && !batch.claudeUsageReports?.length) {
       return { owners: this, changedSessions: new Set() };
     }
-    const updated = ClaudeOriginReports.merge(previous, batch, usage, parentSessionId);
+    const updated = ClaudeOriginReports.merge(previous, batch, usage, generation, parentSessionId);
     if (!updated) return null;
     if (updated === previous) return { owners: this, changedSessions: new Set() };
     const owners = new ClaudeCallOwners(this);
@@ -84,13 +84,14 @@ export class ClaudeCallOwners {
 
   private publishAmounts(owner: string, changed: Set<string>): void {
     // Keep the owner's original observation first when a continuation contains a newer final amount.
-    const reports: ClaudeUsageReport[] = [...this.ownership.get(owner)?.contributions.get(owner) ?? []];
+    const reports: OwnedReport[] = [...this.ownership.get(owner)?.contributions.get(owner) ?? []];
     for (const child of [...this.contributors.get(owner) ?? []].sort()) {
       for (const row of this.ownership.get(child)?.contributions.get(owner) ?? []) reports.push(row);
     }
     const previous = this.measured.get(owner);
     const amounts = ClaudeOwnedMeasurements.merge(previous, owner, reports);
-    if (!isDeepStrictEqual(amounts.measurements, previous?.measurements) || amounts.hasGap !== previous?.hasGap) changed.add(owner);
+    if (!isDeepStrictEqual(amounts.measurements, previous?.measurements) || amounts.hasGap !== previous?.hasGap
+      || !isDeepStrictEqual(amounts.diagnostics, previous?.diagnostics)) changed.add(owner);
     this.measured.set(owner, amounts);
   }
 
@@ -118,6 +119,7 @@ export class ClaudeCallOwners {
     const amounts = this.measured.get(sessionId);
     const diagnostics = [...this.ownership.get(sessionId)?.diagnostics ?? []]
       .sort(([a], [b]) => a.localeCompare(b)).map(([, value]) => value);
+    for (const diagnostic of amounts?.diagnostics ?? []) diagnostics.push(diagnostic);
     const rows = new Map(usage.filter(row => !raw.rawIds.has(row.id)).map(row => [row.id, row]));
     const conflict = amounts && [...rows.keys()].some(id => amounts.measurementIds.has(id));
     for (const row of amounts?.measurements ?? []) rows.set(row.id, row);

@@ -3,10 +3,12 @@ import { isByteRange } from "./usage-validation.ts";
 
 export type ClaudeIdentity = Pick<ClaudeUsageReport, "messageId" | "requestId" | "iterationId">;
 export type LocatedOrigin = ClaudeCallOrigin & Pick<StreamKey, "streamId" | "installationId">;
+export type OwnedReport = ClaudeUsageReport & { origin?: LocatedOrigin };
 export interface Observation {
   readonly report: ClaudeUsageReport;
   readonly origin?: LocatedOrigin;
   readonly callKey: string;
+  readonly generation: string;
 }
 
 export interface NativeCall extends ClaudeIdentity {
@@ -29,12 +31,12 @@ function originKey(row: ClaudeCallOrigin): string {
     row.sourceOrder, row.byteRange.startOffset, row.byteRange.endOffset]);
 }
 
-function collect(records: Map<string, Observation>, incoming: ClaudeUsageReport, source: StreamKey): boolean {
+function collect(records: Map<string, Observation>, incoming: ClaudeUsageReport, source: StreamKey, generation: string): boolean {
   const { origin: native, ...data } = incoming;
-  const sourceKey = JSON.stringify([source.streamId, source.installationId]);
   const reportKey = JSON.stringify([data.at, data.messageId, data.requestId, data.iterationId, data.status, data.inputTokens, data.outputTokens,
-    data.cacheReadTokens, data.cacheWriteTokens, data.cacheWrite5mTokens, data.cacheWrite1hTokens, data.reasoningTokens, data.turnId, data.model]);
-  const unlocated = JSON.stringify([sourceKey, reportKey]);
+    data.cacheReadTokens, data.cacheWriteTokens, data.cacheWrite5mTokens, data.cacheWrite1hTokens, data.reasoningTokens, data.turnId, data.model,
+    data.iterationPosition]);
+  const unlocated = JSON.stringify([generation, reportKey]);
   const first = records.get(unlocated);
   let key = unlocated;
   let origin: LocatedOrigin | undefined;
@@ -50,7 +52,7 @@ function collect(records: Map<string, Observation>, incoming: ClaudeUsageReport,
     return false;
   }
   // Upgrade the first unlocated observation in place to keep its original position across installations.
-  records.set(key, { report: data, origin, callKey: groupKey(data, origin, key) });
+  records.set(key, { report: data, origin, callKey: groupKey(data, origin, key), generation });
   return true;
 }
 
@@ -71,10 +73,12 @@ function originalIn(groups: ReadonlySet<NativeCall>, call: ClaudeIdentity): Nati
 export class ClaudeOriginReports {
   readonly calls = new Map<string, NativeCall>();
   readonly rawIds: ReadonlySet<string>;
+  readonly parents: ReadonlySet<string>;
   private readonly uuids = new Map<string, Set<NativeCall>>();
 
-  private constructor(readonly parents: ReadonlySet<string>, private readonly observations: ReadonlyMap<string, Observation>,
+  private constructor(private readonly parentOrigins: ReadonlyMap<string, ReadonlySet<string>>, private readonly observations: ReadonlyMap<string, Observation>,
     usage: readonly Usage[]) {
+    this.parents = new Set([...parentOrigins.values()].flatMap(parents => [...parents]));
     this.rawIds = new Set(usage.map(row => row.id));
     for (const { callKey, report, origin } of this.rows) {
       const { messageId, requestId, iterationId } = report;
@@ -95,22 +99,35 @@ export class ClaudeOriginReports {
 
   get rows() { return this.observations.values(); }
 
-  static merge(previous: ClaudeOriginReports | undefined, batch: Batch, usage: readonly Usage[], parentSessionId?: string) {
+  private retains(usage: readonly Usage[], location: string, parentSessionId?: string): boolean {
+    const parents = this.parentOrigins.get(location);
+    if (parentSessionId && !parents?.has(parentSessionId)) return false;
+    return this.rawIds.size === usage.length && usage.every(row => this.rawIds.has(row.id));
+  }
+
+  static merge(previous: ClaudeOriginReports | undefined, batch: Batch, usage: readonly Usage[], generation: number, parentSessionId?: string) {
     const reports = batch.claudeUsageReports ?? [];
-    const sameIds = previous?.rawIds.size === usage.length && usage.every(row => previous.rawIds.has(row.id));
-    if (previous && sameIds && !reports.length && (!parentSessionId || previous.parents.has(parentSessionId))) return previous;
+    const location = JSON.stringify([batch.source.streamId, batch.source.installationId, generation]);
+    const unchanged = previous?.retains(usage, location, parentSessionId) && !batch.repairEvidenceFrom;
+    if (unchanged && !reports.length) return previous;
     const records = new Map(previous?.observations);
-    const parents = new Set(previous?.parents);
+    const origins = new Map(previous?.parentOrigins);
+    if (batch.repairEvidenceFrom) {
+      origins.delete(location);
+      for (const [key, row] of records) if (row.generation === location) records.delete(key);
+    }
+    const parents = new Set(origins.get(location));
     if (parentSessionId) parents.add(parentSessionId);
     let observed = false;
     for (const report of reports) {
       const { origin } = report;
       if (origin && !isByteRange(origin.byteRange, batch.checkpoint.offset)) return null;
       if (origin?.parentSessionId) parents.add(origin.parentSessionId);
-      if (collect(records, report, batch.source)) observed = true;
+      if (collect(records, report, batch.source, location)) observed = true;
     }
-    if (!observed && previous && sameIds && parents.size === previous.parents.size) return previous;
-    return new ClaudeOriginReports(parents, records, usage);
+    if (unchanged && !observed && parents.size === (origins.get(location)?.size ?? 0)) return previous;
+    origins.set(location, parents);
+    return new ClaudeOriginReports(origins, records, usage);
   }
 
   get parentId(): string | undefined {
@@ -119,6 +136,12 @@ export class ClaudeOriginReports {
 
   /** A cited row can corroborate a rewritten request. An uncited call needs both provider IDs. */
   match(call: ClaudeIdentity, row?: LocatedOrigin): NativeCall | null | undefined {
+    // Ownership belongs to the provider request. Its verified final copy may be
+    // the only transcript that recorded an advisor iteration.
+    if (call.iterationId) {
+      const request = this.match({ messageId: call.messageId, requestId: call.requestId }, row);
+      if (request !== undefined) return request;
+    }
     const uuid = row?.parentMessageUuid ?? row?.transcriptUuid;
     if (uuid) {
       const originals = this.uuids.get(JSON.stringify([uuid, call.iterationId]));

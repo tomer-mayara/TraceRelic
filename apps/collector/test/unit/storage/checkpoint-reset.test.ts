@@ -85,6 +85,23 @@ test("either provider can identify ambiguous replay rows by source and physical 
   }
 });
 
+test("historical repair matches the accepted lines, replay reservations and previous checkpoint before it changes a generation", async () => {
+  const store = new InMemoryCollectorStorage();
+  const bounds = { ["d".repeat(64)]: { accepted: 2, replayed: 0 } };
+  const state = { version: 3, lineNumber: 2, decoder: { occurrences: {} }, replayOccurrences: bounds };
+  const old = { offset: 20, prefixDigest: "a".repeat(64), parserState: JSON.stringify(state) };
+  assert.equal(await store.commit(batch(0, 0, { checkpoint: old, messages: [planning] })), "committed");
+  const checkpoint = { ...old, evidenceVersion: 1 as const, claudeCallOrigins: true as const };
+  const repair = batch(1, 20, { repairEvidenceFrom: old, checkpoint });
+  for (const parserState of ["{}", JSON.stringify({ ...state, lineNumber: 1 }), JSON.stringify({ ...state, replayOccurrences: {} })]) {
+    assert.equal(await store.commit({ ...repair, checkpoint: { ...checkpoint, parserState } }), "invalid");
+    assert.deepEqual((await store.readSession(source))?.messages, [planning]);
+  }
+  assert.equal(await store.commit({ ...repair, repairEvidenceFrom: { ...old, prefixDigest: "b".repeat(64) } }), "conflict");
+  assert.equal(await store.commit(repair), "committed");
+  assert.deepEqual((await store.readSession(source))?.messages, []);
+});
+
 test("a partial replay pins its inspected bytes through subsequent checkpoints", async () => {
   const store = new InMemoryCollectorStorage();
   const saved = { offset: 30, parserState: "first", prefixDigest: "a".repeat(64) };

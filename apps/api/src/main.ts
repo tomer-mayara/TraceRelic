@@ -35,6 +35,7 @@ async function serve(port: number, credentials: CollectorCredentials, database: 
   const workspaces = new Map<string, PostgresCollectorStorage>();
   const api = new CollectorApi({
     credentials,
+    wireState: database,
     storageForWorkspace(workspaceId) {
       let storage = workspaces.get(workspaceId);
       if (!storage) {

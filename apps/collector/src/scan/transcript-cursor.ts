@@ -19,7 +19,7 @@ export interface ParserFormat<Entry> {
   };
 }
 
-export type SourceLine = Pick<DamagedLine, "lineNumber" | "endOffset">;
+export type SourceLine = Pick<DamagedLine, "lineNumber" | "endOffset"> & { readonly recordPrefixDigest?: string };
 
 interface ReplayPlan {
   occurrences?: ReplayOccurrences;
@@ -34,6 +34,7 @@ class BackfilledUsage implements DecodedUsage {
   readonly usageWindows: DecodedUsage["usageWindows"] = [];
   readonly claudeUsageReports: NonNullable<DecodedUsage["claudeUsageReports"]> = [];
   codexCallClaims?: DecodedUsage["codexCallClaims"];
+  codexCallAliases?: DecodedUsage["codexCallAliases"];
   readonly usageDiagnostics: NonNullable<DecodedUsage["usageDiagnostics"]> = [];
   hasGap = false;
 
@@ -45,6 +46,10 @@ class BackfilledUsage implements DecodedUsage {
     if (batch.codexCallClaims?.length) {
       const claims = this.codexCallClaims ??= [];
       for (const claim of batch.codexCallClaims) claims.push(claim);
+    }
+    if (batch.codexCallAliases?.length) {
+      const aliases = this.codexCallAliases ??= [];
+      for (const alias of batch.codexCallAliases) aliases.push(alias);
     }
     for (const diagnostic of batch.usageDiagnostics ?? []) this.usageDiagnostics.push(diagnostic);
     this.hasGap ||= batch.hasGap === true;
@@ -74,6 +79,37 @@ export class TranscriptCursor<Entry extends SourceLine> {
     private readonly parser: ChatParser<Entry>, private readonly replay?: ReplayPlan,
     private readonly backfill?: { usage: BackfilledUsage; checkpoint: Checkpoint },
   ) {}
+
+  /** Decode only bytes proven to be the source of this installation's old checkpoint. */
+  static async repairEvidence<Entry extends SourceLine>(
+    source: TranscriptSource<Entry>, previous: Checkpoint, format: ParserFormat<Entry>,
+  ): Promise<Omit<Batch, "source" | "expectedOffset" | "expectedVersion"> | undefined> {
+    if (previous.evidenceVersion || !previous.offset || !previous.prefixDigest) return;
+    const old = readState(previous, format, source.sourceFile);
+    const end = previous.offset;
+    const prefix: TranscriptSource<Entry> = { ...source, fileSize: end,
+      readBatches: (position, size, through = end) => source.readBatches(position, size, Math.min(through, end)) };
+    const cursor = new TranscriptCursor({ offset: 0, lineNumber: 0 }, format, format.resume(), old?.replay);
+    const usage = new BackfilledUsage();
+    const messages: Message[] = [];
+    const messageOrigins: NonNullable<Batch["messageOrigins"]> = [];
+    const metadata: NonNullable<Batch["metadata"]> = {};
+    let branchObservation: Batch["branchObservation"];
+    let checkpoint: Checkpoint | undefined;
+    for await (const decoded of cursor.read(prefix)) {
+      const { chat } = decoded;
+      for (const message of chat.messages) messages.push(message);
+      for (const origin of chat.messageOrigins ?? []) messageOrigins.push(origin);
+      Object.assign(metadata, chat.metadata);
+      branchObservation = chat.branchObservation ?? branchObservation;
+      usage.add(chat);
+      checkpoint = decoded.checkpoint;
+    }
+    if (checkpoint?.offset !== end || checkpoint.prefixDigest !== previous.prefixDigest
+      || (old && JSON.parse(checkpoint.parserState).lineNumber !== old.lineNumber)) throw new TranscriptChangedError(source.sourceFile);
+    return { ...usage, messages, ...(messageOrigins.length && { messageOrigins }), metadata, branchObservation,
+      checkpoint, repairEvidenceFrom: previous };
+  }
 
   /** Reclassify the accepted usage at its current byte while preserving chat and replay decisions. */
   static async reconcileUsage<Entry extends SourceLine>(
@@ -171,11 +207,17 @@ export class TranscriptCursor<Entry extends SourceLine> {
     for await (const batch of source.readBatches(this.position)) {
       const { entries, next, prefixDigest } = batch;
       if (prepare && next.offset < source.fileSize) {
-        await prepare(entries, source.readBatches(next), this.position.lineNumber);
+        await prepare(entries, source.readBatches(next), this.position.lineNumber, batch.damagedLines);
         prepare = undefined;
       }
       const chat = this.parser.decodeBatch(entries, batch.damagedLines);
       if (this.replay?.occurrences) reconcileReplayMessages(chat, this.replay.occurrences);
+      if (chat.messages.length) {
+        const visible = new Set(chat.messages.map(message => message.sourceOrder));
+        const proofs = entries.flatMap(entry => entry.recordPrefixDigest && visible.has(entry.lineNumber)
+          ? [{ sourceOrder: entry.lineNumber, prefixDigest: entry.recordPrefixDigest }] : []);
+        if (proofs.length) chat.messageOrigins = [...chat.messageOrigins ?? [], ...proofs];
+      }
       locateDiagnostics(batch, chat);
       yield { chat, next, prefixDigest };
     }
@@ -206,7 +248,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
     let version = replayOccurrences ? replayVersion : this.format.version;
     if (this.parser.awaitingBaseline && this.format.gapVersion !== undefined) version = this.format.gapVersion;
     const parserState = JSON.stringify({ version, lineNumber, decoder: this.parser.snapshot(), replayOccurrences });
-    return { offset, parserState, prefixDigest, ...(replayThrough && { replayThrough }),
+    return { offset, parserState, prefixDigest, evidenceVersion: 1, ...(replayThrough && { replayThrough }),
       ...(this.format.claudeCallOrigins && { claudeCallOrigins: true }),
       ...(this.format.codexFork && { codexFork: this.format.codexFork }) };
   }

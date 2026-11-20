@@ -106,13 +106,14 @@ export class ClaudeUsage {
       }
       const native = text(item.id) ? item.id : item.iteration_id;
       const iterationId = text(native) ? `native:${native}` : `index:${index}`;
-      this.observe(item, request, item.model, issue, iterationId);
+      this.observe(item, request, item.model, issue, { iterationId, iterationPosition: index });
     }
   }
 
-  private observe(usage: Fields, request: Request, model: unknown, issue: ReportIssue, iterationId?: string): void {
+  private observe(usage: Fields, request: Request, model: unknown, issue: ReportIssue,
+    iteration?: Pick<ClaudeUsageReport, "iterationId" | "iterationPosition">): void {
     const counts = ClaudeUsageCounts.read(usage, issue);
     if (!counts) return;
-    this.reports.push({ ...request, ...counts, ...(text(model) && { model }), ...(iterationId && { iterationId }) });
+    this.reports.push({ ...request, ...counts, ...(text(model) && { model }), ...iteration });
   }
 }

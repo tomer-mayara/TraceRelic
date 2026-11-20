@@ -1,5 +1,4 @@
-import { isAbsolute, relative, sep } from "node:path";
-import type { harnesses } from "@tracerelic/shared";
+import { matchesRecordedPath, recordedPathDialect, type harnesses } from "@tracerelic/shared";
 
 export type Harness = (typeof harnesses)[number];
 export type Identifier = string;
@@ -32,6 +31,13 @@ export interface SourceLocation {
 export interface SourceObservation {
   location: SourceLocation;
   observedEnd: Count;
+  observedPrefixDigest?: PrefixDigest;
+  checkedPrefix?: VerifiedPrefix;
+}
+
+export interface ObservedExtent {
+  offset: Count;
+  prefixDigest?: PrefixDigest;
 }
 
 export interface SourceScope {
@@ -43,12 +49,25 @@ export interface SourceScope {
 }
 
 export type SourcePresence = "present" | "missing";
+export type CodexIdentityStatus = "unverified" | "messages-repaired" | "repaired";
+export type CodexIdentityProof = { status: "unverified" } | {
+  status: "verified";
+  peerSessionId: string;
+  peerStreamId: string;
+  expectedPeerVersion: Count;
+  headerEnd: Count;
+  accepted: VerifiedPrefix;
+  peer: VerifiedPrefix;
+};
 
 export interface AcknowledgedSource extends SourceObservation {
   source: StreamKey;
   acceptedOffset: Count;
   version: Count;
   presence: SourcePresence;
+  generation?: Count;
+  unrecovered?: ObservedExtent;
+  codexIdentityStatus?: CodexIdentityStatus;
 }
 
 export interface PresenceWrite extends SourceObservation {
@@ -56,6 +75,7 @@ export interface PresenceWrite extends SourceObservation {
   expectedOffset: Count;
   expectedVersion: Count;
   presence: SourcePresence;
+  codexIdentity?: CodexIdentityProof;
 }
 
 export interface MissingSource {
@@ -65,20 +85,38 @@ export interface MissingSource {
   observedEnd: Count;
 }
 
+/** The original scanner embedded its root in the stream ID when installationId was omitted. */
+export function legacyScannerLocation(harness: Harness, streamId: string): SourceLocation | undefined {
+  if (harness === "codex") {
+    try {
+      const pair: unknown = JSON.parse(streamId);
+      if (!Array.isArray(pair) || pair.length !== 2) return;
+      const [root, path] = pair;
+      const dialect = recordedPathDialect(root);
+      if (typeof root === "string" && dialect && typeof path === "string" && path === dialect.basename(path) && /^rollout-.*\.jsonl$/.test(path) && !path.includes("\0")) return { root, path };
+    } catch { /* Other adapters can use opaque stream IDs. */ }
+    return;
+  }
+  const dialect = recordedPathDialect(streamId);
+  if (!dialect || !/\.jsonl(?:\.superseded-\d.*)?$/.test(streamId)) return;
+  const { basename, dirname, relative } = dialect;
+  const directory = dirname(streamId);
+  const candidates = [directory];
+  if (basename(directory) === "subagents" && basename(streamId).startsWith("agent-")) candidates.push(dirname(dirname(directory)));
+  const projects = candidates.filter(path => basename(dirname(path)) === "projects");
+  if (projects.length !== 1) return;
+  const [projectDir] = projects;
+  const root = dirname(dirname(projectDir));
+  return { root, path: relative(root, streamId), projectDir };
+}
+
 /** Use the source's own discovery fields to match a session or project selection. */
 export function matchesSourceScope(scope: SourceScope, source: StreamKey, location: SourceLocation): boolean {
   if (source.harness !== scope.harness || source.installationId !== scope.installationId || location.root !== scope.root) return false;
   const { sessionIds = [], projectPaths = [] } = scope;
   if ((!sessionIds.length && !projectPaths.length) || sessionIds.includes(source.sessionId)) return true;
-  return projectPaths.some(root => {
-    if (!root) return false;
-    if (location.projectDir && relative(root, location.projectDir) === "") return true;
-    return [location.cwd, location.currentFileCwd].some(cwd => {
-      if (!cwd) return false;
-      const path = relative(root, cwd);
-      return !isAbsolute(path) && path !== ".." && !path.startsWith(".." + sep);
-    });
-  });
+  return projectPaths.some(root => matchesRecordedPath(root, location.projectDir, true)
+    || matchesRecordedPath(root, location.cwd) || matchesRecordedPath(root, location.currentFileCwd));
 }
 
 export interface VerifiedPrefix {
@@ -87,12 +125,24 @@ export interface VerifiedPrefix {
 }
 
 export interface Checkpoint {
+  evidenceVersion?: 1;
   offset: Count;
   parserState: string;
   prefixDigest?: PrefixDigest;
   replayThrough?: VerifiedPrefix;
   codexFork?: CodexForkCheckpoint;
   claudeCallOrigins?: true;
+}
+
+/** The legacy scanner saved a positive physical line and decoder alongside its byte offset. */
+export function legacyScannerLine(checkpoint: Checkpoint): number | undefined {
+  if (!checkpoint.offset || checkpoint.evidenceVersion) return;
+  let state: { version?: unknown; lineNumber?: unknown; decoder?: unknown } | null;
+  try { state = JSON.parse(checkpoint.parserState); } catch { return; }
+  if (!state || typeof state.version !== "number" || !Number.isInteger(state.version) || state.version < 1 || state.version > 4
+    || typeof state.lineNumber !== "number" || !Number.isSafeInteger(state.lineNumber) || state.lineNumber < 1 || state.lineNumber > checkpoint.offset
+    || !state.decoder || typeof state.decoder !== "object" || Array.isArray(state.decoder)) return;
+  return state.lineNumber;
 }
 
 export interface ForkPosition {
@@ -113,9 +163,19 @@ export interface CodexCallClaim {
   ownerSessionId: Identifier;
 }
 
+/** A specific provider call and another ID observed on the same measurement. */
+export interface CodexCallAlias {
+  callUsageId: Identifier;
+  aliasUsageId: Identifier;
+  sourceOrder?: Count;
+  byteRange?: ByteRange;
+  closing?: Pick<Usage, "inputTokens" | "outputTokens" | "turnId" | "responseId">;
+}
+
 export interface CheckpointSnapshot {
   version: Count;
   checkpoint: Checkpoint | null;
+  observedThrough?: ObservedExtent;
 }
 
 export interface Metadata {
@@ -166,6 +226,7 @@ export interface ClaudeUsageReport extends TokenCounts, CacheWriteDurations {
   turnId?: Identifier;
   model?: string;
   iterationId?: Identifier;
+  iterationPosition?: Count;
   origin?: ClaudeCallOrigin;
 }
 
@@ -186,7 +247,7 @@ export interface ByteRange {
 export type UsageDiagnosticCode = "invalid-claude-usage" | "unidentified-claude-call"
   | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration" | "ambiguous-transcript-replay"
   | "malformed-transcript-line" | "unsupported-codex-usage" | "codex-counter-reset" | "unresolved-codex-fork"
-  | "unresolved-claude-fork";
+  | "unresolved-claude-fork" | "ambiguous-codex-call" | "ambiguous-claude-iteration" | "unverified-source-history";
 
 export interface UsageDiagnostic {
   code: UsageDiagnosticCode;
@@ -197,6 +258,11 @@ export interface UsageDiagnostic {
 export interface SourceUsageDiagnostic extends UsageDiagnostic {
   streamId: Identifier;
   installationId?: Identifier;
+}
+
+/** A missing generation has no reliable row-level range. Identify its source at the first line. */
+export function sourceHistoryDiagnostic({ streamId, installationId }: StreamKey): SourceUsageDiagnostic {
+  return { code: "unverified-source-history", sourceOrder: 1, streamId, ...(installationId !== undefined && { installationId }) };
 }
 
 export interface Usage extends TokenCounts, CacheWriteDurations {
@@ -210,6 +276,7 @@ export interface Usage extends TokenCounts, CacheWriteDurations {
   iterationId?: Identifier;
   turnId?: Identifier;
   requestId?: Identifier;
+  responseId?: Identifier;
 }
 
 export interface UsageWindow {
@@ -235,8 +302,11 @@ export interface Batch {
   metadata?: Metadata;
   branchObservation?: BranchObservation;
   messages: Message[];
+  messageOrigins?: { sourceOrder: SourceOrder; prefixDigest: PrefixDigest; refinesAccepted?: true }[];
+  repairEvidenceFrom?: Checkpoint;
   usage: Usage[];
   codexCallClaims?: CodexCallClaim[];
+  codexCallAliases?: CodexCallAlias[];
   reconcileCodexForkFrom?: Checkpoint;
   backfillClaudeOriginsFrom?: Checkpoint;
   claudeUsageReports?: ClaudeUsageReport[];
@@ -260,6 +330,9 @@ export interface SessionView {
 }
 
 export interface CollectorStorage {
+  canonicalSource?(source: StreamKey): Promise<string | undefined>;
+  mergeSourceAlias?(source: StreamKey, target: string, version: number): Promise<boolean>;
+  resolveSource?(source: StreamKey, location: SourceLocation, verify: (checkpoint: Checkpoint) => Promise<boolean>): Promise<StreamKey>;
   listSources(scope: SourceScope): Promise<AcknowledgedSource[]>;
   recordPresence(update: PresenceWrite): Promise<CommitResult>;
   readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot>;

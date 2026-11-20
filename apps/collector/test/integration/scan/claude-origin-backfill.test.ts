@@ -16,7 +16,8 @@ for (const replay of [false, true]) {
     const legacy = t.mock.method(f.storage, "commit", (batch: Batch) => {
       key = batch.source;
       const { offset, prefixDigest, parserState } = batch.checkpoint;
-      const earlierState = replay ? JSON.stringify({ ...JSON.parse(parserState), version: 3, replayOccurrences: {} }) : parserState;
+      const earlierState = replay ? JSON.stringify({ ...JSON.parse(parserState), version: 3,
+        replayOccurrences: { ["c".repeat(64)]: { accepted: 2, replayed: 1 } } }) : parserState;
       return commit({ ...batch, checkpoint: { offset, prefixDigest, parserState: earlierState },
         claudeUsageReports: batch.claudeUsageReports?.map(({ origin: _origin, ...report }) => report) });
     });
@@ -30,10 +31,10 @@ for (const replay of [false, true]) {
     assert.deepEqual(await f.scan(), initial);
     assert.equal(writes.mock.calls.length, 1);
     const [correction] = writes.mock.calls[0].arguments;
-    assert.deepEqual(correction.backfillClaudeOriginsFrom, before.checkpoint);
+    assert.deepEqual(correction.repairEvidenceFrom, before.checkpoint);
     assert.deepEqual(correction.claudeUsageReports?.map(row => row.origin?.transcriptUuid), ["claude-first", "claude-second"]);
     assert.deepEqual(await f.storage.readCheckpoint(key), {
-      version: before.version + 1, checkpoint: { ...before.checkpoint, claudeCallOrigins: true },
+      version: before.version + 1, checkpoint: { ...before.checkpoint, claudeCallOrigins: true, evidenceVersion: 1 },
     });
     assert.deepEqual(await f.scan(), initial);
     assert.equal(writes.mock.calls.length, 1);
@@ -68,7 +69,7 @@ test("a workspace with older Claude reports can correct the fork at both accepte
   assert.deepEqual(after.child.messages, before.child.messages);
   assert.deepEqual(after.parent, before.parent);
   for (const key of ["childCheckpoint", "parentCheckpoint"] as const) {
-    assert.deepEqual(after[key].checkpoint, { ...before[key].checkpoint, claudeCallOrigins: true });
+    assert.deepEqual(after[key].checkpoint, { ...before[key].checkpoint, claudeCallOrigins: true, evidenceVersion: 1 });
     assert(after[key].version > before[key].version);
   }
   await f.scan("parent");
