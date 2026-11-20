@@ -51,7 +51,9 @@ Set an optional `installationId` in the configuration when multiple installation
 
 For Codex, each `usage` record identifies a call or the remaining interval between two cumulative reports. A second copy can supply more detail about the same total. For Claude Code, text and tool-only rows can update the same request. Its final report can raise or lower the count. Cache reads and writes are included in input, and separate advisor calls have their own measurements.
 
-`observedTotalTokens` sums the accepted input and output. An explicit zero counts as a measurement. A session without accepted measurements has a null total and unknown coverage. A known gap makes measured coverage partial. When Claude usage has an unsupported breakdown, `usageDiagnostics` identifies the source and line. [Local collector engineering spec](docs/specs/local-collector.md)
+`observedTotalTokens` sums the accepted input and output. An explicit zero counts as a measurement. A session without accepted measurements has a null total and unknown coverage. A known gap makes measured coverage partial.
+
+The scanner keeps reading after a damaged complete line. For damaged lines and unsupported usage, including a Claude cache breakdown, `usageDiagnostics` gives the source, line number and byte range. The range includes the terminating newline. Codex keeps independently identified calls and resumes counting cumulative changes from the next reliable snapshot. [Local collector engineering spec](docs/specs/local-collector.md)
 
 ## Run the checks
 

@@ -434,6 +434,21 @@ Feature: Preserve known data across a gap
 1. **Unit.** Test a counter reset, unsupported usage, an unfinished line and known bookkeeping. Flag only a possible loss of usage. Resume from the next reliable baseline.
 2. **Integration.** Commit the gap with the known records. Check `unknown` before any measurement, `partial` afterward, and a diagnostic with no message text.
 
+| LC-07 constraint | Decision and check |
+| --- | --- |
+| Behavior | A damaged complete line preserves earlier measurements and later messages and calls. The [damaged-line scenario](../../apps/collector/test/acceptance/scan/preserve-known-usage.feature) checks 70 plus 20 tokens with partial coverage. Blank lines, unfinished writes and known bookkeeping add no gap. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | The session reports a code, logical source, line number and exact half-open byte range. A session with no measurements reports unknown coverage and a null total. Record the diagnostic and known usage with the checkpoint. Replaying the same range reports it once. Check returned data and rollback in `bun run test` and `bun run check:collector-storage`. Existing service objectives apply. |
+| Architecture | History identifies unreadable physical lines. Provider decoders decide whether a valid usage record gives a measurement or establishes a new baseline. The scanner passes source positions and known records to storage in the same write. The existing [dependency rules](../../.dependency-cruiser.collector.json) enforce these boundaries in `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds the first byte of each batch entry, damaged line ranges and a checkpoint state for a pending Codex baseline. The [storage contract](local-collector/storage.tsp) adds range-bearing diagnostics for unreadable lines, unsupported Codex usage and counter resets. Existing line-only diagnostics remain readable. Run `bun run check:collector-history`, `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+A damaged line includes its terminating newline in the reported range. If a Claude file contains several sessions, an unreadable line may have belonged to any selected session in that file. A valid record with a session ID belongs only to that session.
+
+After a possible break in the Codex counters, keep independently identified calls. The next reliable cumulative snapshot establishes a baseline. Count subsequent verified differences. An empty rate-limit update or a missing optional breakdown does not interrupt the counters.
+
+JSON whitespace before a fresh Codex session header preserves its starting baseline. A preceding unreadable or unidentified record still leaves the origin uncertain.
+
+If another copy saw a counter reset hidden in the damaged line, both may later contain the same native snapshots. Match both boundary reports within the same verified session history to count the interval once. If the second copy has reached only part of the interval, keep the accepted measurement and any independent calls outside it. Equal token counts alone cannot establish a match.
+
 #### LC-08 · Retry a write after a lost connection
 
 ```gherkin

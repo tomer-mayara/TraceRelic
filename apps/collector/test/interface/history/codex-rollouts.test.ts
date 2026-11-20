@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, copyFile, rename, stat, symlink, truncate } from "node:fs/promises";
+import { appendFile, copyFile, rename, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
@@ -79,6 +79,34 @@ test("reads Codex batches from the specified byte and physical line, with a larg
   assert.deepEqual(prefixBatches.flatMap(batch => batch.entries.map(entry => entry.record)), [header]);
 });
 
+test("marks the native header after a verified blank prefix across batches and resumed reads", async t => {
+  const fixture = await Rollout.create();
+  t.after(() => fixture.close());
+  const native = Rollout.header("native");
+  const copied = Rollout.header("copied");
+  const path = await fixture.write([native, copied]);
+  const body = [native, copied].map(record => JSON.stringify(record) + "\n").join("");
+  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  for (const [prefix, expected] of [
+    [" \r\n\t\n", true], ["", undefined], ["\nnull\n", undefined],
+    ["broken JSON\n\n", undefined], ["{}\n", undefined], ["\u00a0\n", undefined],
+  ] as const) {
+    await writeFile(path, prefix + body);
+    const [source] = await Array.fromAsync(reader.discoverSources());
+    const offset = Buffer.byteLength(prefix);
+    const lineNumber = prefix.split("\n").length - 1;
+    for (const start of [{ offset: 0, lineNumber: 0 }, { offset, lineNumber }]) {
+      const batches = await Array.fromAsync(source.readBatches(start, 1));
+      const entries = batches.flatMap(batch => batch.entries);
+      assert.deepEqual(entries.map(entry => entry.afterBlankPrefix), [expected, undefined]);
+      assert.equal(entries[0].lineNumber, lineNumber + 1);
+      assert.equal(entries[0].startOffset, offset);
+    }
+    const [rollout] = await Array.fromAsync(reader.readRollouts());
+    assert(rollout.entries.every(entry => !("afterBlankPrefix" in entry)));
+  }
+});
+
 test("rejects an equally long replacement between discovery and the batch read", async t => {
   const fixture = await Rollout.create();
   t.after(() => fixture.close());
@@ -91,6 +119,40 @@ test("rejects an equally long replacement between discovery and the batch read",
   await assert.rejects(Array.fromAsync(source.readBatches({ offset: 0, lineNumber: 0 })), {
     name: "TranscriptChangedError", sourceFile,
   });
+});
+
+test("reports only the raw byte ranges of damaged complete records across batch limits", async t => {
+  const fixture = await Rollout.create();
+  t.after(() => fixture.close());
+  const file = await fixture.write([Rollout.header("damaged")]);
+  const start = { offset: (await stat(file)).size, lineNumber: 1 };
+  const physical = [
+    Buffer.from(" \t\r\n"),
+    Buffer.from('{"text":"é"},\r\n'),
+    Buffer.from("null\n"),
+    Buffer.concat([Buffer.from('{"private":"'), Buffer.alloc(80 * 1024, 0x78), Buffer.from([0xc0, 0x80]), Buffer.from('"}\r\n')]),
+    Buffer.from(JSON.stringify({ text: "Continue" }) + "\n"),
+  ];
+  await appendFile(file, Buffer.concat([...physical, Buffer.from('{"pending":')]));
+  const ends = [start.offset];
+  for (const line of physical) ends.push(ends[ends.length - 1] + line.length);
+  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const [source] = await Array.fromAsync(reader.discoverSources());
+
+  for (const budget of [1, 8192, source.fileSize]) {
+    const batches = await Array.fromAsync(source.readBatches(start, budget));
+    assert.deepEqual(batches.flatMap(batch => batch.damagedLines ?? []), [
+      { lineNumber: 3, startOffset: ends[1], endOffset: ends[2] },
+      { lineNumber: 4, startOffset: ends[2], endOffset: ends[3] },
+      { lineNumber: 5, startOffset: ends[3], endOffset: ends[4] },
+    ]);
+    const [last] = batches.flatMap(batch => batch.entries);
+    assert.deepEqual([last.startOffset, last.endOffset, last.record], [ends[4], ends[5], { text: "Continue" }]);
+    assert.deepEqual(batches.at(-1)?.next, { offset: ends[5], lineNumber: 6 });
+  }
+  const resumed = await Array.fromAsync(source.readBatches({ offset: ends[4], lineNumber: 5 }));
+  assert.equal(resumed.length, 1);
+  assert(!("damagedLines" in resumed[0]));
 });
 
 test("discards a pending batch when a captured file shrinks between reads", async t => {

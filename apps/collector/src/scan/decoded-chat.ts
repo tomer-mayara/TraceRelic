@@ -1,4 +1,4 @@
-import type { RecordBatch } from "../history/index.ts";
+import type { DamagedLine, RecordBatch } from "../history/index.ts";
 import type {
   BranchObservation, ClaudeUsageReport, Message, Metadata, Usage, UsageAnchor, UsageDiagnostic, UsageWindow,
 } from "../storage/collector-storage.ts";
@@ -21,7 +21,8 @@ export interface DecodedChat extends Partial<DecodedUsage> {
 }
 
 export interface ChatParser<Entry> {
+  readonly awaitingBaseline?: boolean;
   prepareLookahead?(first: readonly Entry[], tail: AsyncIterable<RecordBatch<Entry>>, acceptedLine: number): Promise<void>;
-  decodeBatch(entries: readonly Entry[]): DecodedChat;
+  decodeBatch(entries: readonly Entry[], damagedLines?: readonly DamagedLine[]): DecodedChat;
   snapshot(): object;
 }

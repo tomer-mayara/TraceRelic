@@ -162,6 +162,53 @@ test("a rewritten coarse total cannot withdraw a previously published native cal
   assert.equal(resolved.observedTotalTokens, 150);
 });
 
+test("a repeated native call stays separate from intervals accounted for by either generation", async () => {
+  const store = new InMemoryCollectorStorage();
+  const call = { ...codexMeasurement("known", "call", 70), requestId: "known" };
+  const old = codexWindow(100, 120, codexMeasurement("past", "interval", 20));
+  const next = codexWindow(500, 510, codexMeasurement("next", "interval", 10));
+  const anchors = [{ usageId: call.id, historyId: old.historyId }];
+  const saved = { offset: 30, parserState: "old", prefixDigest: "a".repeat(64) };
+  assert.equal(await store.commit(batch(0, 0, { source: codexSource, checkpoint: saved,
+    usage: [call], usageAnchors: anchors, usageWindows: [old],
+  })), "committed");
+  assert.equal((await store.readSession(codexSource))?.observedTotalTokens, 90);
+  const reset = { offset: 10, parserState: "replacement", prefixDigest: "b".repeat(64) };
+  assert.equal(await store.commit(batch(1, 30, { source: codexSource, resetFrom: saved, checkpoint: reset,
+    usage: [call], usageAnchors: anchors, hasGap: true,
+  })), "committed");
+  assert.equal((await store.readSession(codexSource))?.observedTotalTokens, 90);
+  assert.equal(await store.commit(batch(2, 10, { source: codexSource, checkpoint: { ...reset, offset: 20 },
+    usageWindows: [next],
+  })), "committed");
+  const after = await store.readSession(codexSource);
+  assert.equal(after?.observedTotalTokens, 100);
+  assert.deepEqual(after.usage, [call, ...old.parts, ...next.parts]);
+  assert.equal(after.coverage, "partial");
+  // A separate copy can still place this call inside a coarse range that neither file accounted for.
+  const third = codexWindow(510, 610, codexMeasurement("unplaced", "interval", 100));
+  assert.equal(await store.commit(batch(3, 0, { source: { ...codexSource, installationId: "third" },
+    usageWindows: [third],
+  })), "committed");
+  assert.deepEqual((await store.readSession(codexSource))?.usage, [...old.parts, ...next.parts, ...third.parts]);
+});
+
+test("a later placement in a rewritten file can account for a previously withheld interval", async () => {
+  const store = new InMemoryCollectorStorage();
+  const coarse = codexWindow(0, 30, codexMeasurement("thirty", "interval", 30));
+  const call = { ...codexMeasurement("known", "call", 70), requestId: "known" };
+  const saved = { offset: 30, parserState: "old", prefixDigest: "a".repeat(64) };
+  const anchor = { usageId: call.id, historyId: coarse.historyId };
+  assert.equal(await store.commit(batch(0, 0, { source: codexSource, checkpoint: saved, usage: [call], usageAnchors: [anchor] })), "committed");
+  const reset = { offset: 10, parserState: "replacement", prefixDigest: "b".repeat(64) };
+  assert.equal(await store.commit(batch(1, 30, { source: codexSource, resetFrom: saved, checkpoint: reset, usageWindows: [coarse] })), "committed");
+  assert.deepEqual((await store.readSession(codexSource))?.usage, [call]);
+  assert.equal(await store.commit(batch(2, 10, { source: codexSource, checkpoint: { ...reset, offset: 20 },
+    usage: [call], usageAnchors: [{ ...anchor, after: coarse.end }],
+  })), "committed");
+  assert.deepEqual((await store.readSession(codexSource))?.usage, [call, ...coarse.parts]);
+});
+
 test("each anchor needs a valid history and an identified call in the same batch", async () => {
   const store = new InMemoryCollectorStorage();
   const call = codexMeasurement("call", "call", 10);

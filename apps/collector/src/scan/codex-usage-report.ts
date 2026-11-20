@@ -4,16 +4,18 @@ import type { TokenCounts, Usage } from "../storage/collector-storage.ts";
 import { jsonDigest } from "./chat-parser-state.ts";
 import { object, providerCounts } from "./codex-usage-counts.ts";
 
-export type UsageEntry = Pick<CodexRolloutEntry, "sessionId" | "lineNumber" | "timestamp" | "record" | "sourceFile">;
+export type UsageEntry = Pick<CodexRolloutEntry, "sessionId" | "lineNumber" | "timestamp" | "record" | "sourceFile">
+  & { afterBlankPrefix?: true };
 export type Fields = Readonly<Record<string, unknown>>;
 export type Call = Usage & { kind: "call" };
 export type CallContext = Pick<Call, "turnId" | "requestId" | "model">;
 export interface Report {
   at: string;
+  sourceOrder: number;
   end?: TokenCounts;
   last?: Call;
   independent: boolean;
-  hasGap: boolean;
+  invalidTotal: boolean;
 }
 
 function identifier(...values: unknown[]): string | undefined {
@@ -42,7 +44,7 @@ function identifies(header: Fields, sessionId: string): boolean {
 }
 
 export function initialHistory(entry: UsageEntry, payload: Fields | undefined): string {
-  if (entry.lineNumber === 1 && entry.record.type === "session_meta" && payload
+  if ((entry.lineNumber === 1 || entry.afterBlankPrefix) && entry.record.type === "session_meta" && payload
     && identifies(payload, entry.sessionId) && !inherited(payload)
     && !fragmentOrdinal(entry.record.ordinal) && !fragmentOrdinal(payload.ordinal)) {
     const at = payload.timestamp ?? entry.timestamp ?? entry.record.timestamp;
@@ -72,11 +74,26 @@ function attribution(entry: UsageEntry, payload: Fields, info: Fields, context: 
   return { native, fields: { ...(turnId && { turnId }), ...(model && { model }), ...(requestId && { requestId }) } };
 }
 
-/** Undefined is an empty provider update. Null is a measurement without usable counts or a recorded time. */
-export function readReport(entry: UsageEntry, payload: Fields, context: CallContext, historyId: string): Report | null | undefined {
+const bookkeeping = new Set([
+  "total_token_usage", "last_token_usage", "model_context_window", "model", "turn_id", "request_id", "call_id", "rate_limits",
+]);
+const misplacedUsageFields = ["usage", "total_token_usage", "last_token_usage", "input_tokens", "output_tokens", "total_tokens"];
+
+function supplied(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+function usageInfo(payload: Fields): Fields | null | undefined {
   const info = object(payload.info);
-  if (!info || (info.total_token_usage === undefined || info.total_token_usage === null)
-    && (info.last_token_usage === undefined || info.last_token_usage === null)) return;
+  if (info && (supplied(info.total_token_usage) || supplied(info.last_token_usage))) return info;
+  if (supplied(payload.info) && (!info || !Object.keys(info).every(key => bookkeeping.has(key)))) return null;
+  if (misplacedUsageFields.some(key => supplied(payload[key]))) return null;
+}
+
+/** Undefined is a bookkeeping update. Null is a usage report we cannot measure. */
+export function readReport(entry: UsageEntry, payload: Fields, context: CallContext, historyId: string): Report | null | undefined {
+  const info = usageInfo(payload);
+  if (!info) return info;
   const end = providerCounts(info.total_token_usage);
   const amount = providerCounts(info.last_token_usage);
   if (!recorded(entry.timestamp) || (!end && !amount)) return null;
@@ -86,6 +103,6 @@ export function readReport(entry: UsageEntry, payload: Fields, context: CallCont
     kind: "call", revision: 1, at: entry.timestamp, ...amount, ...fields,
     id: (native ? "call:native:" : "call:") + jsonDigest(identity),
   } : undefined;
-  const invalidTotal = info.total_token_usage !== undefined && info.total_token_usage !== null && !end;
-  return { at: entry.timestamp, end, last, independent: Boolean(native), hasGap: invalidTotal || (!end && !last) };
+  const invalidTotal = supplied(info.total_token_usage) && !end;
+  return { at: entry.timestamp, sourceOrder: entry.lineNumber, end, last, independent: Boolean(native), invalidTotal };
 }

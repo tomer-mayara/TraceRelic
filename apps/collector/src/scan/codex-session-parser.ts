@@ -1,4 +1,4 @@
-import type { CodexRolloutEntry, RecordBatch } from "../history/index.ts";
+import type { CodexRolloutEntry, DamagedLine, RecordBatch } from "../history/index.ts";
 import { invalidState, stateRecord } from "./chat-parser-state.ts";
 import { CodexChat } from "./codex-chat.ts";
 import { CodexUsage } from "./codex-usage.ts";
@@ -6,6 +6,7 @@ import type { ChatParser, DecodedChat } from "./decoded-chat.ts";
 
 export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
   static readonly version = 2;
+  static readonly gapVersion = 4;
 
   private constructor(private readonly chat: CodexChat, private readonly counts: CodexUsage) {}
 
@@ -20,10 +21,10 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
     const parser = new CodexSessionParser(CodexChat.resume(oldChat), CodexUsage.resume());
     return {
       parser,
-      read(entries: readonly CodexRolloutEntry[]) {
+      read(entries: readonly CodexRolloutEntry[], damagedLines?: readonly DamagedLine[]) {
         // Version 1 already saved the chat state. Only the earlier empty checkpoint needs to reconstruct it.
         if (!oldChat) parser.chat.decodeBatch(entries);
-        return parser.counts.decodeBatch(entries);
+        return parser.counts.decodeBatch(entries, damagedLines);
       },
     };
   }
@@ -32,8 +33,12 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
     return this.chat.prepareLookahead(first, tail, line);
   }
 
-  decodeBatch(entries: readonly CodexRolloutEntry[]): DecodedChat {
-    return { ...this.chat.decodeBatch(entries), ...this.counts.decodeBatch(entries) };
+  get awaitingBaseline(): boolean {
+    return this.counts.awaitingBaseline;
+  }
+
+  decodeBatch(entries: readonly CodexRolloutEntry[], damagedLines?: readonly DamagedLine[]): DecodedChat {
+    return { ...this.chat.decodeBatch(entries), ...this.counts.decodeBatch(entries, damagedLines) };
   }
 
   snapshot(): object {

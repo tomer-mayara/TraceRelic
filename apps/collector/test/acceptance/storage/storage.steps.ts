@@ -66,6 +66,14 @@ BeforeAll(function () {
     usageDiagnostics: [{ code: "ambiguous-transcript-replay", sourceOrder: 1 }],
   });
   checkWireValue("CheckpointSnapshot", { version: 1, checkpoint: { ...batch.checkpoint, prefixDigest } });
+  for (const code of ["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset"]) {
+    const diagnostic = { code, sourceOrder: 3 };
+    const byteRange = { startOffset: 50, endOffset: 60 };
+    checkWireValue("UsageDiagnostic", { ...diagnostic, byteRange });
+    checkWireValue("SourceUsageDiagnostic", { ...diagnostic, byteRange, streamId: batch.source.streamId });
+    assert.equal(contract.validate("UsageDiagnostic.json", diagnostic), false);
+    assert.equal(contract.validate("SourceUsageDiagnostic.json", { ...diagnostic, streamId: batch.source.streamId }), false);
+  }
   for (const field of ["expectedVersion", "expectedOffset"] as const) {
     const incomplete: Partial<Batch> = { ...batch };
     delete incomplete[field];
@@ -84,6 +92,8 @@ BeforeAll(function () {
     [{ checkpoint: { ...batch.checkpoint, prefixDigest: "x".repeat(64) } }, "/checkpoint/prefixDigest"],
     [{ checkpoint: { ...batch.checkpoint, replayThrough: { offset: -1, prefixDigest } } }, "/checkpoint/replayThrough/offset"],
     [{ resetFrom: { ...batch.checkpoint, prefixDigest: "abc" } }, "/resetFrom/prefixDigest"],
+    [{ usageDiagnostics: [{ code: "malformed-transcript-line", sourceOrder: 3, byteRange: { startOffset: -1, endOffset: 5 } }] },
+      "/usageDiagnostics/0/byteRange/startOffset"],
     [{ source: { ...batch.source, installationId: "" } }, "/source/installationId"],
     [{ messages: [{ ...message, sourceOrder: 0 }] }, "/messages/0/sourceOrder"],
     [{ messages: [{ ...message, sourceOrder: Number.MAX_SAFE_INTEGER + 1 }] }, "/messages/0/sourceOrder"],
@@ -113,6 +123,11 @@ BeforeAll(function () {
   checkWireValue("TokenCounts", window.end);
   checkWireValue("UsageKind", call.kind);
   checkWireValue("UsageWindow", window);
+  const boundaries = { start: "a".repeat(64), end: "b".repeat(64) };
+  checkWireValue("UsageWindow", { ...window, boundaryObservations: boundaries });
+  for (const invalid of [null, { end: boundaries.end }, { ...boundaries, start: "invalid" }]) {
+    assert.equal(contract.validate("UsageWindow.json", { ...window, boundaryObservations: invalid }), false);
+  }
   checkWireValue("UsageAnchor", anchor);
   checkWireValue("Batch", batch);
   checkWireValue("SessionView", {

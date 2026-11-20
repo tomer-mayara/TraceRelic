@@ -1,4 +1,5 @@
 import type { StreamKey, TokenCounts, Usage, UsageAnchor, UsageWindow } from "./collector-storage.ts";
+import { epochsWithSharedObservations, sharedCounterSpans } from "./observed-counter-spans.ts";
 import { isIdentifier, isNativeCodexCall, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
 
 const breakdowns = ["cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const;
@@ -47,6 +48,12 @@ function isWindow(value: unknown): value is UsageWindow {
   if (!isRecord(value) || !isIdentifier(value.historyId) || !isTokenCounts(value.start)
     || !isTokenCounts(value.end) || !canFollow(value.start, value.end)
     || !Array.isArray(value.parts) || !value.parts.length) return false;
+  if (value.boundaryObservations !== undefined) {
+    const proof = value.boundaryObservations;
+    if (!isRecord(proof) || Object.keys(proof).length !== 2
+      || typeof proof.start !== "string" || !/^[0-9a-f]{64}$/.test(proof.start)
+      || typeof proof.end !== "string" || !/^[0-9a-f]{64}$/.test(proof.end)) return false;
+  }
   const ids = new Set<string>();
   for (const part of value.parts) {
     if (!isUsage(part) || part.kind === undefined || ids.has(part.id)) return false;
@@ -107,7 +114,7 @@ function covers(intervals: readonly Interval[], window: UsageWindow): boolean {
 }
 
 /** Compare two complete descriptions of the same span. Keep each identified call in the accepted partition. */
-function reconcile(known: Interval[], proposed: Interval[], whole: UsageWindow, preferPartition: boolean) {
+function reconcile(known: Interval[], proposed: Interval[], whole: Pick<UsageWindow, "start" | "end">, preferPartition: boolean) {
   const currentParts = partsOf(known);
   const nextParts = partsOf(proposed);
   if (!conserves(whole.start, whole.end, currentParts) || !conserves(whole.start, whole.end, nextParts)
@@ -214,7 +221,7 @@ class CounterHistory {
   readonly intervals: Interval[];
   // A measured zero may precede the first positive delta or identify a distinct zero-token call.
   readonly zeros: UsageWindow[];
-  private readonly coarseEnds = new Map<string | undefined, TokenCounts | null>();
+  private readonly coarseEnds = new Map<string, TokenCounts | null>();
 
   constructor(previous?: CounterHistory) {
     this.intervals = [...(previous?.intervals ?? [])];
@@ -248,25 +255,83 @@ class CounterHistory {
       .flatMap(window => window.parts);
   }
 
-  coarseEnd(excluding?: string): TokenCounts | null {
-    const cached = this.coarseEnds.get(excluding);
+  coarseEnd(excluding: ReadonlySet<string> = new Set()): TokenCounts | null {
+    const key = JSON.stringify([...excluding].sort());
+    const cached = this.coarseEnds.get(key);
     if (cached !== undefined) return cached;
     let end: TokenCounts | null = null;
     for (let i = this.intervals.length - 1; i >= 0; i--) {
       const { window, sources } = this.intervals[i];
-      if (excluding !== undefined && sources.includes(excluding)) continue;
+      if (sources.some(source => excluding.has(source))) continue;
       if (window.parts.some(unidentifiedTokens)) {
         end = window.end;
         break;
       }
     }
-    this.coarseEnds.set(excluding, end);
+    this.coarseEnds.set(key, end);
     return end;
   }
 }
 
 function streamIdentity(source: StreamKey, generation: number): string {
   return JSON.stringify([source.streamId, source.installationId ?? null, generation]);
+}
+
+function anonymousLast(window: UsageWindow): Usage | undefined {
+  const matches = window.parts.filter(part => part.kind === "call" && /^call:[0-9a-f]{64}$/.test(part.id) && !isNativeCodexCall(part));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+/** The same closing report can name its anonymous last call differently in each counter epoch. */
+function matchClosingCall(known: Interval[], proposed: Interval[], published: ReadonlySet<string>): void {
+  const left = known[known.length - 1].window, right = proposed[proposed.length - 1].window;
+  if (!left.boundaryObservations || left.boundaryObservations.end !== right.boundaryObservations?.end) return;
+  const a = anonymousLast(left), b = anonymousLast(right);
+  if (!a || !b || a.id === b.id) return;
+  const [accepted, other] = published.has(b.id) ? [b, a] : [a, b];
+  const call = mergeCodexCall(accepted, { ...other, id: accepted.id });
+  if (!call) return;
+  for (const [intervals, original] of [[known, a], [proposed, b]] as const) {
+    const index = intervals.length - 1;
+    const { window } = intervals[index];
+    const parts = window.parts.map(part => part === original ? call : part);
+    intervals[index] = { ...intervals[index], window: { ...window, parts } };
+  }
+}
+
+/** Publish the same measured span once when a damaged copy missed the reset that named its epoch. */
+function measuredParts(histories: Map<string, CounterHistory>, previous: readonly Usage[]): Usage[] {
+  if (histories.size < 2) return [...histories.values()].flatMap(history => history.measurements());
+  const published = new Set(previous.map(part => part.id));
+  const selected = new Map(histories);
+  for (const [first, second] of epochsWithSharedObservations(histories)) {
+    const left = selected.get(first);
+    const right = selected.get(second);
+    if (!left || !right) continue;
+    const common = sharedCounterSpans(left.intervals, right.intervals);
+    if (!common.length) continue;
+    const merged = new CounterHistory(left);
+    const remaining = new CounterHistory(right);
+    for (const span of common) {
+      const known = left.intervals.slice(span.left.first, span.left.limit);
+      const proposed = right.intervals.slice(span.right.first, span.right.limit);
+      if (!span.verified) {
+        // Keep the previously published span until we can place the competing measurements.
+        if (!partsOf(known).some(part => published.has(part.id)) && partsOf(proposed).some(part => published.has(part.id))) {
+          replaceIntervals(merged.intervals, span.left.first, known.length, []);
+        } else replaceIntervals(remaining.intervals, span.right.first, proposed.length, []);
+        continue;
+      }
+      const whole = { start: known[0].window.start, end: known[known.length - 1].window.end };
+      matchClosingCall(known, proposed, published);
+      const parts = reconcile(known, proposed, whole, proposed.length > known.length) ?? known;
+      replaceIntervals(merged.intervals, span.left.first, known.length, parts);
+      replaceIntervals(remaining.intervals, span.right.first, proposed.length, []);
+    }
+    selected.set(first, merged);
+    selected.set(second, remaining);
+  }
+  return [...selected.values()].flatMap(history => history.measurements());
 }
 
 function lineage(historyId: string, source: string): string {
@@ -309,6 +374,17 @@ interface AnchoredCall {
   anchor: UsageAnchor;
 }
 
+function groupPlacements(placements: readonly AnchoredCall[], field: "usageId" | "historyId"): Map<string, AnchoredCall[]> {
+  const groups = new Map<string, AnchoredCall[]>();
+  for (const placement of placements) {
+    const id = placement.anchor[field];
+    const group = groups.get(id);
+    if (group) group.push(placement);
+    else groups.set(id, [placement]);
+  }
+  return groups;
+}
+
 function copyState(previous?: WindowState): WindowState {
   return {
     histories: new Map(previous?.histories), epochsByStream: new Map(previous?.epochsByStream),
@@ -321,9 +397,9 @@ export class UsageWindows {
   readonly measurements: readonly Usage[];
   private constructor(
     private readonly state: WindowState, private readonly visible: WindowState = state,
-    private readonly pendingCalls: readonly AnchoredCall[] = [],
+    private readonly pendingCalls: readonly AnchoredCall[] = [], previous: readonly Usage[] = [],
   ) {
-    const published = [...visible.histories.values()].flatMap(history => history.measurements());
+    const published = measuredParts(visible.histories, previous);
     if (visible.unmatchedCalls.size && !published.some(unidentifiedTokens)) {
       const ids = new Set(published.map(part => part.id));
       for (const call of visible.unmatchedCalls.values()) if (!ids.has(call.id)) published.push(call);
@@ -335,12 +411,16 @@ export class UsageWindows {
     return this.state.hasGap;
   }
 
+  get pendingNativeIds(): string[] {
+    return this.pendingCalls.map(call => call.anchor.usageId);
+  }
+
   static merge(
     previous: UsageWindows | undefined, incoming: readonly UsageWindow[], source: StreamKey, generation = 0,
     acceptedCalls: readonly AnchoredCall[] = [],
   ): UsageWindows | null {
     if (!Array.isArray(incoming)) return null;
-    if (!incoming.length && previous) return previous;
+    if (!incoming.length && previous && !(previous.pendingCalls.length && acceptedCalls.length)) return previous;
     const state = copyState(previous?.state);
     const writing = new Set<string>();
     const stream = streamIdentity(source, generation);
@@ -362,7 +442,7 @@ export class UsageWindows {
       if (history.add(structuredClone(window), stream)) state.epochsByStream.set(stream, id);
       else state.hasGap = true;
     }
-    const next = new UsageWindows(state);
+    const next = new UsageWindows(state, state, [], previous?.measurements);
     return next.preserveAcceptedCalls(previous, acceptedCalls);
   }
 
@@ -371,27 +451,35 @@ export class UsageWindows {
     if (!accepted.length && !recorded.length) return this;
     const measured = new Set(this.measurements.filter(isNativeCodexCall).map(call => call.id));
     const pending = new Map<string, AnchoredCall>();
-    for (const call of [...recorded, ...accepted]) {
-      const { source, generation, anchor } = call;
-      if (!measured.has(anchor.usageId) && this.mayCover(anchor, source, generation)) {
-        pending.set(JSON.stringify([streamIdentity(source, generation), anchor]), call);
-      }
+    const byId = groupPlacements([...recorded, ...accepted], "usageId");
+    for (const [id, placements] of byId) {
+      if (measured.has(id) || !this.mayCoverCall(placements)) continue;
+      for (const call of placements) pending.set(JSON.stringify([streamIdentity(call.source, call.generation), call.anchor]), call);
     }
     if (!pending.size) return this;
     // Retain the proposed counters for a later partition. Publishing them now would hide a known native call.
     this.state.hasGap = true;
     const visible = copyState(previous?.visible);
     retainUnmatchedCalls(visible, this.measurements);
-    return new UsageWindows(this.state, visible, [...pending.values()]);
+    return new UsageWindows(this.state, visible, [...pending.values()], previous?.measurements);
   }
 
   mayCover(anchor: UsageAnchor, source: StreamKey, generation = 0): boolean {
-    const stream = streamIdentity(source, generation);
+    return this.mayCoverCall([{ anchor, source, generation }]);
+  }
+
+  mayCoverCall(placements: readonly AnchoredCall[]): boolean {
+    if (!placements.length || !this.visible.histories.size) return false;
+    const matched = placements.filter(({ anchor, source, generation }) =>
+      matchesHistory(this.visible, anchor.historyId, streamIdentity(source, generation)));
     const { histories } = this.visible;
-    if (!matchesHistory(this.visible, anchor.historyId, stream)) {
-      return [...histories.values()].some(history => history.coarseEnd() !== null);
+    if (!matched.length) return [...histories.values()].some(history => history.coarseEnd() !== null);
+    for (const [id, anchors] of groupPlacements(matched, "historyId")) {
+      // Each copy that measured this native call separately accounts for it in its own intervals.
+      const witnesses = new Set(anchors.map(({ source, generation }) => streamIdentity(source, generation)));
+      const end = histories.get(id)?.coarseEnd(witnesses);
+      if (end && !anchors.some(({ anchor }) => anchor.after && canFollow(end, anchor.after))) return true;
     }
-    const end = histories.get(anchor.historyId)?.coarseEnd(stream);
-    return end !== null && end !== undefined && (anchor.after === undefined || !canFollow(end, anchor.after));
+    return false;
   }
 }

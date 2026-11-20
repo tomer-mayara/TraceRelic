@@ -2,9 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import type {
   Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage, Harness,
-  Message, Metadata, SessionKey, SessionView, SourceUsageDiagnostic, StreamKey, Usage, UsageAnchor,
+  Message, Metadata, SessionKey, SessionView, StreamKey, Usage, UsageAnchor,
 } from "./collector-storage.ts";
 import { ClaudeUsageLedger } from "./claude-usage-ledger.ts";
+import { SourceUsageDiagnostics } from "./source-usage-diagnostics.ts";
 import { isCount, isIdentifier, isNativeCodexCall, isRecord, isTokenCounts, isUsage, mergeCodexCall } from "./usage-validation.ts";
 import { UsageWindows } from "./usage-windows.ts";
 
@@ -155,32 +156,34 @@ interface StoredUsage {
   order?: ReadonlySet<string>;
 }
 
-function previousNativeAnchors(previous: StoredSession | undefined, stream: string, generation: number): StoredAnchor[] {
-  if (!generation || !previous?.measurements.anchors.size) return [];
-  const accepted: StoredAnchor[] = [];
-  for (const call of previous.view.usage) {
-    if (!isNativeCodexCall(call)) continue;
-    for (const entry of previous.measurements.anchors.get(call.id) ?? []) {
-      if (entry.generation < generation && encodeStreamKey(entry.source) === stream) accepted.push(entry);
+function previousNativeAnchors(previous: StoredSession | undefined, anchors: Map<string, StoredAnchor[]>,
+  stream: string, generation: number): StoredAnchor[] {
+  if (!previous || !anchors.size) return [];
+  const accepted = new Set(previous.measurements.windows.pendingNativeIds);
+  if (generation) {
+    for (const call of previous.view.usage) {
+      if (!isNativeCodexCall(call)) continue;
+      const placements = anchors.get(call.id) ?? [];
+      if (placements.some(entry => entry.generation < generation && encodeStreamKey(entry.source) === stream)) accepted.add(call.id);
     }
   }
-  return accepted;
+  return [...accepted].flatMap(id => anchors.get(id) ?? []);
 }
 
 function mergeRecordedUsage(previous: StoredSession | undefined, batch: Batch, stream: string, generation: number) {
   if (!Array.isArray(batch.usage) || (batch.usageWindows !== undefined && !Array.isArray(batch.usageWindows))
     || (batch.usageAnchors !== undefined && !Array.isArray(batch.usageAnchors))) return null;
   const anchors = mergeAnchors(previous?.measurements.anchors, batch, stream, generation);
-  const retained = batch.usageWindows?.length ? previousNativeAnchors(previous, stream, generation) : [];
+  if (!anchors) return null;
+  const retained = batch.usageWindows?.length || batch.usageAnchors?.length ? previousNativeAnchors(previous, anchors, stream, generation) : [];
   const windows = UsageWindows.merge(previous?.measurements.windows, batch.usageWindows ?? [], batch.source, generation, retained);
-  if (!anchors || !windows) return null;
+  if (!windows) return null;
   const parts = windows.measurements;
   const activeIds = new Set(parts.map(part => part.id));
   const codexCalls = batch.source.harness === "codex" ? new Set([...anchors.keys(), ...activeIds]) : undefined;
   const standalone = mergeUsage(previous?.measurements.standalone ?? [], batch.usage, codexCalls);
   if (!standalone) return null;
-  const visible = standalone.filter(call => activeIds.has(call.id)
-    || !anchors.get(call.id)?.some(entry => windows.mayCover(entry.anchor, entry.source, entry.generation)));
+  const visible = standalone.filter(call => activeIds.has(call.id) || !windows.mayCoverCall(anchors.get(call.id) ?? []));
   // Carry forward the first time and position only for IDs that survived this transaction.
   const incoming = [...visible, ...parts];
   const ids = new Set(incoming.map(record => record.id));
@@ -304,29 +307,6 @@ function coverage(records: number, hasGap: boolean): Coverage {
   return hasGap ? "partial" : "reported";
 }
 
-const claudeDiagnosticCodes = new Set(["invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration"]);
-
-function diagnosticKey(value: SourceUsageDiagnostic): string {
-  return JSON.stringify([value.streamId, value.installationId, value.sourceOrder, value.code]);
-}
-
-function mergeDiagnostics(previous: SourceUsageDiagnostic[] | undefined, batch: Batch): SourceUsageDiagnostic[] | undefined | null {
-  const incoming = batch.usageDiagnostics;
-  if (incoming === undefined) return previous;
-  if (!Array.isArray(incoming)) return null;
-  if (!incoming.length) return previous;
-  const diagnostics = new Map(previous?.map(value => [diagnosticKey(value), value]));
-  const { streamId, installationId } = batch.source;
-  for (const entry of incoming) {
-    if (!isRecord(entry) || !isRecordNumber(entry.sourceOrder)) return null;
-    if (entry.code !== "ambiguous-transcript-replay"
-      && (batch.source.harness !== "claude" || !claudeDiagnosticCodes.has(entry.code))) return null;
-    const value = { streamId, ...(installationId !== undefined && { installationId }), sourceOrder: entry.sourceOrder, code: entry.code };
-    diagnostics.set(diagnosticKey(value), value);
-  }
-  return [...diagnostics.values()];
-}
-
 function mergeSessionRecords(
   previous: StoredSession | undefined, batch: Batch, stream: string, generation: number,
 ): Omit<StoredSession, "version" | "checkpoints"> | null {
@@ -335,16 +315,16 @@ function mergeSessionRecords(
   const measurements = mergeMeasurements(previous, batch, stream, generation);
   // Physical line numbers establish branch order only within one version of a transcript.
   const branches = mergeBranches(previous?.branches, batch, JSON.stringify([stream, generation]));
-  const usageDiagnostics = mergeDiagnostics(previous?.view.usageDiagnostics, batch);
-  if (!messages || !measurements || branches === null || usageDiagnostics === null) return null;
+  const diagnostics = SourceUsageDiagnostics.merge(previous?.view.usageDiagnostics, batch);
+  if (!messages || !measurements || branches === null || !diagnostics) return null;
   const { usage, total, stored } = measurements;
-  const hasGap = previous?.hasGap === true || batch.hasGap === true || measurements.hasGap;
+  const hasGap = previous?.hasGap === true || batch.hasGap === true || measurements.hasGap || diagnostics.hasGap;
   const metadata = { ...previous?.view.metadata, ...definedFields(batch.metadata ?? {}) };
   if (branches) metadata.branch = branches.latest.name;
   const view = {
     key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata, usage,
     coverage: coverage(usage.length, hasGap), observedTotalTokens: usage.length ? total : null,
-    ...(usageDiagnostics && { usageDiagnostics }),
+    ...(diagnostics.values && { usageDiagnostics: diagnostics.values }),
   };
   return { view, messages, measurements: stored, branches, hasGap };
 }
@@ -370,8 +350,13 @@ function upgradedChat(harness: Harness, decoder: Record<string, unknown>) {
 }
 
 function upgradesParser(harness: Harness, current: Checkpoint, next: Checkpoint): boolean {
-  const state = parserEnvelope(parseState(next.parserState), 2, current.offset);
+  const parsed = parseState(next.parserState);
+  if (!isRecord(parsed)) return false;
+  const pending = parsed.version === 4;
+  const state = parserEnvelope(parsed, pending ? 4 : 2, current.offset);
   if (!state) return false;
+  const marker = isRecord(state.decoder.usage) ? state.decoder.usage.awaitingBaseline : undefined;
+  if (parsed.replayOccurrences !== undefined || marker !== (pending ? true : undefined) || (pending && harness !== "codex")) return false;
   const chat = upgradedChat(harness, state.decoder);
   if (!chat) return false;
   const old = parseState(current.parserState);

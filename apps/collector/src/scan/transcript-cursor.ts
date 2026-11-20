@@ -1,4 +1,4 @@
-import type { ReadPosition, TranscriptSource, VerifiedPrefix } from "../history/index.ts";
+import type { DamagedLine, ReadPosition, RecordBatch, TranscriptSource, VerifiedPrefix } from "../history/index.ts";
 import type { Checkpoint, Message } from "../storage/collector-storage.ts";
 import { stateRecord } from "./chat-parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
@@ -8,9 +8,15 @@ import {
 
 export interface ParserFormat<Entry> {
   version: number;
+  gapVersion?: number;
   resume(state?: unknown): ChatParser<Entry>;
-  upgrade?(oldDecoder?: object): { parser: ChatParser<Entry>; read(entries: readonly Entry[]): Partial<DecodedUsage> };
+  upgrade?(oldDecoder?: object): {
+    parser: ChatParser<Entry>;
+    read(entries: readonly Entry[], damagedLines?: readonly DamagedLine[]): Partial<DecodedUsage>;
+  };
 }
+
+export type SourceLine = Pick<DamagedLine, "lineNumber" | "endOffset">;
 
 interface ReplayPlan {
   occurrences?: ReplayOccurrences;
@@ -37,14 +43,31 @@ class BackfilledUsage implements DecodedUsage {
   }
 }
 
-export class TranscriptCursor<Entry> {
+function locateDiagnostics<Entry extends SourceLine>(batch: RecordBatch<Entry>, chat: Partial<DecodedUsage>): void {
+  if (!chat.usageDiagnostics?.length && !batch.damagedLines?.length) return;
+  const diagnostics = chat.usageDiagnostics ??= [];
+  if (diagnostics.length) {
+    const byLine = new Map(batch.entries.map(entry => [entry.lineNumber, entry]));
+    for (const diagnostic of diagnostics) {
+      const line = byLine.get(diagnostic.sourceOrder);
+      if (line) diagnostic.byteRange = { startOffset: line.startOffset, endOffset: line.endOffset };
+    }
+  }
+  for (const { lineNumber, startOffset, endOffset } of batch.damagedLines ?? []) {
+    diagnostics.push({ code: "malformed-transcript-line", sourceOrder: lineNumber, byteRange: { startOffset, endOffset } });
+    chat.hasGap = true;
+  }
+  diagnostics.sort((left, right) => left.sourceOrder - right.sourceOrder);
+}
+
+export class TranscriptCursor<Entry extends SourceLine> {
   private constructor(
     private readonly position: ReadPosition, private readonly format: ParserFormat<Entry>,
     private readonly parser: ChatParser<Entry>, private readonly replay?: ReplayPlan,
     private readonly backfill?: { usage: BackfilledUsage; checkpoint: Checkpoint },
   ) {}
 
-  static async restore<Entry>(
+  static async restore<Entry extends SourceLine>(
     source: TranscriptSource<Entry>, checkpoint: Checkpoint | null, format: ParserFormat<Entry>,
     replayMessages?: readonly Message[],
   ): Promise<TranscriptCursor<Entry>> {
@@ -56,9 +79,11 @@ export class TranscriptCursor<Entry> {
     let upgrade: ReturnType<NonNullable<ParserFormat<Entry>["upgrade"]>> | undefined;
     let parser: ChatParser<Entry>;
     try {
-      if (saved && (saved.version === format.version || saved.version === replayVersion)) {
+      if (saved && saved.version !== 1) {
+        const parser = format.resume(saved.decoder);
+        if (Boolean(parser.awaitingBaseline) !== (saved.version === format.gapVersion)) throw new Error(invalid);
         return new TranscriptCursor({ offset: checkpoint.offset, lineNumber: saved.lineNumber },
-          format, format.resume(saved.decoder), saved.replay);
+          format, parser, saved.replay);
       }
       upgrade = format.upgrade?.(saved?.decoder);
       parser = upgrade?.parser ?? format.resume();
@@ -67,15 +92,18 @@ export class TranscriptCursor<Entry> {
     }
     const backfill = upgrade ? new BackfilledUsage() : undefined;
     for await (const batch of source.readBatches(position, undefined, checkpoint.offset)) {
-      if (upgrade && backfill) backfill.add(upgrade.read(batch.entries));
-      else parser.decodeBatch(batch.entries);
+      if (upgrade && backfill) {
+        const usage = upgrade.read(batch.entries, batch.damagedLines);
+        locateDiagnostics(batch, usage);
+        backfill.add(usage);
+      } else parser.decodeBatch(batch.entries, batch.damagedLines);
       position = batch.next;
     }
     if (position.offset !== checkpoint.offset || (saved && position.lineNumber !== saved.lineNumber)) throw new Error(invalid);
     return new TranscriptCursor(position, format, parser, undefined, backfill && { usage: backfill, checkpoint });
   }
 
-  private static async rebuild<Entry>(source: TranscriptSource<Entry>, format: ParserFormat<Entry>, accepted: readonly Message[]) {
+  private static async rebuild<Entry extends SourceLine>(source: TranscriptSource<Entry>, format: ParserFormat<Entry>, accepted: readonly Message[]) {
     const start = { offset: 0, lineNumber: 0 };
     const fresh = new TranscriptCursor(start, format, format.resume());
     if (!accepted.some(message => message.id.startsWith("text:"))) return fresh;
@@ -95,13 +123,15 @@ export class TranscriptCursor<Entry> {
   private async *decode(source: TranscriptSource<Entry>) {
     if (this.position.offset >= source.fileSize) return;
     let prepare = this.parser.prepareLookahead?.bind(this.parser);
-    for await (const { entries, next, prefixDigest } of source.readBatches(this.position)) {
+    for await (const batch of source.readBatches(this.position)) {
+      const { entries, next, prefixDigest } = batch;
       if (prepare && next.offset < source.fileSize) {
         await prepare(entries, source.readBatches(next), this.position.lineNumber);
         prepare = undefined;
       }
-      const chat = this.parser.decodeBatch(entries);
+      const chat = this.parser.decodeBatch(entries, batch.damagedLines);
       if (this.replay?.occurrences) reconcileReplayMessages(chat, this.replay.occurrences);
+      locateDiagnostics(batch, chat);
       yield { chat, next, prefixDigest };
     }
   }
@@ -126,17 +156,18 @@ export class TranscriptCursor<Entry> {
     const through = this.replay?.through;
     const replayThrough = through && offset < through.offset ? through : undefined;
     const replayOccurrences = this.replay?.occurrences ?? (replayThrough ? {} : undefined);
-    const version = replayOccurrences ? replayVersion : this.format.version;
+    let version = replayOccurrences ? replayVersion : this.format.version;
+    if (this.parser.awaitingBaseline && this.format.gapVersion !== undefined) version = this.format.gapVersion;
     const parserState = JSON.stringify({ version, lineNumber, decoder: this.parser.snapshot(), replayOccurrences });
     return { offset, parserState, prefixDigest, ...(replayThrough && { replayThrough }) };
   }
 }
 
-function readReplayPlan(state: Record<string, unknown>, checkpoint: Checkpoint): ReplayPlan | undefined {
+function readReplayPlan(state: Record<string, unknown>, checkpoint: Checkpoint, gapVersion?: number): ReplayPlan | undefined {
   const occurrences = readReplayOccurrences(state.replayOccurrences);
-  if ((state.version === replayVersion) !== !!occurrences || (checkpoint.replayThrough && !occurrences)) {
-    throw new Error("Invalid replay state");
-  }
+  const supportsRules = state.version === replayVersion || state.version === gapVersion;
+  const requiresRules = state.version === replayVersion || checkpoint.replayThrough !== undefined;
+  if (occurrences ? !supportsRules : requiresRules) throw new Error("Invalid replay state");
   if (occurrences) return {
     occurrences: Object.keys(occurrences).length ? occurrences : undefined, through: checkpoint.replayThrough,
   };
@@ -153,7 +184,7 @@ function readState<Entry>(checkpoint: Checkpoint, format: ParserFormat<Entry>, s
   if (Object.keys(saved).length === 0) return;
   const { version, lineNumber } = saved;
   if (!Number.isSafeInteger(version)) throw new Error(invalid);
-  if (version !== format.version && version !== replayVersion && !(format.upgrade && version === 1)) {
+  if (version !== format.version && version !== replayVersion && version !== format.gapVersion && !(format.upgrade && version === 1)) {
     throw new Error(`Unsupported parser version for ${sourceFile} at byte ${checkpoint.offset}`);
   }
   if (typeof lineNumber !== "number" || !Number.isSafeInteger(lineNumber)
@@ -161,7 +192,7 @@ function readState<Entry>(checkpoint: Checkpoint, format: ParserFormat<Entry>, s
     throw new Error(invalid);
   }
   try {
-    return { version, lineNumber, decoder: stateRecord(saved.decoder), replay: readReplayPlan(saved, checkpoint) };
+    return { version, lineNumber, decoder: stateRecord(saved.decoder), replay: readReplayPlan(saved, checkpoint, format.gapVersion) };
   } catch {
     throw new Error(invalid);
   }

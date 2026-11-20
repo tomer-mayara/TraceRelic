@@ -62,14 +62,15 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
 
   private async discoverRollout(sourceFile: string, selection: CodexSelection): Promise<TranscriptSource<CodexRolloutEntry> | undefined> {
     const { file, result: header } = await this.inspectFile(sourceFile, async records => {
-      for await (const { record, lineNumber } of records) {
+      for await (const { record, lineNumber, endOffset, afterBlankPrefix } of records) {
         const identity = this.header(record);
-        if (identity) return { ...identity, lineNumber };
+        if (identity) return { ...identity, lineNumber, blankPrefixHeaderEnd: afterBlankPrefix ? endOffset : undefined };
       }
     });
     if (!header || !this.selected(selection, header.sessionId, header.cwd)) return;
     return this.transcriptSource({
       harness: "codex", sessionId: header.sessionId, file, previousCopy: false,
+      blankPrefixHeaderEnd: header.blankPrefixHeaderEnd,
       matches: (_record, lineNumber) => lineNumber >= header.lineNumber,
     });
   }

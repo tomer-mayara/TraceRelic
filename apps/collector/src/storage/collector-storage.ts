@@ -87,12 +87,19 @@ export interface ClaudeUsageReport extends TokenCounts, CacheWriteDurations {
   iterationId?: Identifier;
 }
 
+export interface ByteRange {
+  startOffset: Count;
+  endOffset: Count;
+}
+
 export type UsageDiagnosticCode = "invalid-claude-usage" | "unidentified-claude-call"
-  | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration" | "ambiguous-transcript-replay";
+  | "unsupported-claude-cache-breakdown" | "unsupported-claude-iteration" | "ambiguous-transcript-replay"
+  | "malformed-transcript-line" | "unsupported-codex-usage" | "codex-counter-reset";
 
 export interface UsageDiagnostic {
   code: UsageDiagnosticCode;
   sourceOrder: SourceOrder;
+  byteRange?: ByteRange;
 }
 
 export interface SourceUsageDiagnostic extends UsageDiagnostic {
@@ -117,6 +124,7 @@ export interface UsageWindow {
   historyId: Identifier;
   start: TokenCounts;
   end: TokenCounts;
+  boundaryObservations?: { start: string; end: string };
   parts: Usage[];
 }
 

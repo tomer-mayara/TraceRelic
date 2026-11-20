@@ -37,8 +37,18 @@ export interface ReadPosition {
   readonly lineNumber: number;
 }
 
-export interface RecordBatch<Entry> {
-  readonly entries: Entry[];
+export interface DamagedLine {
+  readonly lineNumber: number;
+  readonly startOffset: number;
+  readonly endOffset: number;
+}
+
+interface BatchRecords<Entry> {
+  entries: (Entry & { readonly startOffset: number; readonly afterBlankPrefix?: true })[];
+  damagedLines?: DamagedLine[];
+}
+
+export interface RecordBatch<Entry> extends Readonly<BatchRecords<Entry>> {
   readonly next: ReadPosition;
   readonly prefixDigest: string;
 }
@@ -62,16 +72,23 @@ export interface TranscriptSource<Entry> extends TranscriptSourceInfo {
 
 interface DecodedRecord extends Pick<LocalHistoryEntry, "lineNumber" | "record"> {
   readonly endOffset: number;
+  readonly afterBlankPrefix?: true;
 }
 
 interface SelectedFile<H extends LocalHistoryEntry["harness"]> extends Pick<TranscriptSourceInfo, "sessionId" | "previousCopy"> {
   readonly file: CapturedTranscriptFile;
   readonly harness: H;
+  readonly blankPrefixHeaderEnd?: number;
   matches(record: LocalHistoryEntry["record"], lineNumber: number): boolean;
 }
 const beginning: ReadPosition = { offset: 0, lineNumber: 0 };
 const defaultBatchBytes = 256 * 1024;
 const newline = Buffer.from([0x0a]);
+
+function isBlankLine(line: Buffer): boolean {
+  // The terminating LF is already removed. A JSON line can also contain space, tab or CR.
+  return line.every(byte => byte === 0x20 || byte === 0x09 || byte === 0x0d);
+}
 
 export abstract class LocalLLMHistory {
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
@@ -131,10 +148,12 @@ export abstract class LocalLLMHistory {
     };
   }
 
-  protected async snapshot<E extends DecodedRecord>(source: TranscriptSource<E>): Promise<Transcript<E> | undefined> {
-    const entries: E[] = [];
+  protected async snapshot<H extends LocalHistoryEntry["harness"]>(
+    source: TranscriptSource<TranscriptEntry<H>>,
+  ): Promise<Transcript<TranscriptEntry<H>> | undefined> {
+    const entries: TranscriptEntry<H>[] = [];
     for await (const batch of source.readBatches(beginning)) {
-      for (const entry of batch.entries) entries.push(entry);
+      for (const { startOffset: _startOffset, afterBlankPrefix: _afterBlankPrefix, ...entry } of batch.entries) entries.push(entry);
     }
     const last = entries.at(-1);
     if (last) return { sessionId: source.sessionId, sourceFile: source.sourceFile, entries, endOffset: last.endOffset };
@@ -153,15 +172,16 @@ export abstract class LocalLLMHistory {
       return;
     }
     const hash = await file.startBatch(position.offset);
-    let entries: TranscriptEntry<H>[] = [];
+    let records: BatchRecords<TranscriptEntry<H>> = { entries: [] };
     let next = position;
     let batchStart = position.offset;
     for await (const line of this.completeLines(file.chunks(position.offset, endOffset))) {
-      const offset = next.offset + line.length + 1;
+      const startOffset = next.offset;
+      const offset = startOffset + line.length + 1;
       if (next.offset > batchStart && offset - batchStart > maxBatchBytes) {
         await file.verifyPath();
-        yield { entries, next, prefixDigest: file.finishBatch(next.offset, hash) };
-        entries = [];
+        yield { ...records, next, prefixDigest: file.finishBatch(next.offset, hash) };
+        records = { entries: [] };
         batchStart = next.offset;
       }
       const lineNumber = next.lineNumber + 1;
@@ -170,18 +190,21 @@ export abstract class LocalLLMHistory {
       const record = this.decode(line);
       if (record && source.matches(record, lineNumber)) {
         const { timestamp } = record;
-        entries.push({ harness, sessionId, sourceFile: file.sourceFile, record, lineNumber, endOffset: offset,
+        records.entries.push({ harness, sessionId, sourceFile: file.sourceFile, record, lineNumber, startOffset, endOffset: offset,
+          ...(offset === source.blankPrefixHeaderEnd && { afterBlankPrefix: true }),
           ...(this.hasRecordedTimestamp(timestamp) ? { timestamp } : {}) });
+      } else if (!record && !isBlankLine(line)) {
+        (records.damagedLines ??= []).push({ lineNumber, startOffset, endOffset: offset });
       }
       if (offset - batchStart >= maxBatchBytes) {
         await file.verifyPath();
-        yield { entries, next, prefixDigest: file.finishBatch(next.offset, hash) };
-        entries = [];
+        yield { ...records, next, prefixDigest: file.finishBatch(next.offset, hash) };
+        records = { entries: [] };
         batchStart = offset;
       }
     }
     await file.verifyPath();
-    if (next.offset > batchStart) yield { entries, next, prefixDigest: file.finishBatch(next.offset, hash) };
+    if (next.offset > batchStart) yield { ...records, next, prefixDigest: file.finishBatch(next.offset, hash) };
   }
 
   protected inspectFile<T>(sourceFile: string, inspect: (records: AsyncIterable<DecodedRecord>) => Promise<T>) {
@@ -195,11 +218,13 @@ export abstract class LocalLLMHistory {
   private async *decodeRecords(chunks: AsyncIterable<Buffer>): AsyncGenerator<DecodedRecord> {
     let lineNumber = 0;
     let offset = 0;
+    let onlyBlanks = true;
     for await (const line of this.completeLines(chunks)) {
       lineNumber++;
       offset += line.length + 1;
       const record = this.decode(line);
-      if (record) yield { lineNumber, endOffset: offset, record };
+      if (record) yield { lineNumber, endOffset: offset, record, ...(onlyBlanks && lineNumber > 1 && { afterBlankPrefix: true }) };
+      if (onlyBlanks) onlyBlanks = !record && isBlankLine(line);
     }
   }
 
@@ -208,7 +233,7 @@ export abstract class LocalLLMHistory {
       const record: unknown = JSON.parse(this.decoder.decode(line));
       if (this.isRecord(record)) return record;
     } catch {
-      // Skip malformed UTF-8 or JSON. It is still one physical line in the source.
+      // Batches report the physical range of an unreadable record.
     }
   }
 

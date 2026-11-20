@@ -10,10 +10,11 @@ namespace TraceRelic.Collector;
 scalar Count extends integer;
 
 @minValue(1)
-scalar Revision extends Count;
+scalar PositiveCount extends Count;
 
-@minValue(1)
-scalar SourceOrder extends Count;
+scalar Revision extends PositiveCount;
+
+scalar SourceOrder extends PositiveCount;
 
 union Role { "user", "assistant" }
 union Coverage { "unknown", "partial", "reported" }
@@ -109,11 +110,26 @@ model ClaudeUsageReport extends TokenCounts {
   iterationId?: Identifier;
 }
 
-union UsageDiagnosticCode { "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown", "unsupported-claude-iteration", "ambiguous-transcript-replay" }
+/** Zero-based source bytes, from the first byte through the terminating newline.
+ * startOffset is inclusive and endOffset is exclusive. */
+model ByteRange {
+  startOffset: Count;
+  endOffset: PositiveCount;
+}
 
+union UsageDiagnosticCode {
+  "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown",
+  "unsupported-claude-iteration", "ambiguous-transcript-replay", "malformed-transcript-line",
+  "unsupported-codex-usage", "codex-counter-reset"
+}
+
+@extension("if", #{ properties: #{ code: #{ `enum`: #["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset"] } } })
+@extension("then", #{ required: #["byteRange"] })
 model UsageDiagnostic {
   code: UsageDiagnosticCode;
   sourceOrder: SourceOrder;
+  /** Scans include the exact range. Earlier line-only diagnostics remain readable. */
+  byteRange?: ByteRange;
 }
 
 model SourceUsageDiagnostic extends UsageDiagnostic {
@@ -145,7 +161,17 @@ model UsageWindow {
   historyId: Identifier;
   start: TokenCounts;
   end: TokenCounts;
+  /** SHA-256 fingerprints of the native reports at both boundaries in the same verified
+   * counter history. A copy can use these to match a range across a hidden reset. */
+  boundaryObservations?: BoundaryObservations;
   parts: Usage[];
+}
+
+model BoundaryObservations {
+  @pattern("^[0-9a-f]{64}$")
+  start: string;
+  @pattern("^[0-9a-f]{64}$")
+  end: string;
 }
 
 /** A separately reported call occurred after this source's last known counter.
@@ -188,7 +214,7 @@ model SessionView {
   metadata: Metadata;
   messages: Message[];
   usage: Usage[];
-  /** Report a source and line once per diagnostic code. */
+  /** Report the source, position and code once. Keep transcript content out of diagnostics. */
   usageDiagnostics?: SourceUsageDiagnostic[];
   coverage: Coverage;
   observedTotalTokens: Count | null;

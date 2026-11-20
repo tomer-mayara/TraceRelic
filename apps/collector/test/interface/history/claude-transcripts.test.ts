@@ -67,9 +67,14 @@ test("returns complete Claude records grouped by effective session with byte off
   assert.deepEqual(await Array.fromAsync(reader.readTranscripts({ sessionIds: ["parent"] })), []);
   const sources = await Array.fromAsync(reader.discoverSources());
   assert.deepEqual(sources.map(source => source.sessionId), [childId, "independent"]);
+  const afterBroken = childEnd + Buffer.byteLength("broken\n");
   for (const [i, transcript] of [childTranscript, otherTranscript].entries()) {
     const batches = await Array.fromAsync(sources[i].readBatches({ offset: 0, lineNumber: 0 }));
-    assert.deepEqual(batches.flatMap(batch => batch.entries), transcript.entries);
+    assert.deepEqual(batches.flatMap(batch => batch.damagedLines ?? []),
+      [{ lineNumber: 2, startOffset: childEnd, endOffset: afterBroken }]);
+    const starts = i === 0 ? [0, otherEnd] : [afterBroken];
+    assert.deepEqual(batches.flatMap(batch => batch.entries), transcript.entries.map((entry, j) =>
+      ({ ...entry, startOffset: starts[j] })));
     assert.deepEqual(batches.at(-1)?.next, { offset: metadataEnd, lineNumber: 4 });
   }
 });
@@ -135,6 +140,8 @@ test("captures the discovered file size and resumes Claude after malformed lines
   await appendFile(sourceFile, suffix.subarray(split));
   const initial = await Array.fromAsync(original.readBatches({ offset: 0, lineNumber: 0 }, undefined, Number.MAX_SAFE_INTEGER));
   assert.deepEqual(initial.flatMap(batch => batch.entries.map(entry => entry.record)), [first]);
+  assert.deepEqual(initial.flatMap(batch => batch.damagedLines ?? []),
+    [{ lineNumber: 2, startOffset: afterFirst.offset, endOffset: afterBroken.offset }]);
   assert.deepEqual(initial.at(-1)?.next, afterBroken);
 
   const [updated] = await Array.fromAsync(reader.discoverSources());
@@ -144,7 +151,7 @@ test("captures the discovered file size and resumes Claude after malformed lines
   assert.deepEqual(await Array.fromAsync(updated.readBatches(afterBroken)), [{
     entries: [{
       harness: "claude", sessionId: "native", sourceFile, record: final, timestamp: final.timestamp,
-      lineNumber: 3, endOffset: finalPosition.offset,
+      lineNumber: 3, startOffset: afterBroken.offset, endOffset: finalPosition.offset,
     }],
     next: finalPosition,
     prefixDigest: createHash("sha256").update(JSON.stringify(first) + "\n").update(broken).update(suffix).digest("hex"),

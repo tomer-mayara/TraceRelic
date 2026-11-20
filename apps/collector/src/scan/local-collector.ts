@@ -7,7 +7,7 @@ import type { Batch, Checkpoint, CheckpointSnapshot, CollectorStorage, Harness, 
 import { ClaudeSessionParser } from "./claude-session-parser.ts";
 import { CodexSessionParser } from "./codex-session-parser.ts";
 import type { DecodedChat } from "./decoded-chat.ts";
-import { TranscriptCursor, type ParserFormat } from "./transcript-cursor.ts";
+import { TranscriptCursor, type ParserFormat, type SourceLine } from "./transcript-cursor.ts";
 
 function preparePreviousCopy(chat: DecodedChat, known: SessionView | null, offset: number): boolean {
   if (!offset && !known && !chat.messages.length && !Object.keys(chat.metadata).length
@@ -66,7 +66,7 @@ export class LocalCollector {
     return [...codexViews, ...claudeViews];
   }
 
-  private async scanProvider<Entry>(
+  private async scanProvider<Entry extends SourceLine>(
     harness: Harness, transcripts: AsyncIterable<TranscriptSource<Entry>>,
     format: (previousCopy: boolean) => ParserFormat<Entry>,
   ): Promise<SessionView[]> {
@@ -106,7 +106,7 @@ export class LocalCollector {
     return { harness, sessionId, streamId, ...(installationId && { installationId }) };
   }
 
-  private async importTranscript<Entry>(
+  private async importTranscript<Entry extends SourceLine>(
     source: StreamKey, transcript: TranscriptSource<Entry>, format: ParserFormat<Entry>,
     start: CheckpointSnapshot, digests: Map<number, string>,
   ): Promise<boolean> {
@@ -132,7 +132,7 @@ export class LocalCollector {
     }
   }
 
-  private async importFrom<Entry>(
+  private async importFrom<Entry extends SourceLine>(
     source: StreamKey, transcript: TranscriptSource<Entry>, format: ParserFormat<Entry>,
     { checkpoint, version }: CheckpointSnapshot, reset: boolean,
   ): Promise<boolean | Batch> {

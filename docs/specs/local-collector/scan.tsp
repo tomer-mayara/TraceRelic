@@ -43,8 +43,9 @@ model ReadPosition {
 
 /** JSON stored in Checkpoint.parserState after a batch. The provider owns the decoder fields. */
 model ParserCheckpointState {
-  /** Version 2 includes usage for both providers. Version 3 also reserves fallback IDs across a rewrite. */
-  version: 1 | 2 | 3;
+  /** Version 4 saves a Codex gap while the decoder waits for a reliable baseline.
+   * It can also carry the fallback ID reservations introduced in version 3. */
+  version: 1 | 2 | 3 | 4;
   /** Zero only at the beginning of an empty source. */
   lineNumber: Count;
   decoder: Record<unknown>;
@@ -65,8 +66,22 @@ model TranscriptSourceInfo {
   previousCopy: boolean;
 }
 
-model RecordBatch<Entry> {
-  entries: Entry[];
+model ScannedEntry<Entry extends {}> {
+  ...Entry;
+  /** Inclusive byte position of this complete physical record. */
+  startOffset: Count;
+  /** A native Codex session header can follow leading blank lines. */
+  afterBlankPrefix?: true;
+}
+
+model DamagedLine extends ByteRange {
+  lineNumber: SourceOrder;
+}
+
+model RecordBatch<Entry extends {}> {
+  entries: ScannedEntry<Entry>[];
+  /** Complete, nonblank lines that could not be read as UTF-8 JSON objects, in source order. */
+  damagedLines?: DamagedLine[];
   next: ReadPosition;
   prefixDigest: PrefixDigest;
 }
@@ -77,7 +92,7 @@ model ClaudeRecordBatch is RecordBatch<ClaudeTranscriptEntry>;
 /** Start at zero or a saved next position. Read within the captured file size.
  * A record larger than the batch budget occupies its own batch. If the file is
  * replaced or truncated during reading, report the source path and discard the pending batch. */
-interface SourceBatches<Entry> {
+interface SourceBatches<Entry extends {}> {
   /** Hash the captured file through the requested byte positions in one streaming pass. */
   prefixDigests(offsets: Count[]): VerifiedPrefix[];
   readBatches(position: ReadPosition, maxBatchBytes?: SourceOrder, endOffset?: Count): RecordBatch<Entry>[];

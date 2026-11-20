@@ -34,6 +34,10 @@ export class CodexUsageScanFixture {
     return this.storage.readCheckpoint({ ...this.key, installationId: id, streamId: basename(this.files[id]) });
   }
 
+  damage(id: Installation) {
+    return appendFile(this.files[id], "{damaged\n");
+  }
+
   async scan(id: Installation): Promise<SessionView> {
     const config = join(this.roots[id].home, "collector.json");
     const views = await new CollectorCommand(this.storage).run(["scan", "--once", "--config", config]);

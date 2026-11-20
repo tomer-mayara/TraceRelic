@@ -1,4 +1,4 @@
-import type { CodexRolloutEntry, RecordBatch } from "../history/index.ts";
+import type { CodexRolloutEntry } from "../history/index.ts";
 import type { Metadata, Role } from "../storage/collector-storage.ts";
 import { invalidState, jsonDigest, stateRecord, stateString, TextOccurrences } from "./chat-parser-state.ts";
 import type { ChatParser, DecodedChat } from "./decoded-chat.ts";
@@ -63,7 +63,7 @@ export class CodexChat implements ChatParser<ChatEntry> {
   }
 
   async prepareLookahead(
-    first: readonly ChatEntry[], tail: AsyncIterable<Pick<RecordBatch<ChatEntry>, "entries">>, acceptedLine: number,
+    first: readonly ChatEntry[], tail: AsyncIterable<{ entries: readonly ChatEntry[] }>, acceptedLine: number,
   ): Promise<void> {
     // Only matcher state participates in this pass. Anonymous IDs are assigned when the owning batch is decoded.
     const probe = new CodexChat(new TextOccurrences());
