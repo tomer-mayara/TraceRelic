@@ -47,6 +47,8 @@ The standalone command uses memory for one invocation. TypeScript callers can pa
 
 If a write loses its connection, the scanner checks which bytes storage accepted. When the outcome is still unknown, `scan --once` prints a JSON report to standard error and exits with status 75. The report gives the source, the attempted byte range when available, and a suggested retry time. Run the scan again after reconnecting to resume from storage’s checkpoint.
 
+If storage rejects a batch, the scanner stops reading that file and continues with the other selected files. The CLI writes the source and byte range of each rejected batch as a JSON line to standard error. When the scan finishes, it prints the accepted session views to standard output and exits with status 1. TypeScript callers can read the views and diagnostics from `ScanRejectedError.sessions` and `.rejections`. After you correct the file, a scan using the same storage resumes from the last accepted checkpoint.
+
 An append or Codex archive move resumes after the scanner verifies the accepted bytes. A shortened or rewritten transcript is read from the beginning. If repeated rows have no native ID and their individual matches are uncertain, the scanner keeps the original messages and records the affected source lines in `usageDiagnostics`.
 
 Set an optional `installationId` in the configuration when multiple installations scan into one workspace. Each installation keeps its own read position and shares the session's messages and version. Claude rows with a UUID can recover text from an earlier transcript copy. Repeated prompts within a conversation keep their separate positions.

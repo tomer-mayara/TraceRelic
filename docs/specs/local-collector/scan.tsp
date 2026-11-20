@@ -123,9 +123,24 @@ model PendingScan {
   retryAt: utcDateTime;
 }
 
+/** Storage rejected this batch as invalid. The range describes the attempted bytes. */
+model RejectedBatch {
+  status: "rejected";
+  source: StreamKey;
+  byteRange: ByteRange;
+}
+
+/** The scan finished the other selected files. Sessions contain only data accepted by storage. */
+model RejectedScan {
+  sessions: SessionView[];
+  @minItems(1)
+  rejections: RejectedBatch[];
+}
+
 interface LocalCollector {
   /** Import complete records into the destination workspace. Return its selected sessions.
    * An unconfirmed write or unresolved version conflict raises a scan error carrying PendingScan.
-   * An invalid commit reports the source file and attempted byte range. */
+   * Emit a RejectedBatch for each invalid commit. Stop that file and continue other files.
+   * After scanning, raise a scan error carrying RejectedScan if any batch was rejected. */
   scanOnce(selection?: ScanSelection): SessionView[];
 }

@@ -498,6 +498,17 @@ Feature: Continue scanning other sources
 1. **Unit.** Return `invalid` for A. Stop that file for this scan and report its byte range. Avoid an immediate retry of the same batch.
 2. **Integration.** Use the fixture's real rejection. Verify that accepted messages, usage and metadata in A survive and that B commits.
 
+| LC-09 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [rejected batch scenario](../../apps/collector/test/acceptance/scan/isolate-rejected-batch.feature) through `scan --once`. Storage rejects changed text under an accepted message ID. Keep A's last accepted batch and checkpoint, and import B's 12-token call. Run `bun run check:collector-scan` and `bun run test`. |
+| Observability | Report each invalid batch once with its logical source and exact half-open byte range. The CLI writes the report to standard error and the accepted session views to standard output. Check both outputs, the exit status and the absence of transcript content in the report. Existing service objectives apply. |
+| Architecture | Storage owns validation and rejects the whole write atomically. The scanner stops work on the affected file, then advances discovery. The CLI presents the scanner's results. The existing [dependency rules](../../.dependency-cruiser.collector.json) apply. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds `RejectedBatch` and the accepted sessions and rejections available in `ScanRejectedError`. The [storage contract](local-collector/storage.tsp) already defines `invalid`. Check the generated schema, the command output and storage atomicity with `bun run check:collector-scan`, `bun run check:collector-storage` and `bun run test`. |
+
+Keep earlier commits from the rejected file, including batches accepted during this scan. Skip its remaining bytes and any active or archive copy of the same logical stream for this invocation. Other files with independent streams can still contribute to the same session. A later scan can start from the accepted checkpoint after the source is corrected.
+
+Report a rejection as soon as storage returns `invalid`. After the remaining files have been scanned, the CLI prints the available stored sessions and exits with status 1. A first write that fails has no stored session of its own. If a later connection failure leaves work pending, the CLI also reports that condition and exits with status 75.
+
 #### LC-10 · Count a Codex fork's own work
 
 ```gherkin

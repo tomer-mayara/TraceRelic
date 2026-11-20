@@ -3,6 +3,7 @@ import type { Checkpoint, CheckpointSnapshot, CommitResult } from "../../src/sto
 
 export class ScanRecoveryFixture {
   reads = 0;
+  commits = 0;
   readonly verified: number[][] = [];
   readonly saved = { offset: 10, prefixDigest: "digest-10", parserState: "old" };
   winner: CheckpointSnapshot = { checkpoint: this.saved, version: 2 };
@@ -13,12 +14,13 @@ export class ScanRecoveryFixture {
       return this.winner;
     },
     commit: async () => {
+      this.commits++;
       if (this.outcome instanceof Error) throw this.outcome;
       return this.outcome;
     },
     readSession: async () => { throw new Error("Unexpected session read"); },
   }, {
-    sourceFile: "rollout.jsonl", fileSize: 100,
+    fileSize: 100,
     prefixDigests: async offsets => {
       this.verified.push([...offsets]);
       return offsets.map(offset => ({ offset, prefixDigest: "digest-" + offset }));

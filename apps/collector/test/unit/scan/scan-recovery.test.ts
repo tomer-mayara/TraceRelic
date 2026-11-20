@@ -4,6 +4,33 @@ import { ScanPendingError } from "#src/scan/scan-pending";
 import { batch } from "../../fixtures/collector-storage-fixture.ts";
 import { ScanRecoveryFixture } from "../../fixtures/scan-recovery-fixture.ts";
 
+test("invalid returns the attempted cursor range without reading a winner or retrying", async () => {
+  const f = new ScanRecoveryFixture();
+  f.outcome = "invalid";
+  const rewrite = batch(1, 10, { resetFrom: f.saved });
+  assert.deepEqual(await f.recovery.commit(rewrite, f.saved, 0), {
+    status: "rejected", source: rewrite.source, byteRange: { startOffset: 0, endOffset: 20 },
+  });
+  assert.equal(f.commits, 1);
+  assert.equal(f.reads, 0);
+  assert.deepEqual(f.verified, []);
+});
+
+test("a skipped prefix in an earlier copy stays pending when its first write is unconfirmed", async () => {
+  const f = new ScanRecoveryFixture();
+  const copy = batch(0, 0);
+  f.outcome = "invalid";
+  assert.deepEqual(await f.recovery.commit(copy, null, 5), {
+    status: "rejected", source: copy.source, byteRange: { startOffset: 5, endOffset: 10 },
+  });
+  f.timeoutAfter(0, null);
+  await assert.rejects(f.recovery.commit(copy, null, 5), (error: unknown) => {
+    assert(error instanceof ScanPendingError);
+    assert.deepEqual(error.pending.byteRange, { startOffset: 0, endOffset: 10 });
+    return true;
+  });
+});
+
 test("a newer session version alone permits a conflict retry but cannot confirm a timed-out write", async () => {
   const f = new ScanRecoveryFixture();
   const append = batch(1, 10);

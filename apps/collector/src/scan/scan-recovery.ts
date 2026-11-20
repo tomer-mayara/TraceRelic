@@ -4,6 +4,7 @@ import {
   type StreamKey, StorageUnavailableError,
 } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";
+import { rejectedBatch, type RejectedBatch } from "./scan-rejected.ts";
 
 export async function readStorage<T>(source: StreamKey, read: () => Promise<T>, byteRange?: ByteRange): Promise<T> {
   try {
@@ -38,11 +39,11 @@ export class ScanRecovery {
 
   constructor(
     private readonly storage: CollectorStorage,
-    private readonly transcript: Pick<TranscriptSource<unknown>, "sourceFile" | "fileSize" | "prefixDigests">,
+    private readonly transcript: Pick<TranscriptSource<unknown>, "fileSize" | "prefixDigests">,
   ) {}
 
-  /** Return the durable starting point when the interrupted cursor must be discarded. */
-  async commit(batch: Batch, previous: Checkpoint | null, startOffset: number): Promise<ScanRestart | undefined> {
+  /** Return a rejection or the durable starting point for a replacement cursor. */
+  async commit(batch: Batch, previous: Checkpoint | null, startOffset: number): Promise<ScanRestart | RejectedBatch | undefined> {
     let outcome: CommitResult | "storage-unavailable";
     try {
       outcome = await this.storage.commit(batch);
@@ -51,10 +52,10 @@ export class ScanRecovery {
       outcome = "storage-unavailable";
     }
     if (outcome === "committed") return;
-    const byteRange = { startOffset, endOffset: batch.checkpoint.offset };
-    if (outcome === "invalid") {
-      throw new Error(`Storage returned invalid for ${this.transcript.sourceFile}, bytes ${byteRange.startOffset}..${byteRange.endOffset}`);
-    }
+    const endOffset = batch.checkpoint.offset;
+    if (outcome === "invalid") return rejectedBatch(batch.source, { startOffset, endOffset });
+    // An unresolved write leaves any skipped prefix pending from the durable checkpoint.
+    const byteRange = { startOffset: Math.min(startOffset, batch.expectedOffset), endOffset };
     const winner = await readStorage(batch.source, () => this.storage.readCheckpoint(batch.source), byteRange);
     const reason = outcome === "conflict" ? "version-conflict" : "storage-unavailable";
     const pending = () => new ScanPendingError(reason, batch.source, byteRange);
