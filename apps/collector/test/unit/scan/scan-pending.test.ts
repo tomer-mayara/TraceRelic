@@ -25,3 +25,7 @@ test("reports a conflict without a byte range when no batch is available", t => 
     status: "pending", reason: "version-conflict", source, retryAt: "2026-01-02T09:00:01.000Z",
   });
 });
+
+test("a delay beyond the last representable report date still yields an RFC 3339 deadline", () => {
+  assert.equal(ScanPendingError.retryAt(0, Number.MAX_SAFE_INTEGER), "9999-12-31T23:59:59.999Z");
+});

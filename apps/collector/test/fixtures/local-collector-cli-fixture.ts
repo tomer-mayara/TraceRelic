@@ -10,6 +10,8 @@ import { CodexRolloutFixture } from "./codex-rollout-fixture.ts";
 const repoRoot = fileURLToPath(new URL("../../", import.meta.resolve("@tracerelic/collector/package.json")));
 
 export class LocalCollectorCliFixture {
+  private readonly localEnv = { ...process.env, TRACERELIC_COLLECTOR_API_URL: undefined, TRACERELIC_COLLECTOR_TOKEN: undefined };
+
   private constructor(readonly configured: CodexRolloutFixture, readonly elsewhere: CodexRolloutFixture) {}
 
   static async create(): Promise<LocalCollectorCliFixture> {
@@ -40,7 +42,7 @@ export class LocalCollectorCliFixture {
   run(args: string[]) {
     const result = spawnSync("bun", ["run", "collector", ...args], {
       cwd: repoRoot, encoding: "utf8",
-      env: { ...process.env, CODEX_HOME: this.elsewhere.home, CODEX_PATH: this.elsewhere.home },
+      env: { ...this.localEnv, CODEX_HOME: this.elsewhere.home, CODEX_PATH: this.elsewhere.home },
     });
     if (result.error) throw result.error;
     return result;
@@ -48,7 +50,7 @@ export class LocalCollectorCliFixture {
 
   async watchThroughSignal(config: string, signal: "SIGINT" | "SIGTERM") {
     const child = spawn("bun", ["--silent", "run", "collector", "--config", config, "watch"], {
-      cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL",
+      cwd: repoRoot, env: this.localEnv, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL",
     });
     const stdout: string[] = [];
     let stderr = "";

@@ -2,31 +2,32 @@ import assert from "node:assert/strict";
 import { appendFile, stat, truncate, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
+import type { CollectorStorage } from "../../src/storage/collector-storage.ts";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "./codex-rollout-fixture.ts";
 import { CodexUsageFixture as Usage } from "./codex-usage-fixture.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 
 export class RejectedBatchFixture {
-  readonly storage = new InMemoryCollectorStorage();
   readonly a;
   readonly b = { harness: "claude", sessionId: "b", streamId: "projects/project/b.jsonl", installationId: "desktop" } as const;
   readonly changedText = "Changed private text";
   readonly args: string[];
 
-  private constructor(private readonly root: Rollout, private readonly file: string, private readonly claude: ClaudeProjectFixture) {
+  private constructor(private readonly root: Rollout, private readonly file: string, private readonly claude: ClaudeProjectFixture,
+    readonly storage: CollectorStorage) {
     this.a = { harness: "codex", sessionId: "a", streamId: basename(file), installationId: "desktop" } as const;
     this.args = ["scan", "--once", "--config", join(root.home, "collector.json")];
   }
 
-  static async create() {
+  static async create(storage: CollectorStorage = new InMemoryCollectorStorage()) {
     const root = await Rollout.create();
     const claude = new ClaudeProjectFixture(join(root.home, "claude"));
     const file = await root.write([Rollout.header("a")]);
     await writeFile(join(root.home, "collector.json"), JSON.stringify({
       codexPath: root.home, claudePath: claude.home, installationId: "desktop",
     }));
-    return new RejectedBatchFixture(root, file, claude);
+    return new RejectedBatchFixture(root, file, claude, storage);
   }
 
   close() { return this.root.close(); }

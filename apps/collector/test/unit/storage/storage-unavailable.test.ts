@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { StorageUnavailableError } from "#src/storage/collector-storage";
+import { StorageAuthenticationError, StorageBackoffError, StorageUnavailableError } from "#src/storage/collector-storage";
 
 test("recognizes storage connection failures and timeouts", () => {
   assert(StorageUnavailableError.is(new StorageUnavailableError()));
@@ -20,4 +20,15 @@ test("preserves authentication and programming errors even when their message me
     Object.assign(new Error("connection refused"), { code: "EACCES" })]) {
     assert.equal(StorageUnavailableError.is(error), false);
   }
+});
+
+test("a server delay is temporary and a rejected credential requires the caller to act", () => {
+  for (const [hint, expected] of [[undefined, 1000], [0, 1000], [5000, 5000]] as const) {
+    const delayed = new StorageBackoffError(hint);
+    assert(StorageUnavailableError.is(delayed));
+    assert.equal(delayed.retryAfterMs, expected);
+  }
+  const rejected = new StorageAuthenticationError();
+  assert.match(rejected.message, /credential/i);
+  assert.equal(StorageUnavailableError.is(rejected), false);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CollectorWireContract } from "#src/collector-wire-contract";
+import { CollectorWireContract } from "@tracerelic/collector/wire-contract";
 import { credentialRecord } from "../../fixtures/collector-credential.ts";
 import { batch, key, presence, scope, source } from "../../fixtures/collector-wire-payloads.ts";
 

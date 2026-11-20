@@ -154,7 +154,7 @@ model PendingScan {
   scope?: SourceScope;
   /** Attempted transcript bytes, when a batch was available. */
   byteRange?: ByteRange;
-  /** Earliest suggested time for an automatic retry. */
+  /** Earliest suggested time for an automatic retry. Honor a longer HTTP Retry-After delay. */
   retryAt: utcDateTime;
 }
 

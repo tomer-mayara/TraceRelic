@@ -2,17 +2,18 @@ import { isDeepStrictEqual } from "node:util";
 import { TranscriptChangedError, type TranscriptSource, type VerifiedPrefix } from "../history/index.ts";
 import {
   type Batch, type ByteRange, type Checkpoint, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
-  type StreamKey, StorageUnavailableError,
+  type SourceScope, type StreamKey, StorageBackoffError, StorageUnavailableError,
 } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";
 import { rejectedBatch, type RejectedBatch } from "./scan-rejected.ts";
 
-export async function readStorage<T>(source: StreamKey, read: () => Promise<T>, byteRange?: ByteRange): Promise<T> {
+export async function readStorage<T>(target: StreamKey | SourceScope, read: () => Promise<T>, byteRange?: ByteRange): Promise<T> {
   try {
     return await read();
   } catch (error) {
-    if (StorageUnavailableError.is(error)) throw new ScanPendingError("storage-unavailable", source, byteRange);
-    throw error;
+    if (!StorageUnavailableError.is(error)) throw error;
+    const delay = error instanceof StorageBackoffError ? error.retryAfterMs : undefined;
+    throw new ScanPendingError("storage-unavailable", target, byteRange, delay);
   }
 }
 
@@ -49,18 +50,19 @@ export class ScanRecovery {
 
   /** Return a rejection or the durable starting point for a replacement cursor. */
   async commit(batch: Batch, previous: Checkpoint | null, startOffset: number): Promise<ScanRestart | RejectedBatch | undefined> {
+    const endOffset = batch.checkpoint.offset;
+    // An unresolved write leaves any skipped prefix pending from the durable checkpoint.
+    const byteRange = { startOffset: Math.min(startOffset, batch.expectedOffset), endOffset };
     let outcome: CommitResult | "storage-unavailable";
     try {
       outcome = await this.storage.commit(batch);
     } catch (error) {
+      if (error instanceof StorageBackoffError) throw new ScanPendingError("storage-unavailable", batch.source, byteRange, error.retryAfterMs);
       if (!StorageUnavailableError.is(error)) throw error;
       outcome = "storage-unavailable";
     }
     if (outcome === "committed") return;
-    const endOffset = batch.checkpoint.offset;
     if (outcome === "invalid") return rejectedBatch(batch.source, { startOffset, endOffset });
-    // An unresolved write leaves any skipped prefix pending from the durable checkpoint.
-    const byteRange = { startOffset: Math.min(startOffset, batch.expectedOffset), endOffset };
     const winner = await readStorage(batch.source, () => this.storage.readCheckpoint(batch.source), byteRange);
     const reason = outcome === "conflict" ? "version-conflict" : "storage-unavailable";
     const pending = () => new ScanPendingError(reason, batch.source, byteRange);

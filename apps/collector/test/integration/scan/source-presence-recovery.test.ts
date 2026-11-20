@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
 import { LocalCollector, ScanPendingError } from "@tracerelic/collector/scan";
+import { StorageBackoffError } from "@tracerelic/collector/storage";
 import type { MissingSource } from "../../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
 import { PresenceConnection } from "../../fixtures/presence-connection.ts";
@@ -41,6 +42,7 @@ for (const lost of ["request", "reply"] as const) {
 }
 
 test("a running scanner names a vanished source while its first checkpoint is still unknown", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: 0 });
   const root = await Rollout.create();
   t.after(() => root.close());
   const file = await root.write([Rollout.header("work")]);
@@ -52,9 +54,12 @@ test("a running scanner names a vanished source while its first checkpoint is st
   storage.offline = true;
   await assert.rejects(scanner.scanOnce(), ScanPendingError);
   await rm(file);
+  const list = t.mock.method(storage, "listSources");
+  list.mock.mockImplementationOnce(() => { throw new StorageBackoffError(12_000); });
   await assert.rejects(scanner.scanOnce(), (error: unknown) => {
     assert(error instanceof ScanPendingError);
     assert.deepEqual(error.pending.source, source);
+    assert.equal(error.pending.retryAt, "1970-01-01T00:00:12.000Z");
     return true;
   });
   assert.deepEqual(reports, []);

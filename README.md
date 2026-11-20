@@ -51,7 +51,7 @@ bun run collector watch --config ./tracerelic.config.json --interval-ms 5000
 
 Each pass writes one JSON line to standard output. For example, `{"status":"complete","newSessions":1,"oldestPendingAgeMs":null}` means storage accepted one new session and no source is waiting. When storage is unavailable, the report includes `retryAt` and the collector waits until then to retry. A slow scan skips any ticks it spans. Press Ctrl-C to finish the active pass and exit.
 
-The standalone CLI keeps its workspace in memory for the life of the process. Each `watch` pass uses that same workspace. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state, next byte and prefix digest together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
+By default, the standalone CLI keeps its workspace in memory for the life of the process. Each `watch` pass uses that same workspace. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state, next byte and prefix digest together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
 
 If a write loses its connection, the scanner checks which bytes storage accepted. When the outcome is still unknown, `scan --once` prints a JSON report to standard error and exits with status 75. The report gives the source, the attempted byte range when available, and a suggested retry time. If storage cannot list the acknowledged sources, the report identifies the affected selection in `scope`. Run the scan again after reconnecting to resume from storage’s checkpoint.
 
@@ -102,7 +102,23 @@ curl --header "Authorization: Bearer $TRACERELIC_COLLECTOR_TOKEN" --json '{"harn
   http://127.0.0.1:3000/v1/collector/session
 ```
 
-Run `bun run check:collector-api` to exercise workspace isolation and the storage contract over a loopback connection.
+## Sync the collector to an API
+
+Build the collector, set `TRACERELIC_COLLECTOR_TOKEN` in the scanner's environment to the issued bearer token, and set `TRACERELIC_COLLECTOR_API_URL` to the API origin. Use HTTPS for remote services. For the local API above, use its loopback address.
+
+```sh
+bun run build
+export TRACERELIC_COLLECTOR_API_URL=http://127.0.0.1:3000
+bun run collector scan --once --config ./tracerelic.config.json
+```
+
+The same settings apply to `bun run collector watch --config ./tracerelic.config.json`. The credential selects the workspace and installation. If the configuration supplies an `installationId`, it must match the credential. A restarted scanner reads the checkpoint from the API. After a lost reply, this lets it confirm the accepted bytes and count each call once.
+
+TypeScript callers can pass `new HttpCollectorStorage(apiUrl, token)` from `@tracerelic/collector/http-storage` to the scanner. Each HTTP request has a ten-second timeout, including the response body.
+
+When the API rate-limits a request or is temporarily unavailable, the collector reports `retryAt`. An automatic retry waits at least one second and honors a longer `Retry-After` value. A one-time scan exits with status 75 if work is pending. A rejected credential stops either command with status 1. A rejected or oversized batch identifies its source and byte range, and other selected files can still sync.
+
+Run `bun run check:collector-api` to check workspace isolation, the storage contract, and scanner restarts after a dropped request or reply over loopback HTTP.
 
 ## Run the checks
 

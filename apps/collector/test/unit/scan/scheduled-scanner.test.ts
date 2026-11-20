@@ -3,8 +3,19 @@ import { test } from "node:test";
 import { ScanPendingError } from "#src/scan/scan-pending";
 import { ScanRejectedError, rejectedBatch } from "#src/scan/scan-rejected";
 import { ScheduledScanner } from "#src/scan/scheduled-scanner";
+import { StorageAuthenticationError } from "#src/storage/collector-storage";
 import { source } from "../../fixtures/collector-storage-fixture.ts";
 import { ScheduledScannerFixture } from "../../fixtures/scheduled-scanner-fixture.ts";
+
+test("a rejected credential reports the failed pass and stops scheduling", async t => {
+  const f = new ScheduledScannerFixture();
+  const rejected = new StorageAuthenticationError();
+  f.work = async () => { throw rejected; };
+  const wait = t.mock.method(f.clock, "wait", async () => { throw new Error("Watch tried to schedule another scan"); });
+  await assert.rejects(f.run(), error => error === rejected);
+  assert.deepEqual(f.reports, [{ status: "failed", newSessions: 0, oldestPendingAgeMs: null }]);
+  assert.equal(wait.mock.callCount(), 0);
+});
 
 test("starts immediately and runs one scan per interval until stopped", async () => {
   const f = new ScheduledScannerFixture();

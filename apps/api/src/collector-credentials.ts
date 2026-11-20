@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { CollectorWireContract, type CollectorCredentialRecord } from "./collector-wire-contract.ts";
+import { CollectorWireContract, type CollectorCredentialRecord } from "@tracerelic/collector/wire-contract";
 
 export type CollectorScope = Pick<CollectorCredentialRecord, "workspaceId" | "installationId">;
 

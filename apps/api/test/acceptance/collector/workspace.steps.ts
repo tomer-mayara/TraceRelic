@@ -11,8 +11,8 @@ interface WorkspaceScenario {
   reply: Response;
 }
 
-Before(async function (this: WorkspaceScenario) { this.api = await CollectorApiFixture.open(); });
-After(async function (this: WorkspaceScenario) { await this.api?.close(); });
+Before({ tags: "@lc14" }, async function (this: WorkspaceScenario) { this.api = await CollectorApiFixture.open(); });
+After({ tags: "@lc14" }, async function (this: WorkspaceScenario) { await this.api?.close(); });
 
 Given("workspace A has a 130-token session and workspace B is empty", async function (this: WorkspaceScenario) {
   assert.equal(await this.api.a.commit(batch), "committed");

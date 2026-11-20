@@ -1,4 +1,5 @@
 import { setTimeout } from "node:timers/promises";
+import { StorageAuthenticationError } from "../storage/collector-storage.ts";
 import type { ScanActivity, ScheduledScanReport } from "./scan-activity.ts";
 import { ScanPendingError, type PendingScan } from "./scan-pending.ts";
 import { ScanRejectedError } from "./scan-rejected.ts";
@@ -70,6 +71,10 @@ export class ScheduledScanner {
         return this.activity.finishPass({ status: "pending", retryAt: error.pending.retryAt });
       }
       if (error instanceof ScanRejectedError) return this.activity.finishPass({ status: "rejected" });
+      if (error instanceof StorageAuthenticationError) {
+        options.onReport(this.activity.finishPass({ status: "failed" }));
+        throw error;
+      }
       options.onFailure?.(error);
       return this.activity.finishPass({ status: "failed" });
     }

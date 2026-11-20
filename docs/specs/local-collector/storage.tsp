@@ -343,7 +343,9 @@ model SessionView {
   observedTotalTokens: Count | null;
 }
 
-/** A connection failure or timeout can interrupt any operation. */
+/** A connection failure or timeout can interrupt any operation. For an unconfirmed write,
+ * read the acknowledged checkpoint before retrying. A rate limit or temporary HTTP failure
+ * defers work until the suggested retry. An invalid credential stops the caller. */
 interface CollectorStorage {
   /** Match the installation and configured root exactly. Apply session and project selections as alternatives. */
   listSources(scope: SourceScope): AcknowledgedSource[];

@@ -286,3 +286,20 @@ export class StorageUnavailableError extends Error {
     return false;
   }
 }
+
+/** Storage asked the scanner to delay its next operation. */
+export class StorageBackoffError extends StorageUnavailableError {
+  readonly retryAfterMs: number;
+
+  constructor(retryAfterMs = 1000) {
+    super("Collector storage requested a delayed retry");
+    this.retryAfterMs = Number.isFinite(retryAfterMs) ? Math.max(1000, Math.ceil(retryAfterMs)) : 1000;
+  }
+}
+
+/** A scan can resume after the caller supplies a valid credential. */
+export class StorageAuthenticationError extends Error {
+  constructor() {
+    super("The collector API rejected the credential. Check TRACERELIC_COLLECTOR_TOKEN.");
+  }
+}

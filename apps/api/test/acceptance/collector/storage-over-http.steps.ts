@@ -9,6 +9,6 @@ interface StorageScenario {
 
 Before(async function (this: StorageScenario) {
   this.api = await CollectorApiFixture.open();
-  this.store = this.api.a;
+  this.store = this.api.client;
 });
 After(async function (this: StorageScenario) { await this.api?.close(); });

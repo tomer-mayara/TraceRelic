@@ -1,8 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ScanPendingError } from "#src/scan/scan-pending";
+import { StorageBackoffError } from "#src/storage/collector-storage";
 import { batch } from "../../fixtures/collector-storage-fixture.ts";
 import { ScanRecoveryFixture } from "../../fixtures/scan-recovery-fixture.ts";
+
+test("a rate-limited upload defers its entire range before reading another checkpoint", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: 0 });
+  const f = new ScanRecoveryFixture();
+  f.outcome = new StorageBackoffError(7500);
+  const upload = batch(0, 0);
+  await assert.rejects(f.recovery.commit(upload, null, 5), (error: unknown) => {
+    assert(error instanceof ScanPendingError);
+    assert.deepEqual(error.pending, { status: "pending", reason: "storage-unavailable", source: upload.source,
+      byteRange: { startOffset: 0, endOffset: 10 }, retryAt: "1970-01-01T00:00:07.500Z" });
+    return true;
+  });
+  assert.equal(f.commits, 1);
+  assert.equal(f.reads, 0);
+});
 
 test("invalid returns the attempted cursor range without reading a winner or retrying", async () => {
   const f = new ScanRecoveryFixture();

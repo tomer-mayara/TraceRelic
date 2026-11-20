@@ -14,6 +14,15 @@ using TraceRelic.Collector;
 @useAuth(BearerAuth)
 namespace TraceRelic.CollectorApi;
 
+/** Environment settings used together by the collector's remote scan and watch commands. */
+@TypeSpec.JsonSchema.jsonSchema
+model CollectorRemoteDestination {
+  /** HTTPS origin of the API. A loopback origin can also use HTTP. */
+  @format("uri") TRACERELIC_COLLECTOR_API_URL: string;
+  /** Opaque bearer credential issued to this installation. */
+  @secret @pattern("^[a-zA-Z0-9._~+/-]+=*$") TRACERELIC_COLLECTOR_TOKEN: string;
+}
+
 @TypeSpec.JsonSchema.jsonSchema
 model SessionResult {
   session: SessionView | null;
@@ -65,11 +74,22 @@ model AuthenticationRequired extends JsonReply<401, Problem<"unauthorized">> {
   @header("WWW-Authenticate") challenge: "Bearer";
 }
 
+/** An API or gateway can ask the client to wait a number of seconds or until an HTTP date. */
+model RateLimited {
+  @statusCode status: 429;
+  @header("Retry-After") retryAfter?: string;
+}
+
+model ServiceUnavailable extends JsonReply<503, Problem<"storage-unavailable">> {
+  @header("Retry-After") retryAfter?: string;
+}
+
 alias RequestError = AuthenticationRequired
+  | RateLimited
   | JsonReply<400, Problem<"bad-request">>
   | JsonReply<413, Problem<"payload-too-large">>
   | JsonReply<415, Problem<"unsupported-media-type">>
-  | JsonReply<503, Problem<"storage-unavailable">>
+  | ServiceUnavailable
   | JsonReply<500, Problem<"internal-error">>;
 
 alias WriteReply = JsonReply<200, WriteResult<"committed">>

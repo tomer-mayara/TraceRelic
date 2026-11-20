@@ -51,7 +51,8 @@ async function untilShutdown(signal: AbortSignal | undefined, run: (signal: Abor
 
 export class CollectorCommand {
   constructor(
-    private readonly storage: CollectorStorage, private readonly onRejected?: (batch: RejectedBatch) => void,
+    private readonly destination: CollectorStorage | (() => Promise<CollectorStorage>),
+    private readonly onRejected?: (batch: RejectedBatch) => void,
     private readonly onMissing?: (source: MissingSource) => void,
   ) {}
 
@@ -85,7 +86,7 @@ export class CollectorCommand {
     if (watch) {
       const intervalMs = watchInterval(values["interval-ms"]);
       return untilShutdown(watch.signal, async signal => {
-        const activity = new ScanActivity(this.storage, watch.clock?.now.bind(watch.clock));
+        const activity = new ScanActivity(await this.storage(), watch.clock?.now.bind(watch.clock));
         const scan = await this.scanHandler(configFile, selection, activity);
         const scheduler = new ScheduledScanner(scan, activity, watch.clock);
         await scheduler.run({ intervalMs, signal, onReport: watch.onReport, onPending: watch.onPending, onFailure: watch.onFailure });
@@ -95,9 +96,13 @@ export class CollectorCommand {
     return scan();
   }
 
+  private storage(): CollectorStorage | Promise<CollectorStorage> {
+    return typeof this.destination === "function" ? this.destination() : this.destination;
+  }
+
   private async scanHandler(configFile: string, selection: ScanSelection, activity?: ScanActivity) {
     const config = await GlobalConfigLoader.load(configFile);
-    const collector = new LocalCollector(config, activity ?? this.storage, this.onRejected, this.onMissing, activity);
+    const collector = new LocalCollector(config, activity ?? await this.storage(), this.onRejected, this.onMissing, activity);
     return () => collector.scanOnce(selection);
   }
 }

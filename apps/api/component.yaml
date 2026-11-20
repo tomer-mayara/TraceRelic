@@ -2,6 +2,7 @@ name: collector-api
 spec: ../../docs/specs/local-collector.md
 behavior:
   - test/acceptance/collector/workspace.feature
+  - test/acceptance/collector/remote-sync.feature
   - ../collector/test/acceptance/storage/storage.feature
 interface:
   - ../../docs/specs/collector-api/main.tsp

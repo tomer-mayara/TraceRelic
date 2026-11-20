@@ -1,7 +1,7 @@
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { StorageUnavailableError, type CollectorStorage, type CommitResult } from "@tracerelic/collector/storage";
 import type { CollectorCredentials, CollectorScope } from "./collector-credentials.ts";
-import { CollectorWireContract } from "./collector-wire-contract.ts";
+import { CollectorWireContract } from "@tracerelic/collector/wire-contract";
 
 const routes = ["session", "checkpoint", "sources", "presence", "batches"] as const;
 type Route = typeof routes[number];

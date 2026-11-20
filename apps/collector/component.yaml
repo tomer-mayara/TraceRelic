@@ -20,14 +20,18 @@ behavior:
   - test/acceptance/scan/codex-token-counts.feature
   - test/acceptance/scan/claude-usage.feature
   - test/acceptance/scan/two-chats.feature
+  - ../api/test/acceptance/collector/remote-sync.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp
   - ../../docs/specs/local-collector/history.tsp
   - ../../docs/specs/local-collector/config.tsp
   - ../../docs/specs/local-collector/scan.tsp
+  - ../../docs/specs/collector-api/main.tsp
 dependencyRules: ../../.dependency-cruiser.collector.json
 storagePort: src/storage/collector-storage.ts
 memoryStorage: src/storage/in-memory-collector-storage.ts
+httpStorage: src/storage/http-collector-storage.ts
+wireContract: src/storage/collector-wire-contract.ts
 storageFixture: test/fixtures/in-memory-collector-storage.ts
 historyReader: src/history/index.ts
 configFile: ../../tracerelic.config.json

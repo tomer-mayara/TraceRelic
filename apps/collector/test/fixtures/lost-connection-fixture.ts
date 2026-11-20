@@ -79,7 +79,7 @@ export class LostConnectionFixture {
     readonly transcript: RewriteScanFixture, readonly storage: CollectorStorage, readonly connection: InterruptibleConnection,
   ) {}
 
-  static async create(adapters?: { storage: CollectorStorage; connection: InterruptibleConnection }) {
+  static async create(adapters?: { storage: CollectorStorage; connection?: InterruptibleConnection }) {
     const transcript = await RewriteScanFixture.create();
     const storage = adapters?.storage ?? transcript.storage;
     return new LostConnectionFixture(transcript, storage, adapters?.connection ?? new DroppedConnection(storage));
@@ -89,10 +89,10 @@ export class LostConnectionFixture {
     return this.transcript.close();
   }
 
-  async prepare(first: number, second: number) {
+  async prepare(first: number, second: number, scan = () => this.transcript.scan(this.connection)) {
     await this.transcript.write([this.transcript.call("first", first)]);
     this.firstEnd = (await stat(this.transcript.file)).size;
-    const initial = await this.transcript.scan(this.connection);
+    const initial = await scan();
     assert.equal(initial.observedTotalTokens, first);
     assert.equal(initial.usage.length, 1);
     this.firstId = initial.usage[0].id;

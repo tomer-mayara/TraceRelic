@@ -4,6 +4,8 @@
   "type": "module",
   "exports": {
     "./storage": { "types": "./src/storage/collector-storage.ts", "import": "./dist/storage/collector-storage.js" },
+    "./wire-contract": { "types": "./src/storage/collector-wire-contract.ts", "import": "./dist/storage/collector-wire-contract.js" },
+    "./http-storage": { "types": "./src/storage/http-collector-storage.ts", "import": "./dist/storage/http-collector-storage.js" },
     "./memory-storage": { "types": "./src/storage/in-memory-collector-storage.ts", "import": "./dist/storage/in-memory-collector-storage.js" },
     "./command": { "types": "./src/commands/collector-command.ts", "import": "./dist/commands/collector-command.js" },
     "./scan": { "types": "./src/scan/local-collector.ts", "import": "./dist/scan/local-collector.js" },
@@ -15,7 +17,8 @@
     "#src/*": { "types": "./src/*.ts", "default": "./dist/*.js" }
   },
   "scripts": {
-    "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc",
+    "contract": "tsp compile ../../docs/specs/collector-api/main.tsp --pretty false --emit @typespec/json-schema --output-dir dist/contracts",
+    "compile": "bun run contract && swc src -d dist --strip-leading-paths --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc",
     "check:storage-scenarios": "cucumber-js test/acceptance/storage/storage.feature --import ./dist/test/acceptance/storage/storage.steps.js --format summary",
     "check:scan-scenarios": "cucumber-js \"test/acceptance/scan/*.feature\" --import ./dist/test/acceptance/scan/scan.steps.js --format summary",
     "check:history-scenarios": "cucumber-js \"test/interface/history/*.feature\" --import ./dist/test/interface/history/history.steps.js --format summary",

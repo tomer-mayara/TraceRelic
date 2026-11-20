@@ -683,6 +683,17 @@ Feature: Resume a remote upload
 1. **Interface.** Exercise the client with a local test transport. Map timeouts and rate limits to delayed retries. Surface invalid credentials to the caller and invalid batches to the affected source.
 2. **Integration.** Run the LC-08 lost-reply case across a real loopback connection. Restart only the scanner. Read the result through the API.
 
+| LC-15 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [remote upload scenarios](../../apps/api/test/acceptance/collector/remote-sync.feature) through the collector command and a loopback API. Drop the request and the reply in separate cases. Restart only the scanner, then read both calls, their 150-token total and the accepted end byte through the authenticated API. Run `bun run check:collector-api` and `bun run test`. |
+| Observability | Use the existing [pending, rejected and scheduled reports](local-collector/scan.tsp). A one-time scan reports an unconfirmed range or inventory selection and exits with status 75. A rate limit sets the earliest automatic retry. A rejected credential stops the command with a diagnostic that excludes the credential and response body. Check these outcomes with the client transport tests and the scanner's test clock. The service objective stays the same. |
+| Architecture | The command selects the HTTP adapter for remote scans. The scanner and scheduler recognize failures through the [storage port](../../apps/collector/src/storage/collector-storage.ts). The adapter uses the version 1 HTTP API and its generated schema. Only the API has access to server storage. Run the [dependency checks](../../.dependency-cruiser.collector.json) with `bun run check:collector-deps`. |
+| Interface | The [collector API contract](collector-api/main.tsp) describes the remote destination, the five operations and the retry header. The client validates responses and returns the [storage outcomes](local-collector/storage.tsp). Test requests, responses, timeouts, rate limits, authentication and per-source rejections with an injected transport. Build the contract and run `bun run check:collector-api`. |
+
+Set `TRACERELIC_COLLECTOR_API_URL` to the API origin and `TRACERELIC_COLLECTOR_TOKEN` to the issued bearer credential to run `scan --once` or `watch` remotely. Use HTTPS for a remote origin. The local API also accepts HTTP on loopback. With both settings absent, the CLI uses its in-memory destination. The history command reads local files independently of these settings.
+
+After a connection drops or times out, the collector reads the accepted checkpoint before it sends more data. If it cannot confirm the write, it reports pending work. For HTTP 429 or a temporary server failure, defer the next attempt by at least one second and honor a longer valid `Retry-After` value. HTTP 401 or 403 stops both one-time and scheduled scans. A typed invalid batch (422) or an upload that exceeds the API's size limit (413) stops its source and the scan continues with the other files.
+
 #### LC-16 · Keep accepted data across API restarts
 
 ```gherkin

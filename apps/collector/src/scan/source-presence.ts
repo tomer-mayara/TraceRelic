@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { TranscriptSource } from "../history/index.ts";
-import { StorageUnavailableError, type AcknowledgedSource, type CommitResult, type MissingSource, type PresenceWrite,
+import { StorageBackoffError, StorageUnavailableError, type AcknowledgedSource, type CommitResult, type MissingSource, type PresenceWrite,
   type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";
 import { readStorage } from "./scan-recovery.ts";
@@ -52,14 +52,9 @@ export class SourcePresenceScan<Entry> {
     return sighting;
   }
 
-  private async inventory(source?: StreamKey): Promise<AcknowledgedSource[]> {
+  private inventory(source?: StreamKey): Promise<AcknowledgedSource[]> {
     const scope = source ? { ...this.scope, sessionIds: [source.sessionId], projectPaths: [] } : this.scope;
-    try {
-      return await this.memory.storage.listSources(scope);
-    } catch (error) {
-      if (StorageUnavailableError.is(error)) throw new ScanPendingError("storage-unavailable", source ?? this.scope);
-      throw error;
-    }
+    return readStorage(source ?? this.scope, () => this.memory.storage.listSources(scope));
   }
 
   async finish(restore?: RestoreCopy<Entry>): Promise<StreamKey[]> {
@@ -161,13 +156,12 @@ export class SourcePresenceScan<Entry> {
       }
       report.observedEnd = Math.max(row.observedEnd, end);
       const result = await this.write({ source: row.source, expectedOffset: row.acceptedOffset, expectedVersion: row.version,
-        presence: "missing", location: row.location, observedEnd: report.observedEnd });
+        presence: "missing", location: row.location, observedEnd: report.observedEnd }, row.presence === "missing" ? undefined : report);
       if (result === "committed") {
         this.memory.discardReply(row.source);
         if (row.presence !== "missing") this.memory.onMissing?.(report);
         return true;
       }
-      if (result === "storage-unavailable" && row.presence !== "missing") this.memory.rememberReply(report);
       const current = await this.reload(row.source);
       if (!current) throw new ScanPendingError(result, row.source);
       if (current.presence === "missing" && current.observedEnd >= report.observedEnd) {
@@ -186,13 +180,15 @@ export class SourcePresenceScan<Entry> {
     return (await this.inventory(source)).find(row => sourceId(row.source) === id);
   }
 
-  private async write(update: PresenceWrite): Promise<"committed" | "version-conflict" | "storage-unavailable"> {
+  private async write(update: PresenceWrite, missing?: MissingSource): Promise<"committed" | "version-conflict" | "storage-unavailable"> {
     let result: CommitResult;
     try {
       result = await this.memory.storage.recordPresence(update);
     } catch (error) {
-      if (StorageUnavailableError.is(error)) return "storage-unavailable";
-      throw error;
+      if (!StorageUnavailableError.is(error)) throw error;
+      if (missing) this.memory.rememberReply(missing);
+      if (error instanceof StorageBackoffError) throw new ScanPendingError("storage-unavailable", update.source, undefined, error.retryAfterMs);
+      return "storage-unavailable";
     }
     if (result === "invalid") throw new Error(`Storage rejected source presence for ${update.source.streamId}`);
     return result === "conflict" ? "version-conflict" : result;

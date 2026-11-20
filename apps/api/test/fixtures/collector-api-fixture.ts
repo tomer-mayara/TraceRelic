@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
+import { HttpCollectorStorage } from "@tracerelic/collector/http-storage";
 import { InMemoryCollectorStorage } from "@tracerelic/collector/memory-storage";
 import type {
   AcknowledgedSource, Batch, CheckpointSnapshot, CollectorStorage, CommitResult, PresenceWrite, SessionKey, SessionView, SourceScope, StreamKey,
@@ -99,6 +100,7 @@ export class CollectorApiFixture {
   get b(): LoopbackStorage { return new LoopbackStorage(this.address, this.tokens.b); }
   get laptop(): LoopbackStorage { return new LoopbackStorage(this.address, this.tokens.laptop); }
   get expiring(): LoopbackStorage { return new LoopbackStorage(this.address, this.tokens.expiring); }
+  get client(): HttpCollectorStorage { return new HttpCollectorStorage(this.address, this.tokens.a); }
 
   expireCredential(): void { this.now += 1000; }
   close(): Promise<void> { return this.server.close(); }

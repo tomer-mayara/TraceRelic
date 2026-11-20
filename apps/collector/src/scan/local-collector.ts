@@ -87,9 +87,9 @@ export class LocalCollector {
         const codexPending = await codexPresence.reportWhileOffline();
         const claudePending = claudePresence ? await claudePresence.reportWhileOffline() : undefined;
         const pending = codexPending ?? claudePending;
-        if (error.pending.scope && pending) failure = new ScanPendingError("storage-unavailable", pending);
+        if (error.pending.scope && pending) failure = new ScanPendingError("storage-unavailable", pending, undefined, error.retryAfterMs);
       }
-      if (this.progress) failure.pending.retryAt = ScanPendingError.retryAt(this.progress.now());
+      if (this.progress) failure.pending.retryAt = ScanPendingError.retryAt(this.progress.now(), failure.retryAfterMs);
       throw failure;
     }
     if (rejections.length) throw new ScanRejectedError(sessions, rejections);

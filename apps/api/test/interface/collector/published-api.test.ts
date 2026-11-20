@@ -54,3 +54,14 @@ test("the published status codes select the exact write outcome or error", () =>
     }
   }
 });
+
+test("clients can read a Retry-After header on rate limits and service outages", () => {
+  for (const route of Object.keys(operations)) {
+    const responses = section(published, "paths", `/v1/collector/${route}`, "post", "responses");
+    for (const status of ["429", "503"]) {
+      const header = section(responses, status, "headers", "Retry-After");
+      assert.equal(section(header, "schema").type, "string");
+      assert.notEqual(header.required, true);
+    }
+  }
+});

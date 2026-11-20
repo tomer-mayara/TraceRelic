@@ -24,13 +24,15 @@ function target(reason: PendingScan["reason"], key: StreamKey | SourceScope, byt
 export class ScanPendingError extends Error {
   readonly pending: PendingScan;
 
-  static retryAt(now: number): string {
-    return new Date(now + 1000).toISOString();
+  static retryAt(now: number, retryAfterMs = 1000): string {
+    // Pending reports use RFC 3339 timestamps with a four-digit year.
+    const lastDeadline = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+    return new Date(Math.min(now + retryAfterMs, lastDeadline)).toISOString();
   }
 
-  constructor(reason: "storage-unavailable", key: StreamKey | SourceScope);
-  constructor(reason: PendingScan["reason"], key: StreamKey, byteRange?: ByteRange);
-  constructor(reason: PendingScan["reason"], key: StreamKey | SourceScope, byteRange?: ByteRange) {
+  constructor(reason: "storage-unavailable", key: StreamKey | SourceScope, byteRange?: ByteRange, retryAfterMs?: number);
+  constructor(reason: PendingScan["reason"], key: StreamKey, byteRange?: ByteRange, retryAfterMs?: number);
+  constructor(reason: PendingScan["reason"], key: StreamKey | SourceScope, byteRange?: ByteRange, readonly retryAfterMs = 1000) {
     const problem = reason === "version-conflict" ? "Storage returned conflict" : "Storage connection unavailable";
     const bytes = byteRange ? `, bytes ${byteRange.startOffset}..${byteRange.endOffset}` : "";
     super(`${problem} for ${"root" in key ? key.root : key.streamId}${bytes}`);
@@ -38,7 +40,7 @@ export class ScanPendingError extends Error {
     this.pending = {
       status: "pending",
       ...target(reason, key, byteRange),
-      retryAt: ScanPendingError.retryAt(Date.now()),
+      retryAt: ScanPendingError.retryAt(Date.now(), retryAfterMs),
     };
   }
 }

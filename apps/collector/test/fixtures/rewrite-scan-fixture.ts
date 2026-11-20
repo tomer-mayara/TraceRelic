@@ -12,7 +12,7 @@ export class RewriteScanFixture {
   readonly header = Rollout.header("s");
   file: string;
 
-  private constructor(readonly root: Rollout, file: string, private readonly config: string) {
+  private constructor(readonly root: Rollout, file: string, readonly config: string) {
     this.file = file;
     this.source = { harness: "codex", sessionId: "s", streamId: basename(file), installationId: "desktop" } as const;
   }

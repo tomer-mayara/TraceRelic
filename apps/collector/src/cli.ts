@@ -6,10 +6,20 @@ import { InMemoryCollectorStorage } from "./storage/in-memory-collector-storage.
 
 type CollectorCliOptions = Partial<Pick<WatchRuntime, "signal" | "clock" | "onReport">>;
 
-export async function runCollectorCli(args: string[], storage: CollectorStorage, options: CollectorCliOptions = {}): Promise<number> {
+async function configuredStorage(): Promise<CollectorStorage> {
+  const { TRACERELIC_COLLECTOR_API_URL: apiUrl, TRACERELIC_COLLECTOR_TOKEN: token } = process.env;
+  if (apiUrl === undefined && token === undefined) return new InMemoryCollectorStorage();
+  if (apiUrl === undefined || token === undefined) {
+    throw new Error("Set both TRACERELIC_COLLECTOR_API_URL and TRACERELIC_COLLECTOR_TOKEN for remote scans");
+  }
+  const { HttpCollectorStorage } = await import("./storage/http-collector-storage.ts");
+  return new HttpCollectorStorage(apiUrl, token);
+}
+
+export async function runCollectorCli(args: string[], storage?: CollectorStorage, options: CollectorCliOptions = {}): Promise<number> {
   try {
     const report = (event: RejectedBatch | MissingSource | PendingScan) => console.error(JSON.stringify(event));
-    const command = new CollectorCommand(storage, report, report);
+    const command = new CollectorCommand(storage ?? configuredStorage, report, report);
     const result = await command.run(args, {
       ...options, onReport: options.onReport ?? (pass => console.log(JSON.stringify(pass))),
       onPending: report, onFailure: () => console.error(JSON.stringify({ status: "failed", reason: "scan-failed" })),
@@ -30,4 +40,4 @@ export async function runCollectorCli(args: string[], storage: CollectorStorage,
   }
 }
 
-if (import.meta.main) process.exitCode = await runCollectorCli(process.argv.slice(2), new InMemoryCollectorStorage());
+if (import.meta.main) process.exitCode = await runCollectorCli(process.argv.slice(2));
