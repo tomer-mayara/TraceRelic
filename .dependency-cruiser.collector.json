@@ -1,6 +1,12 @@
 {
   "forbidden": [
     {
+      "name": "schedule-runs-the-scan-through-its-handler",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/scan/scheduled-scanner\\.ts$" },
+      "to": { "path": "^apps/collector/src/(history/|storage/|scan/local-collector\\.ts$)" }
+    },
+    {
       "name": "scanner-reads-files-through-history",
       "severity": "error",
       "from": { "path": "^apps/collector/src/scan/" },

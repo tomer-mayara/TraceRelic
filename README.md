@@ -43,7 +43,15 @@ bun run collector scan --once --config ./tracerelic.config.json --project .
 
 Use `--project <directory>` to select sessions whose recorded working directory is that directory or a descendant. For Claude Code, you can also select the exact transcript directory under `projects/`. Repeat either option to include more sessions. Omit both options to scan all configured roots.
 
-The standalone command uses memory for one invocation. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state, next byte and prefix digest together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
+Run `watch` to pick up new chats while the collector is running. It scans immediately and then every 60 seconds. Use the same session and project selectors, or choose a different interval in milliseconds.
+
+```sh
+bun run collector watch --config ./tracerelic.config.json --interval-ms 5000
+```
+
+Each pass writes one JSON line to standard output. For example, `{"status":"complete","newSessions":1,"oldestPendingAgeMs":null}` means storage accepted one new session and no source is waiting. When storage is unavailable, the report includes `retryAt` and the collector waits until then to retry. A slow scan skips any ticks it spans. Press Ctrl-C to finish the active pass and exit.
+
+The standalone CLI keeps its workspace in memory for the life of the process. Each `watch` pass uses that same workspace. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state, next byte and prefix digest together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
 
 If a write loses its connection, the scanner checks which bytes storage accepted. When the outcome is still unknown, `scan --once` prints a JSON report to standard error and exits with status 75. The report gives the source, the attempted byte range when available, and a suggested retry time. If storage cannot list the acknowledged sources, the report identifies the affected selection in `scope`. Run the scan again after reconnecting to resume from storage’s checkpoint.
 

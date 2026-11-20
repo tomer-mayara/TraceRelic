@@ -7,6 +7,7 @@ import { ClaudeSourceCopy } from "./claude-source-copy.ts";
 import { ClaudeSessionParser } from "./claude-session-parser.ts";
 import { CodexForkSources } from "./codex-fork-sources.ts";
 import type { DecodedChat } from "./decoded-chat.ts";
+import type { ScanProgress } from "./scan-activity.ts";
 import { ScanRecovery, checkpointPrefixes, readStorage, verifiedCheckpoint, type ScanRestart } from "./scan-recovery.ts";
 import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 import { ScanPendingError } from "./scan-pending.ts";
@@ -60,6 +61,7 @@ export class LocalCollector {
     private readonly config: GlobalConfig, private readonly storage: CollectorStorage,
     private readonly onRejection?: (report: RejectedBatch) => void,
     onMissing?: (report: MissingSource) => void,
+    private readonly progress?: ScanProgress,
   ) { this.sightings = new SourceSightings(storage, onMissing); }
 
   async scanOnce(selection: ScanSelection = {}): Promise<SessionView[]> {
@@ -79,13 +81,16 @@ export class LocalCollector {
       if (claudePresence && selectedClaude) sessions.push(...await this.views(claudePresence, selectedClaude,
         (known, copy) => this.importClaudeCopy(known, copy, rejections)));
     } catch (error) {
-      if (error instanceof ScanPendingError && error.pending.reason === "storage-unavailable") {
+      if (!(error instanceof ScanPendingError)) throw error;
+      let failure = error;
+      if (error.pending.reason === "storage-unavailable") {
         const codexPending = await codexPresence.reportWhileOffline();
         const claudePending = claudePresence ? await claudePresence.reportWhileOffline() : undefined;
         const pending = codexPending ?? claudePending;
-        if (error.pending.scope && pending) throw new ScanPendingError("storage-unavailable", pending);
+        if (error.pending.scope && pending) failure = new ScanPendingError("storage-unavailable", pending);
       }
-      throw error;
+      if (this.progress) failure.pending.retryAt = ScanPendingError.retryAt(this.progress.now());
+      throw failure;
     }
     if (rejections.length) throw new ScanRejectedError(sessions, rejections);
     return sessions;
@@ -171,6 +176,7 @@ export class LocalCollector {
     if (!position.reset && start.checkpoint) sighting.verifiedVersion = start.version;
     for (;;) {
       const accepted = position.reset ? null : position.checkpoint;
+      if (accepted && this.progress) await this.progress.verified(source, position, transcript);
       const format = await selectParser(transcript, accepted);
       const corrected = accepted && await TranscriptCursor.reconcileUsage(transcript, accepted, format);
       if (corrected && accepted) {
@@ -181,7 +187,10 @@ export class LocalCollector {
         continue;
       }
       const result = await this.importFrom(source, transcript, format, position, recovery);
-      if ("hasStoredSession" in result) return result;
+      if ("hasStoredSession" in result) {
+        if (!result.rejection) this.progress?.finishedSource(source);
+        return result;
+      }
       position = result;
     }
   }

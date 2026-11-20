@@ -172,6 +172,34 @@ model RejectedScan {
   rejections: RejectedBatch[];
 }
 
+/** Milliseconds between scheduled scans. The default is one minute. */
+@minValue(1)
+@maxValue(2147483647)
+scalar ScanIntervalMs extends int32;
+
+model ScheduledScanOptions extends ScanSelection {
+  intervalMs?: ScanIntervalMs;
+}
+
+/** Emit one JSON object per pass, including startup and retries. */
+@TypeSpec.JsonSchema.extension("if", #{ properties: #{ status: #{ `const`: "pending" } } })
+@TypeSpec.JsonSchema.extension("then", #{ required: #["retryAt"] })
+@TypeSpec.JsonSchema.extension("else", #{ `not`: #{ required: #["retryAt"] } })
+model ScheduledScanReport {
+  status: "complete" | "pending" | "rejected" | "failed";
+  /** Sessions whose creation storage confirms during this pass, including recovery of a lost reply. */
+  newSessions: Count;
+  /** Age of the oldest outstanding source or inventory request, or null when none is pending. */
+  oldestPendingAgeMs: Count | null;
+  retryAt?: utcDateTime;
+}
+
+/** Standard error diagnostic for an unexpected failure during a scheduled pass. */
+model FailedScan {
+  status: "failed";
+  reason: "scan-failed";
+}
+
 interface LocalCollector {
   /** Import complete records into the destination workspace. Return its selected sessions.
    * An unconfirmed write or unresolved version conflict raises a scan error carrying PendingScan.

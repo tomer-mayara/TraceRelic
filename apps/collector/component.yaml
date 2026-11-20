@@ -16,6 +16,7 @@ behavior:
   - test/acceptance/scan/codex-fork.feature
   - test/acceptance/scan/claude-fork.feature
   - test/acceptance/scan/missing-source.feature
+  - test/acceptance/scan/scheduled-scan.feature
   - test/acceptance/scan/codex-token-counts.feature
   - test/acceptance/scan/claude-usage.feature
   - test/acceptance/scan/two-chats.feature
@@ -34,3 +35,4 @@ configSchema: src/config/global-config-schema.ts
 configLoader: src/config/global-config-loader.ts
 cli: src/cli.ts
 scanner: src/scan/local-collector.ts
+scheduler: src/scan/scheduled-scanner.ts

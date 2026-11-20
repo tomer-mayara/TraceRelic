@@ -15,6 +15,7 @@ import "./missing-source.steps.ts";
 import "./recover-changed-transcript.steps.ts";
 import "./preserve-known-usage.steps.ts";
 import "./retry-lost-connection.steps.ts";
+import "./scheduled-scan.steps.ts";
 
 class ScanScenario {
   fixture!: ScanCommandFixture;

@@ -24,6 +24,10 @@ function target(reason: PendingScan["reason"], key: StreamKey | SourceScope, byt
 export class ScanPendingError extends Error {
   readonly pending: PendingScan;
 
+  static retryAt(now: number): string {
+    return new Date(now + 1000).toISOString();
+  }
+
   constructor(reason: "storage-unavailable", key: StreamKey | SourceScope);
   constructor(reason: PendingScan["reason"], key: StreamKey, byteRange?: ByteRange);
   constructor(reason: PendingScan["reason"], key: StreamKey | SourceScope, byteRange?: ByteRange) {
@@ -34,7 +38,7 @@ export class ScanPendingError extends Error {
     this.pending = {
       status: "pending",
       ...target(reason, key, byteRange),
-      retryAt: new Date(Date.now() + 1000).toISOString(),
+      retryAt: ScanPendingError.retryAt(Date.now()),
     };
   }
 }

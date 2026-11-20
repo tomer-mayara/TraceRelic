@@ -622,6 +622,17 @@ Feature: Pick up a chat created after startup
 1. **Unit.** Use a test clock for startup, a slow scan and shutdown. Allow one active scan per collector. Track pending age until storage accepts the work.
 2. **Integration.** Use the regular scan handler for both commands. At this milestone run LC-01 through LC-13 and `@two_chats` against temporary files and the fixture.
 
+| LC-13 constraint | Decision and check |
+| --- | --- |
+| Behavior | Run the [scheduled scan scenario](../../apps/collector/test/acceptance/scan/scheduled-scan.feature) through `watch`. Scan on startup. On the next interval, read a newly created planning chat and report one new session. Exercise slow scans, retries and shutdown with a test clock. Run `bun run test` and `bun run check:collector-scan`. |
+| Observability | Write one [scheduled scan report](local-collector/scan.tsp) to standard output per pass. Count sessions first accepted by storage, including work accepted before a later failure. Keep the age of outstanding work across passes until storage confirms it. Keep source and byte-range diagnostics on standard error. Check the reports against the schema. The production service objective awaits measurements. |
+| Architecture | The command loads the configuration once and gives the scheduler the same scan handler as `scan --once`. The scheduler controls timing and shutdown. Scan reports use storage acknowledgments and the scanner's verified checkpoints to account for a lost reply. Check the [dependency rules](../../.dependency-cruiser.collector.json) with `bun run check:collector-deps`. |
+| Interface | `watch --config <file>` accepts the existing session and project selectors and an optional `--interval-ms`. The [scan contract](local-collector/scan.tsp) defines the interval and report. Check valid and invalid CLI arguments, both termination signals, generated schemas, and the LC-01 through LC-13 and `@two_chats` scenarios with `bun run test` and the collector contract checks. |
+
+The default interval is 60,000 ms. Accept whole milliseconds from 1 through 2,147,483,647. Measure intervals from startup and skip ticks that fall during a scan. An automatic retry waits until the pending report's `retryAt`. After a rejection or a failed pass, use the next regular interval. On SIGINT or SIGTERM, finish the active pass and cancel the next scan.
+
+Each report gives the pass status, the number of newly accepted sessions and the age in milliseconds of the oldest pending source or inventory request. When a reply is lost, count the new session in the pass that confirms its creation. An empty queue has age `null`. A retry that encounters the same work keeps its original age. A rejected range stays outstanding until storage accepts it. Keep chat text in the stored session.
+
 ### Remote service and durable storage
 
 #### LC-14 · Bind the API to a workspace

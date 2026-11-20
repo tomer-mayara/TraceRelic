@@ -1,6 +1,8 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { CodexRolloutFixture } from "./codex-rollout-fixture.ts";
@@ -42,6 +44,21 @@ export class LocalCollectorCliFixture {
     });
     if (result.error) throw result.error;
     return result;
+  }
+
+  async watchThroughSignal(config: string, signal: "SIGINT" | "SIGTERM") {
+    const child = spawn("bun", ["--silent", "run", "collector", "--config", config, "watch"], {
+      cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], timeout: 10_000, killSignal: "SIGKILL",
+    });
+    const stdout: string[] = [];
+    let stderr = "";
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk; });
+    createInterface({ input: child.stdout }).on("line", (line: string) => {
+      stdout.push(line);
+      if (stdout.length === 1) child.kill(signal);
+    });
+    const [code, exitSignal] = await once(child, "close");
+    return { code, exitSignal, stdout, stderr };
   }
 
   history(configPath: string) {

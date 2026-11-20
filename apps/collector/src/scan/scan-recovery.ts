@@ -29,7 +29,7 @@ export function verifiedCheckpoint(checkpoint: Checkpoint, digests: ReadonlyMap<
   return !!checkpoint.prefixDigest && checkpointPrefixes(checkpoint).every(prefix => digests.get(prefix.offset) === prefix.prefixDigest);
 }
 
-function sameCheckpoint(left: Checkpoint | null, right: Checkpoint | null): boolean {
+export function sameCheckpoint(left: Checkpoint | null, right: Checkpoint | null): boolean {
   return left?.offset === right?.offset && left?.prefixDigest === right?.prefixDigest && left?.parserState === right?.parserState
     && left?.replayThrough?.offset === right?.replayThrough?.offset && left?.replayThrough?.prefixDigest === right?.replayThrough?.prefixDigest
     && left?.claudeCallOrigins === right?.claudeCallOrigins && isDeepStrictEqual(left?.codexFork, right?.codexFork);

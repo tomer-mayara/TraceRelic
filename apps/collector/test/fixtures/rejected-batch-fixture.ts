@@ -61,9 +61,9 @@ export class RejectedBatchFixture {
     return { original, checkpoint, byteRange: { startOffset, endOffset } };
   }
 
-  async repair(startOffset: number) {
+  async repair(startOffset: number, messageId = "second-item") {
     await truncate(this.file, startOffset);
-    await this.append(this.changedText, "second-item", "later", 7);
+    await this.append(this.changedText, messageId, "later", 7);
     return (await stat(this.file)).size;
   }
 }
