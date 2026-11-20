@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
-import type { SessionView } from "../../src/storage/collector-storage.ts";
+import type { CollectorStorage, SessionView } from "../../src/storage/collector-storage.ts";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 
@@ -13,6 +13,7 @@ interface NativeUsage {
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
   output_tokens: number;
+  iterations?: readonly object[];
 }
 
 export class ClaudeUsageScanFixture {
@@ -56,9 +57,9 @@ export class ClaudeUsageScanFixture {
     return appendFile(this.files[id], rows.map(row => JSON.stringify(row) + "\n").join(""));
   }
 
-  async scan(id: Installation): Promise<SessionView> {
+  async scan(id: Installation, storage: CollectorStorage = this.storage): Promise<SessionView> {
     const config = join(this.roots[id].home, "collector.json");
-    const views = await new CollectorCommand(this.storage).run(["scan", "--once", "--config", config, "--session", this.key.sessionId]);
+    const views = await new CollectorCommand(storage).run(["scan", "--once", "--config", config, "--session", this.key.sessionId]);
     assert.equal(views.length, 1);
     const [view] = views;
     assert("usage" in view);

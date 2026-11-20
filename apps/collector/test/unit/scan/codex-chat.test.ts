@@ -3,6 +3,41 @@ import { test } from "node:test";
 import { CodexChat } from "#src/scan/codex-chat";
 import { CodexChatFixture as F } from "../../fixtures/codex-chat-fixture.ts";
 
+test("paginated completed items honor the provider's recorded display decision", () => {
+  const completed = (id: string, moderation: object) => F.record("event_msg", { type: "item_completed",
+    item: { type: "AgentMessage", id, moderation, content: [{ type: "Text", text: id }] } });
+  const rows = F.entries(F.record("session_meta", { id: "planning", history_mode: "paginated" }),
+    F.response("assistant", [F.output("Hidden body")]), completed("Hidden body", { moderated: true,
+      display: { version: 1, mode: "hide", replacement: { kind: "wellbeingPromptHelpline" } } }),
+    completed("Blocked", { moderated: true, display: { version: 1, mode: "block", reason: { kind: "protection", protectionType: "fixture" } } }),
+    completed("Restricted", { moderated: true }), completed("Unsupported display", { moderated: false, display: { version: 2, mode: "show" } }),
+    completed("Shown", { moderated: true, display: { version: 1, mode: "show", trustedContacts: "skip" } }));
+  assert.deepEqual(CodexChat.decode(rows).messages.map(row => row.text), ["Shown"]);
+});
+
+test("the joined legacy assistant mirror identifies every original block once in either order", () => {
+  const typed = F.response("assistant", [F.output("First "), F.output("second")], { id: "answer" });
+  const joined = F.event("agent_message", "First second", { moderation: { item_id: "answer", moderated: false } });
+  for (const rows of [[typed, joined], [joined, typed]]) {
+    assert.deepEqual(CodexChat.decode(F.entries(...rows)).messages.map(row => [row.id, row.text]), [
+      ["native:answer:0", "First "], ["native:answer:1", "second"],
+    ]);
+  }
+});
+
+test("damage clears unverified turn attribution and prevents lookahead pairing across the gap", async () => {
+  const rows = F.entries(F.record("turn_context", { turn_id: "old", request_id: "request" }),
+    F.event("user_message", "Same"), F.record("other", {}), F.response("user", [F.input("Same")], { id: "new" }));
+  const gap = [{ lineNumber: 3, startOffset: 100, endOffset: 110 }];
+  const parser = CodexChat.resume();
+  await parser.prepareLookahead(rows.slice(0, 2), (async function*() { yield { entries: rows.slice(3), damagedLines: gap }; })(), 0);
+  const first = parser.decodeBatch(rows.slice(0, 2)).messages;
+  const last = parser.decodeBatch(rows.slice(3), gap).messages;
+  assert.equal(first[0].turnId, "old");
+  assert.equal(first[0].id.startsWith("text:"), true);
+  assert.deepEqual(last.map(row => [row.id, row.turnId, row.requestId]), [["native:new:0", undefined, undefined]]);
+});
+
 test("keeps source and block order, recorded time, and one copy of mirrored text", () => {
   const entries = F.entries(
     F.response("user", [F.input("Plan search")]),

@@ -1,8 +1,9 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { recordedPathDialect } from "@tracerelic/shared";
 import { GlobalConfigLoader } from "../config/global-config-loader.ts";
 import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type LocalHistoryEntry, type ScanSelection } from "../history/index.ts";
-import { isRecordedTimestamp } from "../recorded-timestamp.ts";
+import { isHistoryTimestamp } from "../recorded-timestamp.ts";
 import { LocalCollector, type RejectedBatch } from "../scan/local-collector.ts";
 import { ScanActivity, type ScheduledScanReport } from "../scan/scan-activity.ts";
 import type { PendingScan } from "../scan/scan-pending.ts";
@@ -23,11 +24,17 @@ export interface WatchRuntime {
   onFailure?: (error: unknown) => void;
 }
 
-function instant(option: "--from" | "--to", value: string | undefined): Date {
-  if (!value || !isRecordedTimestamp(value) || !Number.isFinite(Date.parse(value))) {
+function instant(option: "--from" | "--to", value: string | undefined): string {
+  if (!isHistoryTimestamp(value)) {
     throw new Error(`Expected an ISO date and time with a timezone for ${option}`);
   }
-  return new Date(value);
+  return value;
+}
+
+function projectPath(path: string): string {
+  if (recordedPathDialect(path)) return path;
+  if (/^(?:[a-z]:|\\)/i.test(path)) throw new Error("Expected an absolute Windows project directory");
+  return resolve(path);
 }
 
 function watchInterval(value: string | undefined): number {
@@ -72,7 +79,7 @@ export class CollectorCommand {
       const to = instant("--to", values.to);
       const config = await GlobalConfigLoader.load(values.config);
       const readers = [new LocalLLMHistoryCodex(config), new LocalLLMHistoryClaude(config)];
-      const entries = await Promise.all(readers.map(reader => reader.readLocalHistory(from, to)));
+      const entries = await Promise.all(readers.map(reader => reader.readLocalHistoryInstants(from, to)));
       return entries.flat();
     }
     const once = positionals[0] === "scan" && values.once && values["interval-ms"] === undefined;
@@ -81,7 +88,7 @@ export class CollectorCommand {
     if ([...(values.session ?? []), ...(values.project ?? [])].some(value => !value.trim() || value.includes("\0"))) {
       throw new Error("Expected a nonblank session ID or project directory");
     }
-    const selection = { sessionIds: values.session, projectPaths: values.project?.map(path => resolve(path)) };
+    const selection = { sessionIds: values.session, projectPaths: values.project?.map(projectPath) };
     const configFile = values.config;
     if (watch) {
       const intervalMs = watchInterval(values["interval-ms"]);
@@ -103,6 +110,6 @@ export class CollectorCommand {
   private async scanHandler(configFile: string, selection: ScanSelection, activity?: ScanActivity) {
     const config = await GlobalConfigLoader.load(configFile);
     const collector = new LocalCollector(config, activity ?? await this.storage(), this.onRejected, this.onMissing, activity);
-    return () => collector.scanOnce(selection);
+    return activity ? () => collector.scanForChanges(selection) : () => collector.scanOnce(selection);
   }
 }

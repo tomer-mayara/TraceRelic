@@ -14,3 +14,8 @@ Feature: Choose the local collector configuration at startup
     Given a configuration with an empty Codex path
     When I read February 1 history with that configuration
     Then the collector reports a configuration error for "codexPath"
+
+  Scenario: Both providers keep the recorded precision of a CLI history window
+    Given both configured providers recorded a chat at "2026-02-01T12:00:00.0003Z"
+    When I read the configured history from "2026-02-01T12:00:00.0002Z" to "2026-02-01T12:00:00.0007Z"
+    Then the collector returns the chats "codex/c1" and "claude/h1"

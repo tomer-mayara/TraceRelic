@@ -250,6 +250,12 @@ async function recordFirstUsage(this: StorageScenario, input: number, output: nu
 Given("a batch with {int} input tokens and {int} output tokens was stored", recordFirstUsage);
 Given("a Claude request reported {int} input tokens and {int} output tokens", recordFirstUsage);
 
+When("a collector appends usage and marks the whole history verified", async function (this: StorageScenario) {
+  await this.commit({ ...this.batch, expectedVersion: 1, expectedOffset: this.batch.checkpoint.offset,
+    checkpoint: { offset: 200, parserState: "{}", prefixDigest: "b".repeat(64), evidenceVersion: 1 },
+    usage: [observation(4, 5, 2)] });
+});
+
 When("a collector retries that batch from its original position", async function (this: StorageScenario) {
   await this.commit();
 });
@@ -349,9 +355,9 @@ When("the collector reports that source missing", async function (this: StorageS
 Then("the source list and the session report it missing at byte {int}", async function (this: StorageScenario, offset: number) {
   const sources = await this.store.listSources(inventoryScope);
   assert.deepEqual(sources, [{ source: inventorySource, location: inventoryLocation, version: 2,
-    acceptedOffset: offset, observedEnd: 500, presence: "missing" }]);
+    acceptedOffset: offset, observedEnd: 500, presence: "missing", unrecovered: { offset: 500 } }]);
   checkWireValue("AcknowledgedSource", sources[0]);
-  assert.deepEqual(await this.readCheckpoint(), { version: 2, checkpoint: this.batch.checkpoint });
+  assert.deepEqual(await this.readCheckpoint(), { version: 2, checkpoint: this.batch.checkpoint, observedThrough: { offset: 500 } });
   const view = await this.view();
   assert.deepEqual(view.missingSources, [{ source: inventorySource, acceptedOffset: offset, observedEnd: 500, status: "missing" }]);
   checkWireValue("MissingSource", view.missingSources[0]);

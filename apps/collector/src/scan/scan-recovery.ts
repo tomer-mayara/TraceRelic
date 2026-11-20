@@ -30,10 +30,20 @@ export function verifiedCheckpoint(checkpoint: Checkpoint, digests: ReadonlyMap<
   return !!checkpoint.prefixDigest && checkpointPrefixes(checkpoint).every(prefix => digests.get(prefix.offset) === prefix.prefixDigest);
 }
 
+export async function captureProof(source: Pick<TranscriptSource<unknown>, "fileSize" | "prefixDigests">, checkpoint: Checkpoint | null) {
+  if (!checkpoint?.prefixDigest) return;
+  const offsets = checkpointPrefixes(checkpoint).map(p => p.offset);
+  if (offsets.some(end => end > source.fileSize)) return;
+  const prefixes = await source.prefixDigests(offsets);
+  const digests = new Map(prefixes.map(p => [p.offset, p.prefixDigest]));
+  if (verifiedCheckpoint(checkpoint, digests)) return digests;
+}
+
 export function sameCheckpoint(left: Checkpoint | null, right: Checkpoint | null): boolean {
-  return left?.offset === right?.offset && left?.prefixDigest === right?.prefixDigest && left?.parserState === right?.parserState
-    && left?.replayThrough?.offset === right?.replayThrough?.offset && left?.replayThrough?.prefixDigest === right?.replayThrough?.prefixDigest
-    && left?.claudeCallOrigins === right?.claudeCallOrigins && isDeepStrictEqual(left?.codexFork, right?.codexFork);
+  if (!left || !right) return left === right;
+  return left.offset === right.offset && left.prefixDigest === right.prefixDigest && left.parserState === right.parserState
+    && left.evidenceVersion === right.evidenceVersion && left.claudeCallOrigins === right.claudeCallOrigins
+    && isDeepStrictEqual(left.replayThrough, right.replayThrough) && isDeepStrictEqual(left.codexFork, right.codexFork);
 }
 
 export interface ScanRestart extends CheckpointSnapshot {
@@ -85,12 +95,8 @@ export class ScanRecovery {
   }
 
   private async matchesCapture(checkpoint: Checkpoint): Promise<boolean> {
-    const offsets = checkpointPrefixes(checkpoint).map(prefix => prefix.offset);
-    if (!offsets.length || offsets.some(end => end > this.transcript.fileSize)) return false;
     try {
-      const verified = await this.transcript.prefixDigests(offsets);
-      const digests = new Map(verified.map(({ offset, prefixDigest }) => [offset, prefixDigest]));
-      return verifiedCheckpoint(checkpoint, digests);
+      return !!await captureProof(this.transcript, checkpoint);
     } catch (error) {
       if (error instanceof TranscriptChangedError) return false;
       throw error;

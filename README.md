@@ -10,7 +10,7 @@ Pass the configuration file to the collector with `--config`. The supplied file 
 { "codexPath": "~/.codex", "claudePath": "~/.claude" }
 ```
 
-From the repository root, run the history command with an inclusive start and exclusive end. It writes matching records as a JSON array.
+From the repository root, run the history command with an inclusive start and exclusive end. It compares all supplied fractional seconds and writes matching records as a JSON array. Codex history and scans read both plain rollouts and Zstandard-compressed `.jsonl.zst` rollouts. Checkpoints count uncompressed bytes.
 
 ```sh
 bun run collector history --config ./tracerelic.config.json --from 2026-02-01T00:00:00Z --to 2026-02-02T00:00:00Z
@@ -71,6 +71,8 @@ A Claude fork or subagent keeps its own chat and links to its parent. If it copi
 
 `observedTotalTokens` sums the accepted input and output. An explicit zero counts as a measurement. A session without accepted measurements has a null total and unknown coverage. A known gap makes measured coverage partial.
 
+An API upgrade preserves the token totals already stored for each chat. Run `scan --once` on an affected installation to correct an earlier chat or token total from the bytes that produced its checkpoint. If those bytes are missing or their owner is uncertain, the session keeps the earlier evidence and reports `unverified-source-history`. Restoring the original file and scanning the affected sessions lets the collector check the evidence again.
+
 The scanner keeps reading after a damaged complete line. For damaged lines and unsupported usage, including a Claude cache breakdown, `usageDiagnostics` gives the source, line number and byte range. The range includes the terminating newline. Codex keeps independently identified calls and resumes counting cumulative changes from the next reliable snapshot. [Local collector engineering spec](docs/specs/local-collector.md)
 
 ## Run the local collector API
@@ -116,7 +118,7 @@ export TRACERELIC_COLLECTOR_API_URL=http://127.0.0.1:3000
 bun run collector scan --once --config ./tracerelic.config.json
 ```
 
-The same settings apply to `bun run collector watch --config ./tracerelic.config.json`. The credential selects the workspace and installation. If the configuration supplies an `installationId`, it must match the credential. A restarted scanner reads the checkpoint from the API. After a lost reply, this lets it confirm the accepted bytes and count each call once.
+The same settings apply to `bun run collector watch --config ./tracerelic.config.json`. The credential selects the workspace and installation. Its matching `installationId` in the configuration is optional. Both forms resume the same verified source. Long histories upload in bounded requests. Only the final commit advances the checkpoint, so a restarted scanner can confirm accepted bytes after a lost reply.
 
 TypeScript callers can pass `new HttpCollectorStorage(apiUrl, token)` from `@tracerelic/collector/http-storage` to the scanner. Each HTTP request has a ten-second timeout, including the response body.
 

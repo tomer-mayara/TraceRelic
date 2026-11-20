@@ -25,16 +25,22 @@ function couldBeSameCall(pending: Call, last: Call): boolean {
 }
 
 function restoreCall(value: unknown): Call {
-  const fields = stateRecord(value, ["id", "kind", "revision", "at", "turnId", "requestId", "model",
+  const fields = stateRecord(value, ["id", "kind", "revision", "at", "turnId", "requestId", "responseId", "model",
     "inputTokens", "outputTokens", ...breakdowns]);
-  const { id, kind, revision, at, turnId, requestId, model, ...amount } = fields;
+  const { id, kind, revision, at, turnId, requestId, responseId, model, ...amount } = fields;
   if (!validCallId(id) || kind !== "call" || revision !== 1 || !recorded(at)) invalidState();
   const call: Call = { id, kind, revision, at, ...restoredCounts(amount) };
-  for (const [key, value] of [["turnId", turnId], ["requestId", requestId], ["model", model]] as const) {
+  for (const [key, value] of [["turnId", turnId], ["requestId", requestId], ["responseId", responseId], ["model", model]] as const) {
     const text = stateString(value);
     if (text) call[key] = text;
   }
   return call;
+}
+
+/** Keep fresh pending calls byte-identical to the same calls restored from the checkpoint. */
+function savedCall({ id, turnId, requestId, responseId, model, ...fields }: Call): Call {
+  return { id, ...fields, ...(turnId && { turnId }), ...(requestId && { requestId }),
+    ...(responseId && { responseId }), ...(model && { model }) };
 }
 
 function diagnose(result: Result, code: UsageDiagnostic["code"], sourceOrder: number): void {
@@ -53,6 +59,8 @@ export class CodexUsage {
   // Keep native IDs after closing their window. A reset can replay the very same provider request.
   private readonly seen = new Map<string, SeenCall>();
   private readonly pending = new Map<string, Call>();
+  private readonly aliases = new Map<string, Set<string>>();
+  private previousChange?: { start: TokenCounts; calls: Call[]; closingId?: string };
 
   private constructor(private readonly fork?: CodexForkUsage) {}
 
@@ -60,7 +68,7 @@ export class CodexUsage {
     const usage = new CodexUsage(fork);
     if (state === undefined) return usage;
     const saved = stateRecord(state, ["historyId", "baseline", "turnId", "model", "requestId", "seen", "pending",
-      "disputed", "observations", "awaitingBaseline", "fork"]);
+      "disputed", "observations", "awaitingBaseline", "fork", "aliases", "previousChange"]);
     if (fork) fork.restore(saved.fork);
     else if (saved.fork !== undefined) invalidState();
     if (saved.awaitingBaseline !== undefined && saved.awaitingBaseline !== true) invalidState();
@@ -83,8 +91,21 @@ export class CodexUsage {
       usage.disputed.add(key);
     }
     usage.restoreCalls(saved.seen, saved.pending);
+    usage.restoreAliases(saved);
     if (usage.needsBaseline && usage.pending.size) invalidState();
     return usage;
+  }
+
+  private restoreAliases(saved: Record<string, unknown>): void {
+    if (saved.aliases !== undefined) for (const [alias, ids] of Object.entries(stateRecord(saved.aliases))) {
+      if (!validCallId(alias) || !Array.isArray(ids) || !ids.length || !ids.every(validCallId)) invalidState();
+      this.aliases.set(alias, new Set(ids));
+    }
+    if (saved.previousChange !== undefined) {
+      const { start, calls, closingId } = stateRecord(saved.previousChange, ["start", "calls", "closingId"]);
+      if (!this.baseline || !Array.isArray(calls) || (closingId !== undefined && !validCallId(closingId))) invalidState();
+      this.previousChange = { start: restoredCounts(start), calls: calls.map(restoreCall), closingId };
+    }
   }
 
   private restoreObservations(value: unknown): void {
@@ -117,7 +138,9 @@ export class CodexUsage {
       ...(this.needsBaseline && { awaitingBaseline: true }),
       disputed: [...this.disputed], observations: [...this.observations],
       seen: Object.fromEntries(Array.from(this.seen, ([id, call]) => [id, { ...call }])),
-      pending: Array.from(this.pending.values(), call => ({ ...call })),
+      pending: Array.from(this.pending.values(), savedCall),
+      ...(this.aliases.size && { aliases: Object.fromEntries([...this.aliases].map(([id, keys]) => [id, [...keys]])) }),
+      ...(this.previousChange && { previousChange: { ...this.previousChange, calls: this.previousChange.calls.map(savedCall) } }),
       ...(this.fork && { fork: this.fork.snapshot() }),
     };
   }
@@ -146,6 +169,7 @@ export class CodexUsage {
 
   private interrupt(): void {
     this.needsBaseline = true;
+    this.previousChange = undefined;
     // These native calls have already been published. They cannot partition a change across the gap.
     this.pending.clear();
   }
@@ -168,28 +192,75 @@ export class CodexUsage {
     const inherited = this.fork?.inherited(entry.lineNumber);
     if (!inherited) this.fork?.turn.observe(entry, payload);
     this.context = reportContext(entry, payload, this.context, Boolean(this.fork));
-    if (entry.record.type !== "event_msg" || payload.type !== "token_count") return;
+    if (entry.record.type !== "token_usage_record" && (entry.record.type !== "event_msg" || payload.type !== "token_count")) return;
     const report = readReport(entry, payload, this.context, this.historyId);
-    if (inherited) {
+    if (report?.ownerThread && report.ownerThread !== entry.sessionId) return;
+    if (inherited && !report?.ownerThread) {
       // Keep native identity if the inherited request is repeated in the child's suffix.
       if (report?.independent && report.last) this.remember(report.last);
       if (entry.lineNumber === this.fork?.plan.inheritedThrough?.lineNumber) this.context = {};
       return;
     }
     if (report === undefined) return;
-    this.acceptReport(entry, report, result);
+    this.measure(entry, report, result);
   }
 
-  private acceptReport(entry: UsageEntry, report: Report | null, result: Result): void {
+  private measure(entry: UsageEntry, report: Report | null, result: Result): void {
+    const first = report?.last && !this.seen.has(report.last.id) ? report.last.id : undefined;
+    const located = !this.fork || this.fork.plan.inheritedThrough || report?.ownerThread === entry.sessionId || this.fork.turn.owns(report?.turnId);
+    if (located && report?.last && report.independent) this.identify(report, entry, result);
+    this.acceptReport(entry, report, result, first);
+  }
+
+  private identify(report: Report, entry: UsageEntry, result: Result): void {
+    const call = report.last;
+    if (!call) return;
+    for (const alias of report.aliases ?? []) {
+      const { startOffset, endOffset } = entry;
+      const { inputTokens, outputTokens, responseId, turnId } = call;
+      (result.codexCallAliases ??= []).push({ callUsageId: call.id, aliasUsageId: alias,
+        ...(!validCallId(alias) && { closing: { inputTokens, outputTokens, ...(responseId && { responseId }), ...(turnId && { turnId }) } }),
+        ...(startOffset !== undefined && endOffset !== undefined && { sourceOrder: entry.lineNumber, byteRange: { startOffset, endOffset } }) });
+      if (!validCallId(alias)) continue;
+      const ids = this.aliases.get(alias) ?? new Set<string>();
+      const enriched = !ids.has(call.id);
+      ids.add(call.id);
+      this.aliases.set(alias, ids);
+      if (ids.size > 1) continue;
+      const earlier = this.seen.get(alias);
+      if (earlier && sameTotals(earlier, call)) {
+        this.seen.set(call.id, earlier);
+        this.seen.delete(alias);
+        const pending = this.pending.get(alias);
+        if (pending) {
+          this.pending.delete(alias);
+          this.pending.set(call.id, { ...pending, id: call.id });
+        }
+      }
+      const known = this.seen.get(call.id);
+      if (enriched && known && sameTotals(known, call)) result.usage.push({ ...call });
+    }
+    const matches = this.aliases.get(call.id);
+    if (matches?.size === 1) call.id = [...matches][0];
+    if (matches && matches.size > 1) {
+      diagnose(result, "ambiguous-codex-call", report.sourceOrder);
+      report.last = undefined;
+      report.independent = false;
+    }
+  }
+
+  private acceptReport(entry: UsageEntry, report: Report | null, result: Result, first?: string): void {
     const id = report?.last?.id;
     const known = id !== undefined && this.seen.has(id);
     if (this.fork && !this.fork.plan.inheritedThrough) {
       if (!report || report.invalidTotal) diagnose(result, "unsupported-codex-usage", entry.lineNumber);
-      if (report?.last && report.independent && this.fork.turn.owns(report.turnId)) this.standalone(report.last, result);
+      if (report?.last && report.independent && (report.ownerThread === entry.sessionId || this.fork.turn.owns(report.turnId))) {
+        this.standalone(report.last, result);
+      }
     } else {
       this.applyReport(entry, report, known, result);
     }
-    if (!known && id && report?.providerId && this.seen.has(id) && (this.fork || this.historyId.startsWith("verified:"))) {
+    if (id && first === id && report?.providerId && this.seen.has(id) && (this.fork || this.historyId.startsWith("verified:"))) {
       (result.codexCallClaims ??= []).push({ providerId: report.providerId, usageId: id, ownerSessionId: entry.sessionId });
     }
   }
@@ -239,11 +310,34 @@ export class CodexUsage {
     if (this.baseline && sameTotals(this.baseline, end)) {
       mergeRepeated(this.baseline, end, this.disputed);
       if (independent && sameTotals(independent, zero)) this.zeroCall(this.baseline, independent, result);
+      else if (independent && !this.seen.has(independent.id) && this.previousChange) {
+        this.refineClosing(end, independent, report, result, this.previousChange);
+      }
       return;
     }
     const window: UsageWindow = { historyId: this.historyId, start: { ...start }, end: { ...end }, parts: [] };
     if (this.lastObservation) window.boundaryObservations = { start: this.lastObservation, end: observation };
     this.closeWindow(window, end, change, report, result);
+  }
+
+  private refineClosing(end: TokenCounts, independent: Call, report: Report, result: Result,
+    previous: { start: TokenCounts; calls: Call[]; closingId?: string }): void {
+    const { start, calls, closingId } = previous;
+    const closing = calls.find(call => call.id === closingId);
+    const mirror = closing && Boolean(closing.responseId) !== Boolean(independent.responseId) && couldBeSameCall(closing, independent);
+    if (!independent.responseId && !mirror) return;
+    const delta = difference(end, start);
+    const parts = [...calls.filter(call => !mirror || call !== closing), independent];
+    const split = delta && partition(delta, parts);
+    if (split) {
+      const window: UsageWindow = { historyId: this.historyId, start, end, parts: [] };
+      window.parts = this.parts(window, parts, split.remaining, report.at);
+      result.usageWindows.push(window);
+      this.remember(independent);
+    } else {
+      diagnose(result, "unsupported-codex-usage", report.sourceOrder);
+      if (independent.responseId) this.standalone(independent, result);
+    }
   }
 
   private closeWindow(window: UsageWindow, end: TokenCounts, change: TokenCounts, report: Report, result: Result): void {
@@ -275,6 +369,8 @@ export class CodexUsage {
     result.usageWindows.push(window);
     if (independent && !seen) this.remember(independent);
     this.advance(end);
+    this.previousChange = { start: window.start, calls: calls.filter(call => validCallId(call.id)),
+      ...(last && validCallId(last.id) && { closingId: last.id }) };
   }
 
   private zeroCall(at: TokenCounts, call: Call, result: Result): void {
@@ -324,6 +420,7 @@ export class CodexUsage {
   }
 
   private advance(end: TokenCounts): void {
+    this.previousChange = undefined;
     this.baseline = end;
     this.needsBaseline = false;
     this.pending.clear();

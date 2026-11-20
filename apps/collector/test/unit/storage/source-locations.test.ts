@@ -5,6 +5,31 @@ import { batch } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { inventoryLocation as location, inventoryScope as scope, inventorySource as source, measuredSource, presence } from "../../fixtures/source-inventory-fixture.ts";
 
+test("Windows drive and UNC inventory is validated and scoped on any API host", async () => {
+  const store = new InMemoryCollectorStorage();
+  const root = String.raw`C:\Users\Desk\.claude`;
+  const path = String.raw`projects\app\s.jsonl`;
+  const projectDir = String.raw`C:\Users\Desk\.claude\projects\app`;
+  const cwd = String.raw`\\files\share\WORK\repo`;
+  const source = { harness: "claude", sessionId: "s", streamId: path, installationId: "desktop" } as const;
+  const commit = (location: { root: string; path: string; projectDir?: string; cwd?: string }) =>
+    store.commit(batch(0, 0, { source, sourceObservation: { location, observedEnd: 10 } }));
+  for (const invalid of [String.raw`projects\..\elsewhere\s.jsonl`, String.raw`D:relative`, String.raw`D:\elsewhere`]) {
+    assert.equal(await commit({ root, path: invalid, projectDir }), "invalid");
+  }
+  assert.equal(await commit({ root, path, projectDir, cwd }), "committed");
+  const scope = { harness: "claude", installationId: "desktop", root } as const;
+  for (const selected of [String.raw`\\FILES\SHARE\work`, "c:/users/desk/.CLAUDE/projects/app"]) {
+    assert.equal((await store.listSources({ ...scope, projectPaths: [selected] })).length, 1);
+  }
+  for (const excluded of [String.raw`\\files\share\workshop`, String.raw`\\files\else\work`, "D:/users/desk", "/users/desk", "repo"]) {
+    assert.deepEqual(await store.listSources({ ...scope, projectPaths: [excluded] }), []);
+  }
+  const older = { harness: "claude", sessionId: "old", streamId: root + "\\" + path } as const;
+  assert.equal(await store.commit(batch(0, 0, { source: older })), "committed");
+  assert.deepEqual((await store.listSources({ harness: "claude", root }))[0]?.location, { root, path, projectDir });
+});
+
 test("older anonymous scanner keys establish a root and older opaque or named keys first need a sighting", async () => {
   const store = new InMemoryCollectorStorage();
   const anonymous = { harness: "codex", sessionId: "old", streamId: JSON.stringify([location.root, location.path]) } as const;
@@ -91,4 +116,16 @@ test("inventory and missing reports expose only stream identity and location fie
   assert.deepEqual(first?.missingSources?.[0].source, source);
   first.missingSources[0].source.streamId = "edited";
   assert.deepEqual((await store.readSession(source))?.missingSources?.[0].source, source);
+});
+
+test("legacy source aliases require the two generations to use compatible ownership rules", async () => {
+  for (const canonicalIsHistorical of [false, true]) {
+    const store = new InMemoryCollectorStorage();
+    const legacy = { ...source, streamId: JSON.stringify([location.root, location.path]) };
+    const checkpoint = { offset: 10, parserState: "{}", prefixDigest: "a".repeat(64) };
+    const first = batch(0, 0, { source: legacy, checkpoint, sourceObservation: { location, observedEnd: 10 } });
+    assert.equal(await store.commit(first, undefined, true), "committed");
+    assert.equal(await store.commit({ ...first, source, expectedVersion: 1 }, undefined, canonicalIsHistorical), "committed");
+    assert.equal(await store.mergeSourceAlias(legacy, source.streamId, 2), canonicalIsHistorical);
+  }
 });

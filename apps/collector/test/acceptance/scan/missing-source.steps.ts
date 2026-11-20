@@ -3,16 +3,41 @@ import { rm } from "node:fs/promises";
 import { After, Before, Given, Then, When } from "@cucumber/cucumber";
 import { MissingSourceFixture } from "../../fixtures/missing-source-fixture.ts";
 import { scanContract } from "../../fixtures/scan-contract.ts";
+import { rotateClaude, unacceptedAppend } from "../../fixtures/scan-repair-fixture.ts";
 
 interface MissingSourceScenario {
   file: MissingSourceFixture;
   end: number;
   before: Awaited<ReturnType<MissingSourceFixture["acknowledge"]>>;
   views: Awaited<ReturnType<MissingSourceFixture["scan"]>>;
+  offline: Awaited<ReturnType<typeof unacceptedAppend>>;
+  rotation: Awaited<ReturnType<typeof rotateClaude>>;
 }
 
 Before({ tags: "@lc12" }, async function (this: MissingSourceScenario) { this.file = await MissingSourceFixture.create(); });
 After({ tags: "@lc12" }, async function (this: MissingSourceScenario) { await this.file?.close(); });
+
+Given("a measured rollout has a known unaccepted append and a later offline checkpoint read", async function (this: MissingSourceScenario) {
+  this.offline = await unacceptedAppend(this.file);
+});
+When("the rollout disappears before storage reconnects", async function (this: MissingSourceScenario) {
+  this.views = await this.offline.disappear();
+});
+Then("the missing report includes the complete append and the measured coverage is partial", function (this: MissingSourceScenario) {
+  assert.deepEqual(this.file.reports, [this.file.missing(this.offline.accepted, this.offline.end)]);
+  assert.equal(this.views[0].coverage, "partial");
+  assert.equal(this.views[0].observedTotalTokens, 70);
+});
+Given("an accepted Claude transcript gains an anonymous message before it is renamed to a backup", async function (this: MissingSourceScenario) {
+  this.rotation = await rotateClaude(this.file);
+});
+When("I scan twice with only the backup present", async function (this: MissingSourceScenario) {
+  this.views = await this.file.scan(this.rotation.args);
+  assert.deepEqual(await this.file.scan(this.rotation.args), this.views);
+});
+Then("the anonymous continuation appears once under the original session", function (this: MissingSourceScenario) {
+  assert.deepEqual(this.views[0].messages.map(message => message.text), this.rotation.texts);
+});
 
 Given("this installation acknowledged {int} tokens through byte {int} and saw complete data through {int}", async function (
   this: MissingSourceScenario, tokens: number, accepted: number, end: number,

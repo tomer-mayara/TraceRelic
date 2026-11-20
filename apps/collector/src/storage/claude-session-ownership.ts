@@ -1,13 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
-import type { ClaudeIdentity, ClaudeOriginReports, LocatedOrigin, NativeCall } from "./claude-origin-reports.ts";
-import type { ClaudeUsageReport, SourceUsageDiagnostic } from "./collector-storage.ts";
+import type { ClaudeIdentity, ClaudeOriginReports, LocatedOrigin, NativeCall, OwnedReport } from "./claude-origin-reports.ts";
+import type { SourceUsageDiagnostic } from "./collector-storage.ts";
 
 interface Owner extends ClaudeIdentity {
   sessionId: string;
   key: string;
 }
 
-function rekey(report: ClaudeUsageReport, owner: Owner): ClaudeUsageReport {
+function rekey(report: OwnedReport, owner: Owner): OwnedReport {
   const { requestId: _, messageId: __, ...fields } = report;
   return { ...fields, ...(owner.requestId && { requestId: owner.requestId }), ...(owner.messageId && { messageId: owner.messageId }) };
 }
@@ -16,15 +16,16 @@ function rekey(report: ClaudeUsageReport, owner: Owner): ClaudeUsageReport {
 export class ClaudeSessionOwnership {
   readonly assigned = new Map<string, Owner | null>();
   readonly diagnostics = new Map<string, SourceUsageDiagnostic>();
-  readonly contributions = new Map<string, ClaudeUsageReport[]>();
+  readonly contributions = new Map<string, OwnedReport[]>();
 
   constructor(sessionId: string, records: ClaudeOriginReports, parent?: ClaudeOriginReports, known?: ClaudeSessionOwnership) {
     for (const call of records.calls.values()) this.assigned.set(call.key, this.owner(sessionId, call, parent, known));
-    for (const { report, origin, callKey } of records.rows) {
+    for (const { report, origin, callKey, lc17 } of records.rows) {
       const owner = this.assigned.get(callKey);
       if (owner) {
         const reports = this.contributions.get(owner.sessionId) ?? [];
-        reports.push(owner.sessionId === sessionId ? report : rekey(report, owner));
+        const located: OwnedReport = lc17 ? report : { ...report, origin };
+        reports.push(owner.sessionId === sessionId ? located : rekey(located, owner));
         this.contributions.set(owner.sessionId, reports);
       } else if (origin) this.note(origin);
     }
@@ -34,7 +35,7 @@ export class ClaudeSessionOwnership {
     let match: NativeCall | undefined;
     if (parent) for (const row of call.origins.length ? call.origins : [undefined]) {
       if (row?.kind === "copy" && !row.parentSessionId) continue;
-      const candidate = parent.match(call, row);
+      const candidate = parent.match(call, row, call.requestOwnsIterations);
       if (candidate === null || (candidate && match && match !== candidate)) return null;
       if (candidate) match = candidate;
     }

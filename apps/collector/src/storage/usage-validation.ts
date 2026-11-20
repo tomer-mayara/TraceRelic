@@ -68,21 +68,24 @@ export function isClaudeUsageReport(value: unknown): value is ClaudeUsageReport 
   return isRecord(value) && isTokenCounts(value) && isCount(value.inputTokens + value.outputTokens)
     && isUsageStatus(value.status) && isRecordedTimestamp(value.at)
     && (isIdentifier(value.messageId) || isIdentifier(value.requestId))
-    && hasValidCallFields(value) && hasValidDurations(value) && (value.origin === undefined || isClaudeOrigin(value.origin));
+    && hasValidCallFields(value) && hasValidDurations(value) && (value.origin === undefined || isClaudeOrigin(value.origin))
+    && (value.iterationPosition === undefined || (isCount(value.iterationPosition) && isIdentifier(value.iterationId)
+      && (!value.iterationId.startsWith("index:") || value.iterationId === `index:${value.iterationPosition}`)));
 }
 
 export function isUsage(value: unknown): value is Usage {
   if (!isRecord(value)) return false;
   const { id, revision, at, kind, model } = value;
   if (!isIdentifier(id) || !isCount(revision) || revision < 1 || !isRecordedTimestamp(at) || !isTokenCounts(value)) return false;
-  if (kind === "call") return hasValidCallFields(value) && hasValidDurations(value);
-  const callFields = ["status", "messageId", "requestId", "turnId", "iterationId", "cacheWrite5mTokens", "cacheWrite1hTokens"];
+  if (kind === "call") return hasValidCallFields(value) && hasValidDurations(value)
+    && (value.responseId === undefined || isIdentifier(value.responseId));
+  const callFields = ["status", "messageId", "requestId", "responseId", "turnId", "iterationId", "cacheWrite5mTokens", "cacheWrite1hTokens"];
   return callFields.every(field => value[field] === undefined)
     && ((kind === undefined && (model === undefined || typeof model === "string")) || (kind === "interval" && model === undefined));
 }
 
 export function isNativeCodexCall(usage: Usage): boolean {
-  return usage.kind === "call" && (isIdentifier(usage.requestId) || /^call:native:[a-f0-9]{64}$/.test(usage.id));
+  return usage.kind === "call" && (isIdentifier(usage.requestId) || isIdentifier(usage.responseId) || /^call:native:[a-f0-9]{64}$/.test(usage.id));
 }
 
 /** Copies can report a native call at different times. Retain its first accepted observation. */
@@ -90,9 +93,9 @@ export function mergeCodexCall(known: Usage, incoming: Usage): Usage | null {
   if (known.kind !== "call" || incoming.kind !== "call" || known.id !== incoming.id
     || known.revision !== incoming.revision || known.inputTokens !== incoming.inputTokens
     || known.outputTokens !== incoming.outputTokens) return null;
-  if (known.at !== incoming.at && !(isNativeCodexCall(known) && isNativeCodexCall(incoming))) return null;
+  if (known.at !== incoming.at && !(isNativeCodexCall(known) && isNativeCodexCall(incoming)) && !known.responseId && !incoming.responseId) return null;
   const merged = { ...known };
-  for (const field of ["model", "turnId", "requestId", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const) {
+  for (const field of ["model", "turnId", "requestId", "responseId", "cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const) {
     const earlier = known[field];
     const later = incoming[field];
     if (later === undefined) continue;

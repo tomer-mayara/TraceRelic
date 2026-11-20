@@ -7,16 +7,25 @@ const rules: Record<UsageDiagnosticCode, { provider?: Harness; reportsGap?: true
   "unsupported-claude-cache-breakdown": { provider: "claude" },
   "unsupported-claude-iteration": { provider: "claude" },
   "ambiguous-transcript-replay": {},
+  "unverified-source-history": {},
   "malformed-transcript-line": { reportsGap: true },
   "unsupported-codex-usage": { provider: "codex", reportsGap: true },
   "codex-counter-reset": { provider: "codex", reportsGap: true },
   "unresolved-codex-fork": { provider: "codex", reportsGap: true },
   "unresolved-claude-fork": { provider: "claude", reportsGap: true },
+  "ambiguous-codex-call": { provider: "codex", reportsGap: true },
+  "ambiguous-claude-iteration": { provider: "claude", reportsGap: true },
 };
 
 export class SourceUsageDiagnostics {
   private readonly entries = new Map<string, SourceUsageDiagnostic>();
   private readonly rangedLines = new Set<string>();
+
+  static combine(...groups: SourceUsageDiagnostic[][]): SourceUsageDiagnostic[] {
+    const records = new SourceUsageDiagnostics();
+    for (const group of groups) for (const row of group) records.add(row);
+    return [...records.entries.values()];
+  }
 
   static merge(previous: SourceUsageDiagnostic[] | undefined, batch: Batch) {
     const incoming = batch.usageDiagnostics;
@@ -42,7 +51,7 @@ export class SourceUsageDiagnostics {
         streamId, ...(installationId !== undefined && { installationId }), code, sourceOrder,
         ...(byteRange && { byteRange: { startOffset: byteRange.startOffset, endOffset: byteRange.endOffset } }),
       });
-      hasGap ||= rule.reportsGap === true;
+      hasGap ||= rule.reportsGap === true || code === "unverified-source-history";
     }
     return { values: records.entries.size ? [...records.entries.values()] : previous, hasGap };
   }

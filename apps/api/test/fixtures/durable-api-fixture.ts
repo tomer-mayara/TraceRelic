@@ -14,6 +14,7 @@ import { DisposablePostgres } from "./disposable-postgres.ts";
 export interface WorkspaceClients {
   a: CollectorStorage;
   b: CollectorStorage;
+  post(workspace: "a" | "b", body: object): Promise<Response>;
   nextCommitMetric(): Promise<CommitMetric>;
 }
 
@@ -59,6 +60,8 @@ export class DurableApiFixture {
     const ready = await process.nextEvent();
     assert.equal(ready.event, "listening");
     return { a: new HttpCollectorStorage(ready.address, this.tokens.a), b: new HttpCollectorStorage(ready.address, this.tokens.b),
+      post: (workspace, body) => fetch(new URL("/v1/collector/batches", ready.address), { method: "POST",
+        headers: { authorization: "Bearer " + this.tokens[workspace], "content-type": "application/json" }, body: JSON.stringify(body) }),
       nextCommitMetric: () => process.nextEvent() };
   }
 

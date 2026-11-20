@@ -23,7 +23,8 @@ Given("a child session owns a call that a parent batch can claim", async functio
   assert.equal(before.parent.coverage, "unknown");
   assert.deepEqual(before.parent.missingSources, [{ status: "missing", source: parentClaim.source, acceptedOffset: 10, observedEnd: 20 }]);
   assert.deepEqual(before.childCheckpoint, { version: 1, checkpoint: { offset: 10, parserState: "{}" } });
-  assert.deepEqual(before.parentCheckpoint, { version: 2, checkpoint: { offset: 10, parserState: "{}" } });
+  assert.deepEqual(before.parentCheckpoint, { version: 2, checkpoint: { offset: 10, parserState: "{}" },
+    observedThrough: { offset: 20, prefixDigest: parentClaim.checkpoint.prefixDigest } });
   assert.deepEqual(before.sources.map(row => [row.source.sessionId, row.presence]), [["parent", "missing"], ["child", "present"]]);
 });
 
@@ -51,8 +52,12 @@ Then("a fresh reader sees the new text and source state and counts the call once
   assert.deepEqual(after.parent.missingSources ?? [], []);
   assert.deepEqual(after.parentCheckpoint, { version: 3, checkpoint: parentClaim.checkpoint });
   assert.deepEqual(after.childCheckpoint, { ...before.childCheckpoint, version: 2 });
-  assert.deepEqual(after.sources, before.sources.map(row => row.source.sessionId === parentClaim.source.sessionId
-    ? { ...row, presence: "present", version: 3, acceptedOffset: 20 } : { ...row, version: 2 }));
+  assert.deepEqual(after.sources, before.sources.map(row => {
+    if (row.source.sessionId !== parentClaim.source.sessionId) return { ...row, version: 2 };
+    const { unrecovered, ...rest } = row;
+    assert.deepEqual(unrecovered, before.parentCheckpoint.observedThrough);
+    return { ...rest, presence: "present", version: 3, acceptedOffset: 20 };
+  }));
 });
 
 Then("the API reports a temporary storage failure and a successful retry", async function (this: RollbackScenario) {

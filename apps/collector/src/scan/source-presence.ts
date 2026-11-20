@@ -1,13 +1,17 @@
 import { isDeepStrictEqual } from "node:util";
 import type { TranscriptSource } from "../history/index.ts";
 import { StorageBackoffError, StorageUnavailableError, type AcknowledgedSource, type CommitResult, type MissingSource, type PresenceWrite,
-  type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
+  type ObservedExtent, type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";
-import { readStorage } from "./scan-recovery.ts";
+import { assessClaudeCopies, unreadableCopy, type ClaudeBackup } from "./claude-source-copy.ts";
+import { captureProof, readStorage } from "./scan-recovery.ts";
 import { sourceId, SourceSighting, SourceSightings } from "./source-sightings.ts";
+import { CodexIdentityRepair } from "./codex-identity-repair.ts";
 
-interface SourceLocations {
-  confirmedAbsent(paths: readonly string[]): Promise<readonly string[]>;
+interface SourceLocations<Entry> {
+  identitiesAt?(paths: ReadonlySet<string>): AsyncIterable<{ path: string; sessionId: string }>;
+  confirmedAbsent(paths: readonly string[], excludedCopyPaths?: readonly string[]): Promise<readonly string[]>;
+  recoveryCandidates?(paths: ReadonlySet<string>): AsyncIterable<ClaudeBackup<Entry>>;
 }
 
 interface Seen<Entry> {
@@ -19,14 +23,25 @@ export interface RestoredSource {
   sighting: SourceSighting;
   verify(version: number): Promise<boolean>;
 }
-export type RestoreCopy<Entry> = (known: AcknowledgedSource, copy: TranscriptSource<Entry>) => Promise<RestoredSource | undefined>;
+export type RestoreCopy<Entry> = (known: AcknowledgedSource, copy: TranscriptSource<Entry>) => Promise<RestoredSource | "unknown" | undefined>;
 
 function reportFor({ source, acceptedOffset, observedEnd }: AcknowledgedSource): MissingSource {
   return { status: "missing", source, acceptedOffset, observedEnd };
 }
 
+function extentFor(row: AcknowledgedSource, local?: SourceSighting): ObservedExtent & Pick<SourceObservation, "checkedPrefix"> {
+  const proof = local?.verified;
+  const sameGeneration = proof && (proof.version === row.version
+    || (row.generation !== undefined && row.generation <= proof.version && proof.version <= row.version));
+  if (sameGeneration && (proof.extent.offset > row.observedEnd || (proof.extent.offset === row.observedEnd && !row.observedPrefixDigest))) {
+    return { ...proof.extent, checkedPrefix: proof.checkedPrefix };
+  }
+  return { offset: row.observedEnd, prefixDigest: row.observedPrefixDigest };
+}
+
 function recordsSighting(known: AcknowledgedSource | undefined, observation: SourceObservation): boolean {
   if (!known || known.presence !== "present" || known.observedEnd < observation.observedEnd) return false;
+  if (observation.observedEnd < known.observedEnd && known.observedEnd > known.acceptedOffset && !known.unrecovered) return false;
   const { location } = observation;
   // A stream may retain its earlier cwd if the current file supplies none.
   return isDeepStrictEqual(known.location, { ...known.location, ...location }) && location.currentFileCwd === known.location.currentFileCwd;
@@ -35,21 +50,23 @@ function recordsSighting(known: AcknowledgedSource | undefined, observation: Sou
 /** Compare an inventory snapshot with a subsequent search of every possible physical location. */
 export class SourcePresenceScan<Entry> {
   private readonly seen = new Map<string, Seen<Entry>>();
-  private readonly copies = new Map<string, Seen<Entry>[]>();
 
-  constructor(readonly scope: SourceScope, private readonly locations: SourceLocations, private readonly memory: SourceSightings) {}
+  constructor(readonly scope: SourceScope, private readonly locations: SourceLocations<Entry>, private readonly memory: SourceSightings) {}
 
-  capture(transcript: TranscriptSource<Entry>, observedEnd: number): SourceSighting {
-    const sighting = this.memory.capture(this.scope, transcript, observedEnd);
+  async capture(transcript: TranscriptSource<Entry>, observedEnd: number): Promise<SourceSighting> {
+    const sighting = await this.memory.capture(this.scope, transcript, observedEnd);
     const seen = { sighting, transcript };
     this.seen.set(sourceId(sighting.source), seen);
-    if (transcript.currentFilePath) {
-      const key = JSON.stringify([transcript.sessionId, transcript.currentFilePath]);
-      const copies = this.copies.get(key) ?? [];
-      copies.push(seen);
-      this.copies.set(key, copies);
-    }
     return sighting;
+  }
+
+  discardCapture(path: string): StreamKey | undefined {
+    let key: StreamKey | undefined;
+    for (const [id, seen] of this.seen) if (seen.transcript.sourceFile === path) {
+      this.seen.delete(id);
+      key ??= seen.sighting.source;
+    }
+    return key;
   }
 
   private inventory(source?: StreamKey): Promise<AcknowledgedSource[]> {
@@ -58,28 +75,40 @@ export class SourcePresenceScan<Entry> {
   }
 
   async finish(restore?: RestoreCopy<Entry>): Promise<StreamKey[]> {
+    const selected: StreamKey[] = [];
     const acknowledged = await this.inventory();
     const known = new Map(acknowledged.map(row => [sourceId(row.source), row]));
     const uncertain = new Map(this.memory.forScope(this.scope).map(item => [sourceId(item.source), item]));
     for (const [id, seen] of this.seen) {
-      if (!seen.sighting.rejected) await this.present({ sighting: seen.sighting, verify: async () => {
-        await seen.transcript.prefixDigests([]);
-        return true;
+      if (!seen.sighting.rejected) await this.present({ sighting: seen.sighting, verify: async version => {
+        if (seen.sighting.verified?.version === version) {
+          await seen.transcript.prefixDigests([]);
+          return true;
+        }
+        const snapshot = await readStorage(seen.sighting.source, () => seen.sighting.readCheckpoint());
+        return snapshot.version === version && !!await captureProof(seen.transcript, snapshot.checkpoint);
       } }, known.get(id));
       uncertain.delete(id);
       known.delete(id);
     }
-    if (restore) await this.restoreCopies(known, restore);
+    if (this.scope.harness === "codex" && known.size) {
+      const repair = new CodexIdentityRepair(this.memory.storage, this.scope);
+      selected.push(...await repair.reconcile(known, this.seen.values(), this.locations.identitiesAt?.bind(this.locations)));
+    }
+    const excluded = restore ? await this.restoreCopies(known, uncertain, restore, selected) : new Map<string, string[]>();
     const paths = new Set([...known.values()].map(row => row.location.path));
     for (const item of uncertain.values()) paths.add(item.observation.location.path);
-    if (!paths.size) return [];
+    if (!paths.size) return selected;
     const absent = new Set(await this.locations.confirmedAbsent([...paths]));
-    const missing: StreamKey[] = [];
     for (const [id, row] of known) {
       const local = uncertain.get(id);
       uncertain.delete(id);
-      if (!absent.has(row.location.path)) continue;
-      if (await this.missing(row, local)) missing.push(row.source);
+      const rejectedCopies = excluded.get(id);
+      if (!absent.has(row.location.path) && !(rejectedCopies?.length && (await this.locations.confirmedAbsent([row.location.path], rejectedCopies)).length)) {
+        if (row.presence === "missing") selected.push(row.source);
+        continue;
+      }
+      if (await this.missing(row, local, rejectedCopies)) selected.push(row.source);
       if (local) this.memory.forget(local);
     }
     for (const local of uncertain.values()) {
@@ -88,22 +117,55 @@ export class SourcePresenceScan<Entry> {
       const snapshot = await readStorage(local.source, () => local.readCheckpoint());
       if (!snapshot.checkpoint) this.reportUnacknowledged(local);
     }
-    return missing;
+    return selected;
   }
 
-  private async restoreCopies(known: Map<string, AcknowledgedSource>, restore: RestoreCopy<Entry>): Promise<void> {
-    for (const [id, row] of known) {
-      if (row.presence === "present" && row.observedEnd <= row.acceptedOffset) continue;
-      const copies = this.copies.get(JSON.stringify([row.source.sessionId, row.location.path])) ?? [];
-      copies.sort((a, b) => b.sighting.observation.observedEnd - a.sighting.observation.observedEnd);
-      for (const { sighting, transcript } of copies) {
-        if (sighting.rejected) continue;
-        const verified = await restore(row, transcript);
-        if (!verified) continue;
-        if (await this.present(verified, await this.reload(row.source))) known.delete(id);
-        break;
-      }
+  private async restoreCopies(known: Map<string, AcknowledgedSource>, uncertain: Map<string, SourceSighting>, restore: RestoreCopy<Entry>, selected: StreamKey[]) {
+    const rejected = new Map<string, string[]>();
+    const paths = new Set([...known.values()].map(row => row.location.path));
+    if (!paths.size || !this.locations.recoveryCandidates) return rejected;
+    const byPath = new Map<string, ClaudeBackup<Entry>[]>();
+    for await (const copy of this.locations.recoveryCandidates(paths)) {
+      const group = byPath.get(copy.currentPath) ?? [];
+      group.push(copy);
+      byPath.set(copy.currentPath, group);
     }
+    for (const [id, initial] of known) {
+      const copies = byPath.get(initial.location.path);
+      if (!copies?.length) continue;
+      let row = initial;
+      const extent = extentFor(row, uncertain.get(id));
+      if (extent.prefixDigest && (extent.offset > row.observedEnd || (!row.observedPrefixDigest && !row.unrecovered))) {
+        // The original disappeared before its last upload. Save that generation's proof before a backup can advance the byte.
+        const result = await this.write({ source: row.source, expectedVersion: row.version, expectedOffset: row.acceptedOffset,
+          location: row.location, presence: row.presence, observedEnd: extent.offset, observedPrefixDigest: extent.prefixDigest,
+          checkedPrefix: extent.checkedPrefix });
+        const current = await this.reload(row.source);
+        if (!current || (result !== "committed" && extentFor(current, uncertain.get(id)).offset > current.observedEnd)) {
+          throw new ScanPendingError(result === "storage-unavailable" ? result : "version-conflict", row.source);
+        }
+        known.set(id, row = current);
+      }
+      const snapshot = await readStorage(row.source, () => this.memory.storage.readCheckpoint(row.source));
+      const { excluded, candidates } = await assessClaudeCopies(row, snapshot.checkpoint, copies);
+      for (const { transcript, path } of candidates) {
+        if ([...this.seen.values()].some(s => s.sighting.rejected && s.transcript.sourceFile === transcript.sourceFile)) continue;
+        try {
+          const verified = await restore(row, transcript);
+          if (verified === "unknown") continue;
+          if (!verified) { excluded.push(path); continue; }
+          if (await this.present(verified, await this.reload(row.source))) {
+            selected.push(row.source);
+            known.delete(id);
+          }
+          break;
+        } catch (error) {
+          if (!unreadableCopy(error)) throw error;
+        }
+      }
+      rejected.set(id, excluded);
+    }
+    return rejected;
   }
 
   async reportWhileOffline(): Promise<StreamKey | undefined> {
@@ -145,10 +207,11 @@ export class SourcePresenceScan<Entry> {
     return true;
   }
 
-  private async missing(row: AcknowledgedSource, local?: SourceSighting): Promise<boolean> {
+  private async missing(row: AcknowledgedSource, local?: SourceSighting, excluded?: readonly string[]): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt++) {
       // A concurrent reset can reach the same accepted byte in a different transcript.
-      const end = local?.verifiedVersion === row.version ? Math.max(row.observedEnd, local.observation.observedEnd) : row.observedEnd;
+      const extent = extentFor(row, local);
+      const end = extent.offset;
       const report = reportFor(row);
       if (row.presence === "missing" && end <= row.observedEnd) {
         this.memory.confirmReply(report);
@@ -156,7 +219,8 @@ export class SourcePresenceScan<Entry> {
       }
       report.observedEnd = Math.max(row.observedEnd, end);
       const result = await this.write({ source: row.source, expectedOffset: row.acceptedOffset, expectedVersion: row.version,
-        presence: "missing", location: row.location, observedEnd: report.observedEnd }, row.presence === "missing" ? undefined : report);
+        presence: "missing", location: row.location, observedEnd: report.observedEnd, observedPrefixDigest: extent.prefixDigest,
+        checkedPrefix: extent.checkedPrefix }, row.presence === "missing" ? undefined : report);
       if (result === "committed") {
         this.memory.discardReply(row.source);
         if (row.presence !== "missing") this.memory.onMissing?.(report);
@@ -169,7 +233,7 @@ export class SourcePresenceScan<Entry> {
         return true;
       }
       if (result === "storage-unavailable" || attempt > 0) throw new ScanPendingError(result, row.source);
-      if (!(await this.locations.confirmedAbsent([current.location.path])).length) return false;
+      if (!(await this.locations.confirmedAbsent([current.location.path], excluded)).length) return false;
       row = current;
     }
     return false;

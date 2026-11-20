@@ -8,7 +8,8 @@
     "./logging": { "types": "./src/logging/index.ts", "import": "./dist/logging/index.js" }
   },
   "scripts": {
-    "compile": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc",
+    "compile": "bun run compile:source",
+    "compile:source": "swc src -d dist --strip-leading-paths --config-file ../../.swcrc && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file ../../.swcrc",
     "check:logging-scenarios": "cucumber-js test/acceptance/logging/logging.feature --import ./dist/test/acceptance/logging/logging.steps.js --tags \"@log00a or @log00b or @log-levels or @log07\" --format summary"
   },
   "dependencies": {

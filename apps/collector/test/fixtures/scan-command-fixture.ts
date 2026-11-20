@@ -53,6 +53,21 @@ export class ScanCommandFixture {
     ]);
   }
 
+  async writePaginatedChat(): Promise<void> {
+    const header = CodexRolloutFixture.header(this.codexKey.sessionId);
+    const timestamp = "2026-02-01T12:00:00Z";
+    const completed = (type: string, id: string, content: unknown[]) => ({
+      timestamp, type: "event_msg", payload: { type: "item_completed", thread_id: this.codexKey.sessionId,
+        turn_id: "turn", item: { type, id, content } },
+    });
+    this.rollout = await this.codex.write([
+      { ...header, payload: { ...header.payload, history_mode: "paginated" } },
+      CodexRolloutFixture.message(timestamp, "Expanded model input"),
+      completed("UserMessage", "u", [{ type: "text", text: "Visible question" }]),
+      completed("AgentMessage", "a", [{ type: "Text", text: "Visible answer" }]),
+    ]);
+  }
+
   async writeCumulativeReports(first: number, repeated: number, last: number): Promise<void> {
     await this.writePlanningChat();
     await this.appendRecords([

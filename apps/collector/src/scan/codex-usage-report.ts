@@ -5,7 +5,7 @@ import { jsonDigest } from "./chat-parser-state.ts";
 import { object, providerCounts } from "./codex-usage-counts.ts";
 
 export type UsageEntry = Pick<CodexRolloutEntry, "sessionId" | "lineNumber" | "timestamp" | "record" | "sourceFile">
-  & { afterBlankPrefix?: true };
+  & { afterBlankPrefix?: true; startOffset?: number; endOffset?: number };
 export type Fields = Readonly<Record<string, unknown>>;
 export type Call = Usage & { kind: "call" };
 export type CallContext = Pick<Call, "turnId" | "requestId" | "model">;
@@ -18,6 +18,8 @@ export interface Report {
   providerId?: string;
   turnId?: string;
   invalidTotal: boolean;
+  aliases?: string[];
+  ownerThread?: string;
 }
 
 function identifier(...values: unknown[]): string | undefined {
@@ -94,9 +96,18 @@ function attribution(entry: UsageEntry, payload: Fields, info: Fields, context: 
   const callId = identifier(details?.call_id, info.call_id, payload.call_id, entry.record.call_id);
   const requestId = identifier(details?.request_id, info.request_id, payload.request_id, entry.record.request_id)
     ?? (sameTurn && !callId ? context.requestId : undefined);
-  const native = requestId ? ["request", requestId] : callId ? ["call", callId] : undefined;
+  const native = callId ? ["call", callId] : requestId ? ["request", requestId] : undefined;
   const model = identifier(details?.model, payload.model, info.model) ?? (sameTurn ? context.model : undefined);
-  return { native, fields: { ...(turnId && { turnId }), ...(model && { model }), ...(requestId && { requestId }) } };
+  const alias = callId && requestId ? nativeCallId(entry.sessionId, ["request", requestId]) : undefined;
+  return { native, alias, fields: { ...(turnId && { turnId }), ...(model && { model }), ...(requestId && { requestId }) } };
+}
+
+function nativeCallId(sessionId: string, native: string[]): string {
+  return "call:native:" + jsonDigest([sessionId, ...native]);
+}
+
+function closingCallId(historyId: string, end: TokenCounts): string {
+  return "call:" + jsonDigest([historyId, end.inputTokens, end.outputTokens]);
 }
 
 const bookkeeping = new Set([
@@ -115,20 +126,35 @@ function usageInfo(payload: Fields): Fields | null | undefined {
   if (misplacedUsageFields.some(key => supplied(payload[key]))) return null;
 }
 
+function responseUsage(entry: UsageEntry, payload: Fields, context: CallContext, historyId: string): Report | null {
+  const amount = providerCounts(payload.usage), end = providerCounts(payload.thread_token_usage);
+  const ownerThread = identifier(payload.thread_id), responseId = identifier(payload.response_id);
+  if (!ownerThread || !responseId || !recorded(entry.timestamp) || !amount) return null;
+  const native = ["response", responseId], turnId = identifier(payload.turn_id);
+  const last: Call = { id: nativeCallId(ownerThread, native), kind: "call", revision: 1, at: entry.timestamp, ...amount,
+    responseId, ...(turnId && { turnId }), ...(turnId === context.turnId && context.model && { model: context.model }) };
+  return { at: entry.timestamp, sourceOrder: entry.lineNumber, independent: true, providerId: jsonDigest(native),
+    end, last, ownerThread, turnId, invalidTotal: supplied(payload.thread_token_usage) && !end,
+    ...(historyId.startsWith("verified:") && end && (amount.inputTokens || amount.outputTokens) && { aliases: [closingCallId(historyId, end)] }) };
+}
+
 /** Undefined is a bookkeeping update. Null is a usage report we cannot measure. */
 export function readReport(entry: UsageEntry, payload: Fields, context: CallContext, historyId: string): Report | null | undefined {
+  if (entry.record.type === "token_usage_record") return responseUsage(entry, payload, context, historyId);
   const info = usageInfo(payload);
   if (!info) return info;
   const end = providerCounts(info.total_token_usage);
   const amount = providerCounts(info.last_token_usage);
   if (!recorded(entry.timestamp) || (!end && !amount)) return null;
-  const { native, fields } = attribution(entry, payload, info, context);
-  const identity = native ? [entry.sessionId, ...native] : end && [historyId, end.inputTokens, end.outputTokens];
-  const last: Call | undefined = amount && identity ? {
+  const { native, alias, fields } = attribution(entry, payload, info, context);
+  const id = native ? nativeCallId(entry.sessionId, native) : end && closingCallId(historyId, end);
+  const last: Call | undefined = amount && id ? {
     kind: "call", revision: 1, at: entry.timestamp, ...amount, ...fields,
-    id: (native ? "call:native:" : "call:") + jsonDigest(identity),
+    id,
   } : undefined;
   const invalidTotal = supplied(info.total_token_usage) && !end;
+  const aliases = alias ? [alias] : [];
+  if (native && historyId.startsWith("verified:") && end && amount && (amount.inputTokens || amount.outputTokens)) aliases.push(closingCallId(historyId, end));
   return { at: entry.timestamp, sourceOrder: entry.lineNumber, end, last, independent: Boolean(native),
-    providerId: native && jsonDigest(native), turnId: fields.turnId, invalidTotal };
+    providerId: native && jsonDigest(native), turnId: fields.turnId, invalidTotal, ...(aliases.length && { aliases }) };
 }

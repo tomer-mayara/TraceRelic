@@ -13,3 +13,9 @@ Feature: Apply a whole batch once
     And the losing source sees the winner's version and has no checkpoint
     When the losing worker reloads and retries its call once
     Then a new reader sees both calls once and both source checkpoints at version 2
+
+  Scenario: Growing one session submits each new message once to PostgreSQL
+    Given I append 128 one-message batches to one session
+    Then PostgreSQL has received 128 message projection rows
+    When a fresh API records that the source has disappeared
+    Then the 128 messages remain and PostgreSQL has received no more message rows

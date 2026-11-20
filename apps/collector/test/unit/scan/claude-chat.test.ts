@@ -3,6 +3,13 @@ import { test } from "node:test";
 import { ClaudeChat } from "#src/scan/claude-chat";
 import { ClaudeChatFixture as F } from "../../fixtures/claude-chat-fixture.ts";
 
+test("filters complete generated goal and tick envelopes while preserving quoted examples", () => {
+  const rows = [F.row("user", "<tick>resume</tick>"), F.row("user", [F.text("<goal>generated</goal>"), F.text("Continue")]),
+    F.row("user", "What does <goal>example</goal> mean?"), F.row("user", "`<tick>resume</tick>`")];
+  assert.deepEqual(ClaudeChat.decode(F.transcript(rows)).messages.map(row => row.text),
+    ["Continue", "What does <goal>example</goal> mean?", "`<tick>resume</tick>`"]);
+});
+
 test("returns exact text, roles, recorded times and original block positions", () => {
   const { messages, metadata } = ClaudeChat.decode(F.transcript([
     F.row("user", " Why?\n"),

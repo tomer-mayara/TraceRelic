@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdir, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
 import { LocalLLMHistoryCodex } from "@tracerelic/collector/history";
 import { CodexSessionParser } from "#src/scan/codex-session-parser";
 import { TranscriptCursor } from "#src/scan/transcript-cursor";
-import type { SessionView, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { CollectorStorage, SessionView, StreamKey } from "../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "./codex-rollout-fixture.ts";
 import { CodexUsageFixture as Usage } from "./codex-usage-fixture.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
@@ -72,9 +72,23 @@ export class CodexForkScanFixture {
     await this.write(this.parent, rows.map(row => JSON.stringify(row) + "\n"));
   }
 
+  async shortenParent(keepFull: boolean) {
+    const original = this.path(this.parent);
+    const prefix = (await readFile(original, "utf8")).split("\n").slice(0, 3).join("\n") + "\n";
+    const target = keepFull ? join(dirname(original), "rollout-earlier-parent.jsonl") : original;
+    await writeFile(target, prefix);
+  }
+
   async appendTotal(source: StreamKey, total: number) {
     const row = { ...Usage.report(counts(total)), timestamp: at(21) };
     await appendFile(this.path(source), JSON.stringify(row) + "\n");
+  }
+
+  async writeNative(session: "child" | "parent", rows: object[]) {
+    const metadata = session === "child" ? { forked_from_id: "parent" } : {};
+    const timestamp = session === "child" ? "2026-02-01T12:00:03Z" : "2026-02-01T12:00:00Z";
+    const records = [{ timestamp, type: "session_meta", payload: { id: session, timestamp, ...metadata } }, ...rows];
+    await this.write(this[session], records.map(row => JSON.stringify(row) + "\n"));
   }
 
   async writeChildWithFreshCall(firstAmount: number, total: number) {
@@ -132,8 +146,10 @@ export class CodexForkScanFixture {
     }
   }
 
-  async scan(...ids: string[]): Promise<readonly SessionView[]> {
-    const command = new CollectorCommand(this.storage);
+  scan(...ids: string[]): Promise<readonly SessionView[]> { return this.scanWith(this.storage, ...ids); }
+
+  async scanWith(storage: CollectorStorage, ...ids: string[]): Promise<readonly SessionView[]> {
+    const command = new CollectorCommand(storage);
     const result = await command.run(["scan", "--once", "--config", this.configFile, ...ids.flatMap(id => ["--session", id])]);
     return result.map(view => {
       assert("usage" in view);

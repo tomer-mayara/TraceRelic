@@ -30,26 +30,41 @@ jobs:
       - name: Install dependencies
         id: install
         run: bun install --frozen-lockfile
+      - name: Build workspace
+        id: build
+        run: bun run build
+      - name: Compile history contract
+        run: bun run schema:collector-history
+      - name: Compile storage contract
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run schema:collector-storage
+      - name: Compile scan contract
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run schema:collector-scan
+      - name: Check collector dependencies
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run check:collector-deps
       - name: Test collector history and configuration
-        run: bun run check:collector-history
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run --cwd apps/collector check:history-scenarios && bun run --cwd apps/collector check:config-scenarios
       - name: Test collector storage
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: bun run check:collector-storage
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run --cwd apps/collector check:storage-scenarios
       - name: Test collector scan
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: bun run check:collector-scan
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run --cwd apps/collector check:scan-scenarios
       - name: Test collector HTTP API
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: bun run check:collector-api
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run --cwd apps/api check:collector-scenarios
       - name: Test PostgreSQL writes, API restarts and collector scans
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: bun run check:collector-postgres
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run --cwd apps/api check:postgres-scenarios
       - name: Test shared logging
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: bun run check:shared-logging
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run check:logging-contract && bun run --cwd packages/shared check:logging-scenarios
       - name: Lint workspace
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run lint
       - name: Run workspace tests
-        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: bun run test
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bun run test:compiled

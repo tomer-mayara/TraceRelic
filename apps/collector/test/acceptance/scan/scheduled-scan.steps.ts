@@ -3,11 +3,31 @@ import { After, Given, Then, When } from "@cucumber/cucumber";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 import { scanContract } from "../../fixtures/scan-contract.ts";
 import { ScheduledScanFixture } from "../../fixtures/scheduled-scan-fixture.ts";
+import { CountSessionReads } from "../../fixtures/scan-repair-fixture.ts";
 
 interface ScheduledScanScenario {
   files: ScanCommandFixture;
   watch: ScheduledScanFixture;
+  reads: CountSessionReads;
 }
+
+Given("a selected planning chat has already been accepted by storage", async function (this: ScheduledScanScenario) {
+  this.reads = new CountSessionReads();
+  this.files = await ScanCommandFixture.create(this.reads);
+  await this.files.configure();
+  await this.files.writePlanningChat();
+  await this.files.scan();
+  this.reads.reads = 0;
+});
+When("scheduled scans run twice with no new records", async function (this: ScheduledScanScenario) {
+  this.watch = new ScheduledScanFixture(this.reads, ["--config", this.files.configFile]);
+  await this.watch.waitForPass();
+  await this.watch.advance();
+});
+Then("both reports show completion and no final conversations were requested", function (this: ScheduledScanScenario) {
+  assert.deepEqual(this.watch.reports.map(r => r.status), ["complete", "complete"]);
+  assert.equal(this.reads.reads, 0);
+});
 
 After({ tags: "@lc13" }, async function (this: ScheduledScanScenario) {
   try {

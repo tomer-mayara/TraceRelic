@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { Client } from "pg";
 import type { CollectorStorage, SourceScope } from "@tracerelic/collector/storage";
 import { call, child, original, ownChild, parent } from "#collector-fixture/claude-ownership-storage-fixture";
@@ -7,7 +8,8 @@ import { batch, planning } from "#collector-fixture/collector-storage-fixture";
 const scope: SourceScope = { harness: "claude", installationId: "desktop", root: "/history/claude" };
 const childSource = { ...child, installationId: "desktop" };
 const childFile = { location: { root: scope.root, path: child.streamId }, observedEnd: 10 };
-const parentFile = { location: { root: scope.root, path: parent.streamId }, observedEnd: 20 };
+const parentFile = { location: { root: scope.root, path: parent.streamId }, observedEnd: 20,
+  observedPrefixDigest: createHash("sha256").update("123456789\n123456789\n").digest("hex") };
 const sharedCall = call("shared", "shared-request", 100, { ...ownChild, sourceOrder: 1, byteRange: original.byteRange });
 const independent = call("child-only", "child-request", 25, { ...ownChild, transcriptUuid: "child-only" });
 const childBatch = batch(0, 0, {
@@ -19,7 +21,7 @@ const parentBatch = batch(0, 0, {
 });
 
 export const parentClaim = batch(2, 10, {
-  source: parent, sourceObservation: parentFile, checkpoint: { offset: 20, parserState: "parent with call" },
+  source: parent, sourceObservation: parentFile, checkpoint: { offset: 20, parserState: "parent with call", prefixDigest: parentFile.observedPrefixDigest },
   messages: [{ ...planning, id: "parent-claim", text: "The parent claims the call", sourceOrder: 2 }],
   claudeUsageReports: [call("shared", "shared-request", 100, { ...original, sourceOrder: 2, byteRange: { startOffset: 10, endOffset: 15 } })],
 });

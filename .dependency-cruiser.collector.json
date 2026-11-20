@@ -16,7 +16,7 @@
       "name": "http-client-uses-the-wire-contract-and-storage-port",
       "severity": "error",
       "from": { "path": "^apps/collector/src/storage/http-collector-storage\\.ts$" },
-      "to": { "path": "^apps/(?!collector/src/storage/(collector-storage|collector-wire-contract)\\.ts$)", "reachable": true }
+      "to": { "path": "^apps/(?!collector/src/storage/(collector-storage|collector-wire-contract|collector-batch-wire)\\.ts$)", "reachable": true }
     },
     {
       "name": "collector-api-depends-on-storage",
@@ -28,7 +28,7 @@
       "name": "http-handlers-use-the-storage-port",
       "severity": "error",
       "from": { "path": "^apps/api/src/collector-api\\.ts$" },
-      "to": { "path": "^apps/collector/src/storage/(?!(collector-storage|collector-wire-contract)\\.ts$)", "reachable": true }
+      "to": { "path": "^apps/collector/src/storage/(?!(collector-storage|collector-wire-contract|collector-batch-wire)\\.ts$)", "reachable": true }
     },
     {
       "name": "schedule-runs-the-scan-through-its-handler",

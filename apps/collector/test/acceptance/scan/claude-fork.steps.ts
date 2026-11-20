@@ -32,6 +32,21 @@ Given("the child makes a separate {int}-token call", async function (this: Claud
   for (const fixture of this.forks) await fixture.appendOwn(tokens);
 });
 
+Given("a parent reports a provisional {int}-token request", async function (this: ClaudeForkScenario, tokens: number) {
+  this.forks = [];
+  for (let i = 0; i < 2; i++) {
+    const fixture = await ClaudeForkScanFixture.create("fork");
+    this.forks.push(fixture);
+    await fixture.writeParent(tokens, { provisional: true });
+  }
+});
+
+Given("its fork reports a final {int}-token executor and a new {int}-token advisor for that request", async function (
+  this: ClaudeForkScenario, executor: number, advisorTokens: number,
+) {
+  for (const fixture of this.forks) await fixture.writeCopy(executor, { advisorTokens });
+});
+
 When("I collect both transcripts in either order", async function (this: ClaudeForkScenario) {
   this.snapshots = [];
   for (const [index, fixture] of this.forks.entries()) {
@@ -61,7 +76,7 @@ function checkTotals(snapshots: ClaudeForkScenario["snapshots"], parentTokens: n
     assert.equal(child.coverage, "reported");
     assert.deepEqual(parent.messages.map(row => row.text), ["Inherited answer"]);
     assert.deepEqual(child.messages.map(row => row.text), ["Inherited answer", "Child answer"]);
-    assert.deepEqual(parent.usage.map(row => row.requestId), ["parent-request"]);
+    assert.deepEqual([...new Set(parent.usage.map(row => row.requestId))], ["parent-request"]);
     assert.deepEqual(child.usage.map(row => row.requestId), ["child-request-helper"]);
     for (const view of [child, parent]) assert(scanContract.validate("SessionView.json", view), scanContract.errorsText());
   }

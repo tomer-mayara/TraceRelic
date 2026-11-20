@@ -5,3 +5,8 @@ Feature: Import visible Codex chat text
     When I scan its root once
     Then its session contains both messages in source order with their roles and recorded times
     And its token total is null with unknown coverage
+
+  Scenario: A paginated rollout contains model input and the visible conversation
+    Given the paginated rollout records model input and a different completed prompt and answer
+    When I scan its root once
+    Then only the completed prompt and answer appear with their native item IDs

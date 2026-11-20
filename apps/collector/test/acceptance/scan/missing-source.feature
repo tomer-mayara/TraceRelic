@@ -9,3 +9,13 @@ Feature: Explain what was lost when a file disappears
       | end | coverage |
       | 420 | reported |
       | 500 | partial  |
+
+  Scenario: An offline retry preserves the last complete suffix
+    Given a measured rollout has a known unaccepted append and a later offline checkpoint read
+    When the rollout disappears before storage reconnects
+    Then the missing report includes the complete append and the measured coverage is partial
+
+  Scenario: A direct Claude rotation preserves an anonymous continuation
+    Given an accepted Claude transcript gains an anonymous message before it is renamed to a backup
+    When I scan twice with only the backup present
+    Then the anonymous continuation appears once under the original session

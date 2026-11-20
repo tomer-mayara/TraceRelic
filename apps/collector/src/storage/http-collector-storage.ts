@@ -1,8 +1,8 @@
 import { isIPv4 } from "node:net";
 import { matchesSourceScope, StorageAuthenticationError, StorageBackoffError, StorageUnavailableError,
-  type AcknowledgedSource, type Batch, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
-  type PresenceWrite, type SessionKey, type SessionView, type SourceScope, type StreamKey } from "./collector-storage.ts";
-import { CollectorWireContract } from "./collector-wire-contract.ts";
+  type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
+  type PresenceWrite, type SessionKey, type SessionView, type SourceLocation, type SourceScope, type StreamKey } from "./collector-storage.ts";
+import { batchPartBytes, collectorRequestBytes, CollectorWireContract, fitsWireRecords, legacyScannerStream, packBatch } from "./collector-wire-contract.ts";
 
 type Route = "session" | "checkpoint" | "sources" | "batches" | "presence";
 type Transport = (url: URL, init: RequestInit) => Promise<Response>;
@@ -99,10 +99,42 @@ export class HttpCollectorStorage implements CollectorStorage {
     });
   }
 
-  commit(batch: Batch): Promise<CommitResult> { return this.write("batches", batch); }
+  async resolveSource(source: StreamKey, location: SourceLocation, verify: (checkpoint: Checkpoint) => Promise<boolean>): Promise<StreamKey> {
+    const { harness, sessionId, installationId } = source;
+    const legacy = legacyScannerStream(harness, location);
+    if (!legacy) return source;
+    const alternate = source.streamId === location.path ? legacy : source.streamId === legacy ? location.path : undefined;
+    if (!alternate) return source;
+    const inventory = await this.listSources({ harness, installationId, root: location.root, sessionIds: [sessionId] });
+    const matches = inventory.filter(row => row.source.sessionId === sessionId && row.location.path === location.path);
+    if (matches.some(row => row.source.streamId === source.streamId)) return source;
+    const other = matches.find(row => row.source.streamId === alternate);
+    if (!other) return source;
+    const { checkpoint } = await this.readCheckpoint(other.source);
+    return checkpoint?.prefixDigest && await verify(checkpoint) ? other.source : source;
+  }
+
+  async commit(batch: Batch): Promise<CommitResult> {
+    const body = JSON.stringify(batch);
+    if (Buffer.byteLength(body) <= collectorRequestBytes) return this.write("batches", body);
+    if (!fitsWireRecords(batch) || Buffer.byteLength(JSON.stringify(batch.source)) > collectorRequestBytes) return "invalid";
+    const snapshot = await this.readCheckpoint(batch.source);
+    if (snapshot.version !== batch.expectedVersion || (snapshot.checkpoint?.offset ?? 0) !== batch.expectedOffset) return "conflict";
+    const { header, bytes } = packBatch(batch, body, snapshot.checkpoint?.parserState);
+    const final = JSON.stringify(header);
+    if (Buffer.byteLength(final) > collectorRequestBytes) return "invalid";
+    for (let index = 0; index < (header.parts ?? 0); index++) {
+      const start = index * batchPartBytes;
+      const part = { transfer: "part-v1", upload: header.upload, index, data: bytes.toString("base64", start, start + batchPartBytes) };
+      const { status, value } = await this.post("batches", part, true);
+      if (status === 413 || status === 422) return "invalid";
+      if (status !== 202 || (value as { result?: unknown } | null)?.result !== "staged") throw new Error(invalidResponse);
+    }
+    return this.write("batches", final);
+  }
   recordPresence(update: PresenceWrite): Promise<CommitResult> { return this.write("presence", update); }
 
-  private async write(route: "batches" | "presence", body: Batch | PresenceWrite): Promise<CommitResult> {
+  private async write(route: "batches" | "presence", body: object | string): Promise<CommitResult> {
     const { status, value } = await this.post(route, body);
     if (status === 413) return "invalid";
     if (!value || typeof value !== "object" || !("result" in value)
@@ -110,10 +142,12 @@ export class HttpCollectorStorage implements CollectorStorage {
     return value.result;
   }
 
-  private async post(route: Route, body: object): Promise<{ status: number; value: unknown }> {
+  private async post(route: Route, body: object | string, staging = false): Promise<{ status: number; value: unknown }> {
+    const encoded = typeof body === "string" ? body : JSON.stringify(body);
+    if (route === "batches" && Buffer.byteLength(encoded) > collectorRequestBytes) return { status: 413, value: undefined };
     const request = {
       method: "POST", redirect: "manual", signal: AbortSignal.timeout(this.timeoutMs),
-      headers: { authorization: this.#authorization, "content-type": "application/json" }, body: JSON.stringify(body),
+      headers: { authorization: this.#authorization, "content-type": "application/json" }, body: encoded,
     } satisfies RequestInit;
     let response: Response;
     try {
@@ -123,7 +157,7 @@ export class HttpCollectorStorage implements CollectorStorage {
     }
     const { status } = response;
     const write = route === "batches" || route === "presence";
-    if (status !== 200 && !(write && (status === 409 || status === 422))) {
+    if (status !== 200 && !(staging && status === 202) && !(write && (status === 409 || status === 422))) {
       void response.body?.cancel().catch(() => {});
       if (route === "batches" && status === 413) return { status, value: undefined };
       if (status === 401 || status === 403) throw new StorageAuthenticationError();

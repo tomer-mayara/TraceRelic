@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { appendFile, copyFile, stat } from "node:fs/promises";
+import { appendFile, copyFile, readFile, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
@@ -68,13 +68,15 @@ test("returns complete Claude records grouped by effective session with byte off
   const sources = await Array.fromAsync(reader.discoverSources());
   assert.deepEqual(sources.map(source => source.sessionId), [childId, "independent"]);
   const afterBroken = childEnd + Buffer.byteLength("broken\n");
+  const bytes = await readFile(sourceFile);
   for (const [i, transcript] of [childTranscript, otherTranscript].entries()) {
     const batches = await Array.fromAsync(sources[i].readBatches({ offset: 0, lineNumber: 0 }));
     assert.deepEqual(batches.flatMap(batch => batch.damagedLines ?? []),
       [{ lineNumber: 2, startOffset: childEnd, endOffset: afterBroken }]);
     const starts = i === 0 ? [0, otherEnd] : [afterBroken];
     assert.deepEqual(batches.flatMap(batch => batch.entries), transcript.entries.map((entry, j) =>
-      ({ ...entry, startOffset: starts[j] })));
+      ({ ...entry, startOffset: starts[j], ...(entry.record.type === "user"
+        && { recordPrefixDigest: createHash("sha256").update(bytes.subarray(0, entry.endOffset)).digest("hex") }) })));
     assert.deepEqual(batches.at(-1)?.next, { offset: metadataEnd, lineNumber: 4 });
   }
 });
@@ -147,14 +149,15 @@ test("captures the discovered file size and resumes Claude after malformed lines
   const [updated] = await Array.fromAsync(reader.discoverSources());
   const finalPosition = { offset: afterBroken.offset + suffix.length, lineNumber: 3 };
   assert.equal(updated.fileSize, finalPosition.offset);
+  const digest = createHash("sha256").update(JSON.stringify(first) + "\n").update(broken).update(suffix).digest("hex");
   assert.deepEqual(await Array.fromAsync(updated.readBatches(afterBroken, undefined, finalPosition.offset - 1)), []);
   assert.deepEqual(await Array.fromAsync(updated.readBatches(afterBroken)), [{
     entries: [{
       harness: "claude", sessionId: "native", sourceFile, record: final, timestamp: final.timestamp,
-      lineNumber: 3, startOffset: afterBroken.offset, endOffset: finalPosition.offset,
+      lineNumber: 3, startOffset: afterBroken.offset, endOffset: finalPosition.offset, recordPrefixDigest: digest,
     }],
     next: finalPosition,
-    prefixDigest: createHash("sha256").update(JSON.stringify(first) + "\n").update(broken).update(suffix).digest("hex"),
+    prefixDigest: digest,
   }]);
   assert.deepEqual(await Array.fromAsync(updated.readBatches(finalPosition)), []);
 });

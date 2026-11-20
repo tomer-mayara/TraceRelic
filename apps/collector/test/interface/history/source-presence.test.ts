@@ -40,7 +40,7 @@ test("the captured complete end is zero until the first newline", async t => {
   }
 });
 
-test("a complete transcript needs only its last byte to establish the observed end", async t => {
+test("a sealed transcript already knows its last complete byte", async t => {
   const fixture = await Rollout.create();
   t.after(() => fixture.close());
   const path = await fixture.write([Rollout.header("id"), { text: "x".repeat(160 * 1024) }]);
@@ -49,8 +49,7 @@ test("a complete transcript needs only its last byte to establish the observed e
   t.after(() => handle.close());
   const reads = t.mock.method(Object.getPrototypeOf(handle) as typeof handle, "read");
   assert.equal(await source.completeEnd(), source.fileSize);
-  const chunks = await Promise.all(reads.mock.calls.map(call => call.result));
-  assert.equal(chunks.reduce((bytes, chunk) => bytes + (chunk?.bytesRead ?? 0), 0), 1);
+  assert.equal(reads.mock.callCount(), 0);
 });
 
 test("Codex checks active and archived rollout names even when a present file has no readable header", async t => {

@@ -30,13 +30,13 @@ export class LocalCollectorCliFixture {
     return relative(repoRoot, file);
   }
 
-  writeChat(root: CodexRolloutFixture, id: string): Promise<string> {
-    return root.write([CodexRolloutFixture.header(id), CodexRolloutFixture.message("2026-02-01T12:00:00Z", id)]);
+  writeChat(root: CodexRolloutFixture, id: string, at = "2026-02-01T12:00:00Z"): Promise<string> {
+    return root.write([CodexRolloutFixture.header(id), CodexRolloutFixture.message(at, id)]);
   }
 
-  writeClaudeChat(id: string): Promise<string> {
+  writeClaudeChat(id: string, at = "2026-02-01T12:00:00Z"): Promise<string> {
     const root = new ClaudeProjectFixture(join(this.configured.home, "claude"));
-    return root.write("project", id, [ClaudeProjectFixture.user(id, "2026-02-01T12:00:00Z", id)]);
+    return root.write("project", id, [ClaudeProjectFixture.user(id, at, id)]);
   }
 
   run(args: string[]) {

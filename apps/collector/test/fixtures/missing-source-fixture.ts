@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { appendFile, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { appendFile, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
 import type { Batch, CollectorStorage, MissingSource } from "../../src/storage/collector-storage.ts";
@@ -53,6 +54,7 @@ export class MissingSourceFixture {
       // Storage can acknowledge observing a complete suffix before it accepts the records in it.
       assert.equal(await transcript.storage.recordPresence({
         source: transcript.source, expectedVersion: before.version, expectedOffset: accepted, presence: "present", observedEnd: end,
+        observedPrefixDigest: createHash("sha256").update(await readFile(transcript.file)).digest("hex"),
         location: { root: transcript.root.home, path: transcript.source.streamId },
       }), "committed");
     }

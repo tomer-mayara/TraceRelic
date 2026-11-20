@@ -1,8 +1,10 @@
-import { join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
+import { matchesRecordedPath } from "@tracerelic/shared";
+import { claudeCopyStem } from "../claude-transcript-copy.ts";
 import type { GlobalConfig } from "../config/global-config.ts";
 import { type DirectoryListing, listDirectory, TranscriptDirectories } from "./transcript-directories.ts";
 import {
-  LocalLLMHistory, type ClaudeSubagent, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry, type TranscriptSource,
+  LocalLLMHistory, type ClaudeSubagent, type LocalHistoryEntry, type ScanSelection, type SourceDiscoveryOptions, type Transcript, type TranscriptEntry, type TranscriptSource,
 } from "./local-llm-history.ts";
 
 export type ClaudeTranscriptEntry = TranscriptEntry<"claude">;
@@ -32,8 +34,7 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
     this.config = config;
   }
 
-  async readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]> {
-    const inRange = this.dateFilter(fromDate, toDate);
+  protected async readWindow(inRange: (timestamp: string) => boolean): Promise<readonly LocalHistoryEntry[]> {
     const entries: LocalHistoryEntry[] = [];
     for await (const file of this.transcriptFiles(false)) {
       for await (const { lineNumber, record } of this.readRecords(file.sourceFile)) {
@@ -54,14 +55,29 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
     }
   }
 
-  async *discoverSources(selection: ScanSelection = {}): AsyncGenerator<TranscriptSource<ClaudeTranscriptEntry>> {
+  async *discoverSources(selection: ScanSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<TranscriptSource<ClaudeTranscriptEntry>> {
     const previous: TranscriptFile[] = [];
     const currentCwds = new Map<string, string>();
+    const target = options.sourceFile;
+    const name = target && this.transcriptName(basename(target), true);
+    const current = target && name && name.previousCopy ? join(dirname(target), name.stem + ".jsonl") : undefined;
     for await (const file of this.transcriptFiles(true)) {
+      if (target && file.sourceFile !== target && file.sourceFile !== current) continue;
       if (file.currentFile) previous.push(file);
-      else yield* this.discoverFile(file, selection, currentCwds);
+      else for await (const source of this.discoverFileSafely(this.discoverFile(file, selection, currentCwds), options)) {
+        if (!target || source.sourceFile === target) yield source;
+      }
     }
-    for (const file of previous) yield* this.discoverFile(file, selection, currentCwds);
+    for (const file of previous) yield* this.discoverFileSafely(this.backupSources(file, selection, currentCwds), options);
+  }
+
+  private async *backupSources(file: TranscriptFile, selection: ScanSelection, currentCwds: Map<string, string>) {
+    try {
+      yield* this.discoverFile(file, selection, currentCwds);
+    } catch (error) {
+      if (!(error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM"))) throw error;
+      // Directory discovery still sees the backup. Its unreadable contents cannot establish absence.
+    }
   }
 
   private async *discoverFile(
@@ -69,7 +85,7 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
   ): AsyncGenerator<TranscriptSource<ClaudeTranscriptEntry>> {
     const { sourceFile, currentFile } = file;
     const currentFilePath = currentFile && this.config.claudePath ? relative(this.config.claudePath, currentFile) : undefined;
-    const selectedProject = selection.projectPaths?.some(path => path.length > 0 && relative(path, file.projectDir) === "");
+    const selectedProject = selection.projectPaths?.some(path => matchesRecordedPath(path, file.projectDir, true));
     const requestedIds = selection.projectPaths?.length ? undefined : new Set(selection.sessionIds);
     // One file can contain several native IDs. Keep only each ID's selection by its first usable cwd.
     const sessions = new Map<string, SelectedSession>();
@@ -116,17 +132,31 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
     }
   }
 
-  confirmedAbsent(paths: readonly string[]): Promise<string[]> {
+  /** Recheck backups of an acknowledged current path even if project selection no longer finds their cwd. */
+  async *recoveryCandidates(paths: ReadonlySet<string>) {
     const root = this.config.claudePath;
-    return TranscriptDirectories.absent(root, paths, list => this.presencePaths(list));
+    if (!root || !paths.size) return;
+    for await (const file of this.transcriptFiles(true)) {
+      if (!file.currentFile) continue;
+      const currentPath = relative(root, file.currentFile);
+      if (!paths.has(currentPath)) continue;
+      const sources = await Array.fromAsync(this.discoverFileSafely(this.backupSources(file, {}, new Map()), { onChanged: () => {} }));
+      yield { currentPath, path: relative(root, file.sourceFile), sources };
+    }
   }
 
-  private async *presencePaths(list: DirectoryListing) {
+  confirmedAbsent(paths: readonly string[], excludedCopyPaths: readonly string[] = []): Promise<string[]> {
+    const root = this.config.claudePath;
+    return TranscriptDirectories.absent(root, paths, list => this.presencePaths(list, new Set(excludedCopyPaths)));
+  }
+
+  private async *presencePaths(list: DirectoryListing, excluded: ReadonlySet<string>) {
     const root = this.config.claudePath;
     if (!root) return;
     for await (const file of this.transcriptFiles(true, list)) {
-      yield relative(root, file.sourceFile);
-      if (file.currentFile) yield relative(root, file.currentFile);
+      const path = relative(root, file.sourceFile);
+      yield path;
+      if (file.currentFile && !excluded.has(path)) yield relative(root, file.currentFile);
     }
   }
 
@@ -176,8 +206,8 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
   private transcriptName(name: string, scan: boolean): { stem: string; previousCopy: boolean } | undefined {
     // Date queries keep their original .jsonl file set. A scan also recognizes earlier copies.
     if (scan) {
-      const prior = /^(.+)\.orphaned-\d.*-.+\.jsonl$/.exec(name) ?? /^(.+)\.jsonl\.superseded-\d.*$/.exec(name);
-      if (prior) return { stem: prior[1], previousCopy: true };
+      const stem = claudeCopyStem(name);
+      if (stem) return { stem, previousCopy: true };
     }
     const current = /^(.+)\.jsonl$/.exec(name);
     if (current) return { stem: current[1], previousCopy: false };

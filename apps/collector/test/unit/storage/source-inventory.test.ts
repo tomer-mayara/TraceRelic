@@ -20,8 +20,9 @@ for (const end of [420, 500]) {
     assert.equal(view.observedTotalTokens, 70);
     assert.equal(await store.recordPresence(presence(1, "missing", end)), "conflict");
     assert.equal(await store.recordPresence(presence(2, "missing", end)), "committed");
-    assert.deepEqual(await store.readCheckpoint(source), { version: 2, checkpoint: first.checkpoint });
-    assert.deepEqual(await store.listSources(scope), [{ ...known, version: 2, presence: "missing" }]);
+    const loss = end > 420 ? { offset: end } : undefined;
+    assert.deepEqual(await store.readCheckpoint(source), { version: 2, checkpoint: first.checkpoint, ...(loss && { observedThrough: loss }) });
+    assert.deepEqual(await store.listSources(scope), [{ ...known, version: 2, presence: "missing", ...(loss && { unrecovered: loss }) }]);
     assert.deepEqual(await store.readSession(source), view);
     assert.equal(await store.recordPresence(presence(2, "present", end)), "committed");
     const returned = await store.readSession(source);
@@ -29,7 +30,7 @@ for (const end of [420, 500]) {
     assert.equal(returned?.coverage, end === 420 ? "reported" : "partial");
     if (end > 420) {
       assert.equal(await store.commit(batch(3, 420, { source, checkpoint: { offset: end, parserState: "resumed" } })), "committed");
-      assert.equal((await store.readSession(source))?.coverage, "reported");
+      assert.equal((await store.readSession(source))?.coverage, "partial", "a legacy byte count cannot prove the recovered suffix");
     }
   });
 }
@@ -109,7 +110,7 @@ test("a rewrite at the lost end preserves the old generation's gap while a norma
   assert.equal(view?.missingSources, undefined);
   assert.equal(view?.coverage, "partial");
   assert.equal(view?.observedTotalTokens, 70);
-  assert.deepEqual(await store.listSources(scope), [{ source, location, version: 3, observedEnd: 500, acceptedOffset: 500, presence: "present" }]);
+  assert.deepEqual(await store.listSources(scope), [{ source, location, version: 3, observedEnd: 500, acceptedOffset: 500, presence: "present", unrecovered: { offset: 500 } }]);
 });
 
 test("presence is isolated by source even when two installations share one measured session", async () => {

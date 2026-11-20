@@ -1,12 +1,15 @@
-import { createReadStream } from "node:fs";
-import { isAbsolute, relative, sep } from "node:path";
-import type { harnesses } from "@tracerelic/shared";
-import { isRecordedTimestamp } from "../recorded-timestamp.ts";
-import { CapturedTranscriptFile } from "./captured-transcript-file.ts";
+import { matchesRecordedPath, recordedPathDialect, type harnesses } from "@tracerelic/shared";
+import { compareRecordedInstants, isHistoryTimestamp, recordedInstant } from "../recorded-timestamp.ts";
+import { CapturedTranscriptFile, TranscriptChangedError } from "./captured-transcript-file.ts";
 
 export interface ScanSelection {
   readonly sessionIds?: readonly string[];
   readonly projectPaths?: readonly string[];
+}
+
+export interface SourceDiscoveryOptions {
+  sourceFile?: string;
+  onChanged?: (error: TranscriptChangedError) => void;
 }
 
 export interface LocalHistoryEntry {
@@ -22,6 +25,7 @@ export interface TranscriptEntry<Harness extends LocalHistoryEntry["harness"]> e
   readonly harness: Harness;
   readonly timestamp?: string;
   readonly endOffset: number;
+  readonly recordPrefixDigest?: string;
 }
 
 export interface Transcript<Entry> {
@@ -68,6 +72,7 @@ interface TranscriptSourceInfo {
   readonly fileSize: number;
   readonly previousCopy: boolean;
   readonly codexForkHeader?: { readonly parentSessionId: string; readonly forkedAt?: string };
+  readonly codexHeaderEnd?: number;
   readonly claudeSubagent?: ClaudeSubagent;
   readonly selectionCwd?: string;
   readonly projectDir?: string;
@@ -104,17 +109,44 @@ function isBlankLine(line: Buffer): boolean {
 export abstract class LocalLLMHistory {
   private readonly decoder = new TextDecoder("utf-8", { fatal: true });
 
-  abstract readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]>;
+  protected abstract readWindow(inRange: (timestamp: string) => boolean): Promise<readonly LocalHistoryEntry[]>;
+
+  async readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]> {
+    if (!Number.isFinite(fromDate.getTime()) || !Number.isFinite(toDate.getTime()) || fromDate > toDate) {
+      throw new RangeError("Expected valid dates with fromDate at or before toDate");
+    }
+    const instant = (date: Date) => ({ second: Math.floor(date.getTime() / 1000),
+      fraction: "0" + String(date.getUTCMilliseconds()).padStart(3, "0").replace(/0+$/, "") });
+    return this.readWindow(this.window(instant(fromDate), instant(toDate)));
+  }
+
+  async readLocalHistoryInstants(from: string, to: string): Promise<readonly LocalHistoryEntry[]> {
+    const start = isHistoryTimestamp(from) && recordedInstant(from);
+    const end = isHistoryTimestamp(to) && recordedInstant(to);
+    if (!start || !end || compareRecordedInstants(start, end) > 0) throw new RangeError("Expected valid instants with from at or before to");
+    return this.readWindow(this.window(start, end));
+  }
+
+  private window(start: { second: number; fraction: string }, end: typeof start) {
+    return (timestamp: string) => {
+      const at = isHistoryTimestamp(timestamp) && recordedInstant(timestamp);
+      return !!at && compareRecordedInstants(start, at) <= 0 && compareRecordedInstants(at, end) < 0;
+    };
+  }
+
+  protected async *discoverFileSafely<T>(file: AsyncIterable<T>, options: SourceDiscoveryOptions): AsyncGenerator<T> {
+    try {
+      yield* file;
+    } catch (error) {
+      if (!(error instanceof TranscriptChangedError) || !options.onChanged) throw error;
+      options.onChanged(error);
+    }
+  }
 
   protected selected({ sessionIds = [], projectPaths = [] }: ScanSelection, sessionId: string, cwd: unknown): boolean {
     if (!sessionIds.length && !projectPaths.length) return true;
     if (sessionIds.includes(sessionId)) return true;
-    if (typeof cwd !== "string" || !cwd.length) return false;
-    return projectPaths.some(root => {
-      if (!root.length) return false;
-      const path = relative(root, cwd);
-      return !isAbsolute(path) && path !== ".." && !path.startsWith(".." + sep);
-    });
+    return projectPaths.some(root => matchesRecordedPath(root, cwd));
   }
 
   protected isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,26 +154,11 @@ export abstract class LocalLLMHistory {
   }
 
   protected hasRecordedTimestamp(value: unknown): value is string {
-    return typeof value === "string"
-      && /^\d{4}-\d{2}-\d{2}T.*(Z|[+-]\d{2}:\d{2})$/i.test(value)
-      && isRecordedTimestamp(value);
-  }
-
-  protected dateFilter(fromDate: Date, toDate: Date): (timestamp: string) => boolean {
-    const from = fromDate.getTime();
-    const to = toDate.getTime();
-    if (!Number.isFinite(from) || !Number.isFinite(to) || from > to) {
-      throw new RangeError("Expected valid dates with fromDate at or before toDate");
-    }
-    return timestamp => {
-      // A Date window has millisecond endpoints. A leap second still belongs before the next minute.
-      const instant = Date.parse(timestamp.replace(/:60(?:\.\d+)?(?=Z|[+-])/i, ":59.999"));
-      return from <= instant && instant < to && this.hasRecordedTimestamp(timestamp);
-    };
+    return isHistoryTimestamp(value);
   }
 
   protected workingDirectory(value: unknown): string | undefined {
-    if (typeof value === "string" && isAbsolute(value) && !value.includes("\0")) return value;
+    if (typeof value === "string" && recordedPathDialect(value)) return value;
   }
 
   protected transcriptSource<H extends LocalHistoryEntry["harness"]>(source: SelectedFile<H>): TranscriptSource<TranscriptEntry<H>> {
@@ -161,7 +178,7 @@ export abstract class LocalLLMHistory {
   ): Promise<Transcript<TranscriptEntry<H>> | undefined> {
     const entries: TranscriptEntry<H>[] = [];
     for await (const batch of source.readBatches(beginning)) {
-      for (const { startOffset: _startOffset, afterBlankPrefix: _afterBlankPrefix, ...entry } of batch.entries) entries.push(entry);
+      for (const { startOffset: _startOffset, afterBlankPrefix: _afterBlankPrefix, recordPrefixDigest: _digest, ...entry } of batch.entries) entries.push(entry);
     }
     const last = entries.at(-1);
     if (last) return { sessionId: source.sessionId, sourceFile: source.sourceFile, entries, endOffset: last.endOffset };
@@ -174,12 +191,30 @@ export abstract class LocalLLMHistory {
     if (![position.offset, position.lineNumber, endOffset].every(n => Number.isSafeInteger(n) && n >= 0)) {
       throw new RangeError("Expected nonnegative byte and line positions");
     }
-    const { file, harness, sessionId } = source;
-    if (position.offset >= Math.min(file.fileSize, endOffset)) {
-      await file.verifyPath();
-      return;
+    const { file } = source;
+    let cursor = position;
+    while (cursor.offset < Math.min(file.fileSize, endOffset)) {
+      const revision = file.statRevision;
+      let reopen = false;
+      for await (const batch of this.readCapture(source, cursor, maxBatchBytes, endOffset)) {
+        cursor = batch.next;
+        yield batch;
+        if (file.statRevision !== revision) {
+          // Discard prefetched bytes after a verified append and resume from the verified batch hash.
+          reopen = true;
+          break;
+        }
+      }
+      if (!reopen) return;
     }
-    const hash = await file.startBatch(position.offset);
+    await file.verifyPath();
+  }
+
+  private async *readCapture<H extends LocalHistoryEntry["harness"]>(
+    source: SelectedFile<H>, position: ReadPosition, maxBatchBytes: number, endOffset: number,
+  ): AsyncGenerator<RecordBatch<TranscriptEntry<H>>> {
+    const { file, harness, sessionId } = source;
+    const { hash, revision } = await file.startBatch(position.offset);
     let records: BatchRecords<TranscriptEntry<H>> = { entries: [] };
     let next = position;
     let batchStart = position.offset;
@@ -187,8 +222,7 @@ export abstract class LocalLLMHistory {
       const startOffset = next.offset;
       const offset = startOffset + line.length + 1;
       if (next.offset > batchStart && offset - batchStart > maxBatchBytes) {
-        await file.verifyPath();
-        yield { ...records, next, prefixDigest: file.finishBatch(next.offset, hash) };
+        yield { ...records, next, prefixDigest: await file.finishBatch(next.offset, hash, revision) };
         records = { entries: [] };
         batchStart = next.offset;
       }
@@ -199,20 +233,21 @@ export abstract class LocalLLMHistory {
       if (record && source.matches(record, lineNumber)) {
         const { timestamp } = record;
         records.entries.push({ harness, sessionId, sourceFile: file.sourceFile, record, lineNumber, startOffset, endOffset: offset,
+          ...((record.type === "response_item" || record.type === "event_msg" || record.type === "user" || record.type === "assistant")
+            && { recordPrefixDigest: hash.copy().digest("hex") }),
           ...(offset === source.blankPrefixHeaderEnd && { afterBlankPrefix: true }),
           ...(this.hasRecordedTimestamp(timestamp) ? { timestamp } : {}) });
       } else if (!record && !isBlankLine(line)) {
         (records.damagedLines ??= []).push({ lineNumber, startOffset, endOffset: offset });
       }
       if (offset - batchStart >= maxBatchBytes) {
-        await file.verifyPath();
-        yield { ...records, next, prefixDigest: file.finishBatch(next.offset, hash) };
+        yield { ...records, next, prefixDigest: await file.finishBatch(next.offset, hash, revision) };
         records = { entries: [] };
         batchStart = offset;
       }
     }
-    await file.verifyPath();
-    if (next.offset > batchStart) yield { ...records, next, prefixDigest: file.finishBatch(next.offset, hash) };
+    if (next.offset > batchStart) yield { ...records, next, prefixDigest: await file.finishBatch(next.offset, hash, revision) };
+    else await file.verifyPath();
   }
 
   protected inspectFile<T>(sourceFile: string, inspect: (records: AsyncIterable<DecodedRecord>) => Promise<T>, include?: (line: Buffer) => boolean) {
@@ -220,7 +255,7 @@ export abstract class LocalLLMHistory {
   }
 
   protected readRecords(sourceFile: string): AsyncIterable<DecodedRecord> {
-    return this.decodeRecords(createReadStream(sourceFile));
+    return this.decodeRecords(CapturedTranscriptFile.read(sourceFile));
   }
 
   private async *decodeRecords(chunks: AsyncIterable<Buffer>, include?: (line: Buffer) => boolean): AsyncGenerator<DecodedRecord> {

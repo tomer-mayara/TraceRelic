@@ -1,7 +1,7 @@
 import type { TranscriptSource } from "../history/index.ts";
 import {
   StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
-  type PresenceWrite, type SessionKey, type SourceScope, type StreamKey,
+  type PresenceWrite, type SessionKey, type SourceLocation, type SourceScope, type StreamKey,
 } from "../storage/collector-storage.ts";
 import { jsonDigest } from "./chat-parser-state.ts";
 import type { PendingScan } from "./scan-pending.ts";
@@ -52,8 +52,13 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
   private readonly created = new Set<string>();
   private readonly rechecked = new Set<string>();
   private failedInventory?: { id: string; since: number };
+  private changingFile?: { path: string; since: number };
 
   constructor(private readonly storage: CollectorStorage, readonly now: () => number = Date.now) {}
+
+  resolveSource(source: StreamKey, location: SourceLocation, verify: (checkpoint: Checkpoint) => Promise<boolean>) {
+    return this.storage.resolveSource?.(source, location, verify) ?? Promise.resolve(source);
+  }
 
   beginPass(): void {
     this.created.clear();
@@ -63,11 +68,12 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
 
   finishPass(outcome: ScheduledScanOutcome): ScheduledScanReport {
     if (outcome.status === "complete" || outcome.status === "rejected") {
+      this.changingFile = undefined;
       for (const id of this.rechecked) {
         if (this.sources.get(id)?.through === undefined) this.sources.delete(id);
       }
     }
-    let oldest = Infinity;
+    let oldest = this.changingFile?.since ?? Infinity;
     for (const { since } of this.sources.values()) oldest = Math.min(oldest, since);
     for (const since of this.inventories.values()) oldest = Math.min(oldest, since);
     const oldestPendingAgeMs = oldest === Infinity ? null : Math.max(0, this.now() - oldest);
@@ -75,7 +81,9 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
   }
 
   pending(report: PendingScan): void {
-    if (report.source) {
+    if (report.reason === "source-changed" && report.sourceFile) {
+      if (this.changingFile?.path !== report.sourceFile) this.changingFile = { path: report.sourceFile, since: this.now() };
+    } else if (report.source) {
       this.hold(report.source, this.now(), { through: report.byteRange?.endOffset });
     } else {
       const id = scopeId(report.scope);

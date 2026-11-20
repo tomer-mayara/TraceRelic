@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { InMemoryCollectorStorage } from "@tracerelic/collector/memory-storage";
+import { HttpCollectorStorage } from "@tracerelic/collector/http-storage";
 import { LostConnectionFixture } from "#collector-fixture/lost-connection-fixture";
 import { CollectorApi } from "#src/collector-api";
 import { CollectorCredentials } from "#src/collector-credentials";
@@ -38,10 +39,13 @@ export class RemoteSyncFixture {
     await Promise.all([this.relay.close(), this.server.close(), this.upload.close()]);
   }
 
+  httpStorage() { return new HttpCollectorStorage(this.address, this.token); }
+
   scan(config = this.upload.transcript.config): Promise<ScanExit> {
     const env = { ...process.env, TRACERELIC_COLLECTOR_API_URL: this.address, TRACERELIC_COLLECTOR_TOKEN: this.token };
+    const command = [cli, "scan", "--once", "--config", config];
     return new Promise((resolve, reject) => {
-      execFile("bun", [cli, "scan", "--once", "--config", config], { env, timeout: 10_000 }, (error, stdout, stderr) => {
+      execFile("bun", command, { env, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }, (error, stdout, stderr) => {
         const code = error ? error.code : 0;
         if (typeof code !== "number") { reject(error); return; }
         resolve({ code, stdout, stderr });

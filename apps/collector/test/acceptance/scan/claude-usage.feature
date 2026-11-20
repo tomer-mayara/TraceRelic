@@ -6,3 +6,8 @@ Feature: Keep one measurement per Claude request
     When I scan both rows and replay the earlier report
     Then the session has one request with 40 input tokens and 91 output tokens
     And the session total is 131
+
+  Scenario: A copy supplies the ID for an advisor at its recorded position
+    Given two copies report the same 10-token executor and 6-token advisor
+    When the copies are scanned in both orders with an advisor ID in one copy
+    Then each session shows 16 tokens and one advisor measurement

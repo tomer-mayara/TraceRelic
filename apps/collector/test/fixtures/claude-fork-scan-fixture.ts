@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
-import type { StreamKey } from "../../src/storage/collector-storage.ts";
+import type { CollectorStorage, StreamKey } from "../../src/storage/collector-storage.ts";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 
@@ -63,7 +63,7 @@ export class ClaudeForkScanFixture {
       requestId: "parent-request", messageId: "parent-message", text: "Inherited answer", tokens, ...options })]);
   }
 
-  async writeCopy(tokens = 100, options: { originalUuid?: string; agent?: string; withPrompt?: boolean; provisional?: boolean; omitRequest?: boolean } = {}) {
+  async writeCopy(tokens = 100, options: { originalUuid?: string; agent?: string; withPrompt?: boolean; provisional?: boolean; omitRequest?: boolean; advisorTokens?: number } = {}) {
     const { originalUuid = "original-row", agent = "helper", withPrompt = false } = options;
     const evidence = { messageId: "parent-message", text: "Inherited answer", tokens, provisional: options.provisional };
     const row = this.kind === "fork"
@@ -71,6 +71,10 @@ export class ClaudeForkScanFixture {
         requestId: options.omitRequest ? undefined : "remapped-request", timestamp: "2026-02-01T12:02:00Z" }),
         forkedFrom: { sessionId: "parent", messageUuid: originalUuid } }
       : call({ ...evidence, sessionId: "parent", uuid: "original-row", requestId: "parent-request" });
+    if (options.advisorTokens !== undefined) {
+      Object.assign(row.message.usage, { iterations: [{ type: "advisor_message", id: "advisor-A",
+        input_tokens: options.advisorTokens - 5, output_tokens: 5 }] });
+    }
     const name = this.kind === "fork" ? "forked" : "parent/subagents/agent-" + agent;
     const prefix = withPrompt ? [{
       ...ClaudeProjectFixture.user(row.sessionId, "2026-02-01T12:00:00Z", "Review café"), uuid: "prompt-row",
@@ -88,8 +92,8 @@ export class ClaudeForkScanFixture {
     await appendFile(join(this.roots.child.home, source.streamId), JSON.stringify(row) + "\n");
   }
 
-  async scan(site: Site) {
-    await new CollectorCommand(this.storage).run(["scan", "--once", "--config", join(this.roots[site].home, "collector.json")]);
+  async scan(site: Site, storage: CollectorStorage = this.storage) {
+    await new CollectorCommand(storage).run(["scan", "--once", "--config", join(this.roots[site].home, "collector.json")]);
   }
 
   async snapshot() {

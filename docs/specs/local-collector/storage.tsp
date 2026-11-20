@@ -28,6 +28,7 @@ model StreamKey extends SessionKey {
 
 /** Information used to match the original discovery selection. */
 model SourceLocation {
+  /** Absolute POSIX, drive-qualified Windows or UNC path on the recording installation. */
   root: Identifier;
   /** The Codex rollout basename or the Claude path relative to its configured root. */
   path: Identifier;
@@ -41,6 +42,15 @@ model SourceObservation {
   location: SourceLocation;
   /** Last newline seen in this captured generation, including bytes beyond this batch. */
   observedEnd: Count;
+  /** Hash of the captured bytes through observedEnd. Older observations can lack this evidence. */
+  observedPrefixDigest?: PrefixDigest;
+  /** Captured bytes through the earlier end requested with the checkpoint. */
+  checkedPrefix?: VerifiedPrefix;
+}
+
+model ObservedExtent {
+  offset: Count;
+  prefixDigest?: PrefixDigest;
 }
 
 model SourceScope {
@@ -48,6 +58,7 @@ model SourceScope {
   root: Identifier;
   installationId?: Identifier;
   sessionIds?: Identifier[];
+  /** Match absolute recorded paths using their own platform's separators and component boundaries. */
   projectPaths?: string[];
 }
 
@@ -58,6 +69,24 @@ model AcknowledgedSource extends SourceObservation {
   version: Count;
   acceptedOffset: Count;
   presence: SourcePresence;
+  /** Session version at the last reset. Older inventories may omit it. */
+  generation?: Count;
+  /** Source bytes whose recovery still needs proof. */
+  unrecovered?: ObservedExtent;
+  /** A legacy Codex generation may have supplied a different native session's messages. */
+  codexIdentityStatus?: "unverified" | "messages-repaired" | "repaired";
+}
+
+model VerifiedCodexIdentity {
+  status: "verified";
+  peerSessionId: Identifier;
+  peerStreamId: Identifier;
+  expectedPeerVersion: Count;
+  /** End of the first native session header in the same captured transcript. */
+  headerEnd: Count;
+  /** Old checkpoint and acknowledged peer checkpoint proved against one capture. */
+  accepted: VerifiedPrefix;
+  peer: VerifiedPrefix;
 }
 
 model PresenceWrite extends SourceObservation {
@@ -65,6 +94,10 @@ model PresenceWrite extends SourceObservation {
   expectedVersion: Count;
   expectedOffset: Count;
   presence: SourcePresence;
+  /** Retract a journaled message only when the accepted generation records a physical line boundary
+   * and the peer corroborates its position in the same installation. An identified legacy scanner
+   * file with an empty decoder can record an unverified observation. */
+  codexIdentity?: { status: "unverified" } | VerifiedCodexIdentity;
 }
 
 model MissingSource {
@@ -83,11 +116,15 @@ model VerifiedPrefix {
   prefixDigest: PrefixDigest;
 }
 
-@extension("dependentRequired", #{ claudeCallOrigins: #["prefixDigest"] })
+@extension("dependentRequired", #{ claudeCallOrigins: #["prefixDigest"], evidenceVersion: #["prefixDigest"] })
 @extension("not", #{ required: #["claudeCallOrigins", "codexFork"] })
 model Checkpoint {
   offset: Count;
   parserState: string;
+  /** The scanner has reconciled the accepted bytes with the current message and usage identity rules.
+   * After accepting a positive offset, only a verified full-prefix repair can add this marker within
+   * the same generation. Appends, usage corrections and parser-only upgrades preserve it. */
+  evidenceVersion?: 1;
   /** Older checkpoints can lack this evidence. After it is saved, each write supplies a digest.
    * A parser-only upgrade at the same byte preserves the accepted digest. */
   prefixDigest?: PrefixDigest;
@@ -128,6 +165,8 @@ model CheckpointSnapshot {
   /** All sources for the session share this version. A new session starts at zero. */
   version: Count;
   checkpoint: Checkpoint | null;
+  /** Complete bytes previously observed beyond the accepted prefix, or an outstanding loss. */
+  observedThrough?: ObservedExtent;
 }
 
 model Metadata {
@@ -157,6 +196,14 @@ model BranchObservation {
   sourceOrder: SourceOrder;
 }
 
+model MessageOrigin {
+  sourceOrder: SourceOrder;
+  /** Digest of the logical transcript through this complete record's newline. */
+  prefixDigest: PrefixDigest;
+  /** Apply a later native mirror only to a previously accepted occurrence with this proof. */
+  refinesAccepted?: true;
+}
+
 model TokenCounts {
   inputTokens: Count;
   outputTokens: Count;
@@ -177,6 +224,7 @@ model CacheWriteDurations {
 /** A whole provider observation. At least one native message or request ID is required.
  * An advisor iteration belongs to the same request and has its own measurement. */
 @extension("anyOf", #[#{ required: #["messageId"] }, #{ required: #["requestId"] }])
+@extension("dependentRequired", #{ iterationPosition: #["iterationId"] })
 model ClaudeUsageReport extends TokenCounts {
   ...CacheWriteDurations;
   at: utcDateTime;
@@ -186,6 +234,9 @@ model ClaudeUsageReport extends TokenCounts {
   turnId?: Identifier;
   `model`?: string;
   iterationId?: Identifier;
+  /** Zero-based position of the advisor in this request's ordered iteration list.
+   * Keep this alongside its provider ID when present so copies can agree. */
+  iterationPosition?: Count;
   /** Native evidence about the transcript row. Older writers omit it. */
   origin?: ClaudeCallOrigin;
 }
@@ -218,15 +269,17 @@ model ByteRange {
 union UsageDiagnosticCode {
   "invalid-claude-usage", "unidentified-claude-call", "unsupported-claude-cache-breakdown",
   "unsupported-claude-iteration", "ambiguous-transcript-replay", "malformed-transcript-line",
-  "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork", "unresolved-claude-fork"
+  "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork", "unresolved-claude-fork",
+  "ambiguous-codex-call", "ambiguous-claude-iteration", "unverified-source-history"
 }
 
-@extension("if", #{ properties: #{ code: #{ `enum`: #["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork", "unresolved-claude-fork"] } } })
+@extension("if", #{ properties: #{ code: #{ `enum`: #["malformed-transcript-line", "unsupported-codex-usage", "codex-counter-reset", "unresolved-codex-fork", "unresolved-claude-fork", "ambiguous-codex-call", "ambiguous-claude-iteration"] } } })
 @extension("then", #{ required: #["byteRange"] })
 model UsageDiagnostic {
   code: UsageDiagnosticCode;
   sourceOrder: SourceOrder;
-  /** Scans include the exact range. Earlier line-only diagnostics remain readable. */
+  /** Scans include the exact range for a damaged row. Unverified source history identifies the
+   * entire earlier generation at line one. Earlier line-only diagnostics remain readable. */
   byteRange?: ByteRange;
 }
 
@@ -235,6 +288,8 @@ model SourceUsageDiagnostic extends UsageDiagnostic {
   installationId?: Identifier;
 }
 
+@extension("if", #{ required: #["responseId"] })
+@extension("then", #{ required: #["kind"], properties: #{ kind: #{ `const`: "call" } } })
 model Usage extends TokenCounts {
   ...CacheWriteDurations;
   id: Identifier;
@@ -250,6 +305,8 @@ model Usage extends TokenCounts {
   iterationId?: Identifier;
   turnId?: Identifier;
   requestId?: Identifier;
+  /** Native Codex Responses API response ID when the provider recorded one. */
+  responseId?: Identifier;
 }
 
 /** A single verified progression of cumulative counters. The parts together account
@@ -280,6 +337,19 @@ model UsageAnchor {
   after?: TokenCounts;
 }
 
+/** Session-local measurement IDs that describe one call. A less specific ID can
+ * have several candidates and then cannot identify a call alone. */
+@extension("dependentRequired", #{ sourceOrder: #["byteRange"], byteRange: #["sourceOrder"] })
+model CodexCallAlias {
+  callUsageId: Identifier;
+  aliasUsageId: Identifier;
+  sourceOrder?: SourceOrder;
+  byteRange?: ByteRange;
+  /** Per-call usage recorded with this cumulative endpoint. One native response
+   * and one compatible legacy last call can identify the same closing call. */
+  closing?: { inputTokens: Count; outputTokens: Count; turnId?: Identifier; responseId?: Identifier; };
+}
+
 @extension("if", #{ properties: #{ checkpoint: #{ type: "object", required: #["claudeCallOrigins"] } } })
 @extension("then", #{ properties: #{
   source: #{ type: "object", properties: #{ harness: #{ `const`: "claude" } } },
@@ -295,9 +365,15 @@ model Batch {
   /** Position where metadata.branch was recorded. */
   branchObservation?: BranchObservation;
   messages: Message[];
+  /** Prove equivalent message occurrences in copies of the same logical transcript. */
+  messageOrigins?: MessageOrigin[];
+  /** At the same byte, replace this source generation's contribution using its verified accepted prefix.
+   * For a Claude backup, keep the fallback metadata fields and precedence established by its original writes. */
+  repairEvidenceFrom?: Checkpoint;
   usage: Usage[];
   /** Bind a reliable native call to its workspace owner. Copied reports can name their verified parent. */
   codexCallClaims?: CodexCallClaim[];
+  codexCallAliases?: CodexCallAlias[];
   /** Replace this stream's usage for the verified checkpoint using the new fork evidence.
    * Compare the exact saved checkpoint. Keep messages, other streams and earlier transcript generations. */
   reconcileCodexForkFrom?: Checkpoint;

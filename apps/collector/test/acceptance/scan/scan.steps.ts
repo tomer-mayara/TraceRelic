@@ -9,6 +9,8 @@ import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 import { scanContract as contract } from "../../fixtures/scan-contract.ts";
 import "./fork-totals.steps.ts";
 import "./claude-fork.steps.ts";
+import "./claude-copy-metadata.steps.ts";
+import "./usage-evidence.steps.ts";
 import "./codex-fork.steps.ts";
 import "./isolate-rejected-batch.steps.ts";
 import "./missing-source.steps.ts";
@@ -102,6 +104,17 @@ Given("a selected Codex session contains the prompt {string} and the reply {stri
 
 When("I scan its root once", async function (this: ScanScenario) {
   await this.fixture.scan("--session", this.fixture.codexKey.sessionId);
+});
+
+Given("the paginated rollout records model input and a different completed prompt and answer", async function (this: ScanScenario) {
+  await this.fixture.writePaginatedChat();
+});
+
+Then("only the completed prompt and answer appear with their native item IDs", async function (this: ScanScenario) {
+  const session = await this.fixture.storage.readSession(this.fixture.codexKey);
+  assert.deepEqual(session?.messages.map(row => [row.id, row.text]), [
+    ["native:u:0", "Visible question"], ["native:a:0", "Visible answer"],
+  ]);
 });
 
 Then("its session contains both messages in source order with their roles and recorded times", async function (this: ScanScenario) {

@@ -34,8 +34,8 @@ test("a warm writer applies intervening writes from another connection and skips
   assert.deepEqual(db.saved.map(row => row.sessions.map(({ version }) => version)), [[1], [2], [3]]);
   assert.equal(db.saved[1].inventory?.presence, "missing");
   assert.equal(db.saved[2].inventory?.presence, "present");
-  assert.deepEqual(db.saved[2].sessions[0].view.messages, batch.messages);
-  assert.deepEqual(db.saved[2].sessions[0].view.usage, next.usage);
+  assert.deepEqual(db.saved[2].sessions[0].messages, { upserts: [], removed: [] });
+  assert.deepEqual(db.saved[2].sessions[0].usage.upserts, [{ ordinal: 1, record: next.usage[0] }]);
 });
 
 test("a cold writer replays a long journal in bounded pages before applying the next correction", async () => {
@@ -48,7 +48,7 @@ test("a cold writer replays a long journal in bounded pages before applying the 
   assert.equal(await restarted.commit(next), "committed");
   assert.equal(db.cursors[0], "0");
   assert(db.cursors.length > 1, "cold recovery must fetch the accepted writes in pages");
-  assert.deepEqual(db.saved[130].sessions[0].view.usage, next.usage);
+  assert.deepEqual(db.saved[130].sessions[0].usage.upserts, [{ ordinal: 1, record: next.usage[0] }]);
 });
 
 for (const failure of ["rollback", "lost-reply"] as const) {
@@ -65,7 +65,7 @@ for (const failure of ["rollback", "lost-reply"] as const) {
     assert.equal(db.saved.length, 2);
     assert.equal(await store.commit(revision(2)), "committed");
     assert.equal(db.saved[2].sessions[0].version, 3);
-    assert.deepEqual(db.saved[2].sessions[0].view.messages, batch.messages);
+    assert.deepEqual(db.saved[2].sessions[0].messages, { upserts: [], removed: [] });
   });
 }
 
@@ -99,4 +99,16 @@ test("an overlapping local write waits for an unconfirmed transaction", async ()
   await first;
   assert.equal(await second, "committed");
   assert.equal(db.saved.length, 1);
+});
+
+test("inserting a message earlier changes its and the shifted message's ordinals only", async () => {
+  const db = new CollectorTransactionFixture();
+  const store = new PostgresCollectorStorage(db, "ordered");
+  const later = { ...batch.messages[0], sourceOrder: 2 };
+  const earlier = { ...batch.messages[0], id: "earlier" };
+  assert.equal(await store.commit({ ...batch, messages: [later] }), "committed");
+  assert.equal(await store.commit({ ...revision(1), messages: [earlier], usage: [] }), "committed");
+  assert.deepEqual(db.saved[1].sessions[0].messages.upserts,
+    [{ ordinal: 1, record: earlier }, { ordinal: 2, record: later }]);
+  assert.deepEqual(db.saved[1].sessions[0].usage, { upserts: [], removed: [] });
 });

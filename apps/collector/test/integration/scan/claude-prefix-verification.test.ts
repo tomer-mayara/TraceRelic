@@ -38,7 +38,7 @@ test("two Claude sessions in one file verify their different saved offsets toget
     }
   });
   const views = await freshScan();
-  assert.deepEqual(requests, [[firstOffset, secondOffset]]);
+  assert.deepEqual(requests, [[firstOffset, secondOffset, (await stat(file)).size]]);
   assert.deepEqual(views.map(view => [view.key.sessionId, view.messages.map(message => message.text)]), [
     ["a", ["First session", "New text"]], ["b", ["Second session"]],
   ]);

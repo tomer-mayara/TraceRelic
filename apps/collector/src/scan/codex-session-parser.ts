@@ -35,14 +35,14 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
       parser,
       read(entries: readonly CodexRolloutEntry[], damagedLines?: readonly DamagedLine[]) {
         // Version 1 already saved the chat state. Only the earlier empty checkpoint needs to reconstruct it.
-        if (!oldChat) parser.chat.decodeBatch(entries);
+        if (!oldChat) parser.chat.decodeBatch(entries, damagedLines);
         return parser.counts.decodeBatch(entries, damagedLines);
       },
     };
   }
 
-  prepareLookahead(first: readonly CodexRolloutEntry[], tail: AsyncIterable<RecordBatch<CodexRolloutEntry>>, line: number): Promise<void> {
-    return this.chat.prepareLookahead(first, tail, line);
+  prepareLookahead(first: readonly CodexRolloutEntry[], tail: AsyncIterable<RecordBatch<CodexRolloutEntry>>, line: number, damage?: readonly DamagedLine[]): Promise<void> {
+    return this.chat.prepareLookahead(first, tail, line, damage);
   }
 
   get awaitingBaseline(): boolean {
@@ -50,7 +50,7 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
   }
 
   decodeBatch(entries: readonly CodexRolloutEntry[], damagedLines?: readonly DamagedLine[]): DecodedChat {
-    const chat = this.chat.decodeBatch(entries);
+    const chat = this.chat.decodeBatch(entries, damagedLines);
     if (this.parentId) chat.metadata.parentSessionId = this.parentId;
     return { ...chat, ...this.counts.decodeBatch(entries, damagedLines) };
   }

@@ -1,40 +1,97 @@
 import { createHash, type Hash } from "node:crypto";
 import type { BigIntStats } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import { createZstdDecompress } from "node:zlib";
 
 export class TranscriptChangedError extends Error {
   constructor(readonly sourceFile: string, cause?: unknown) {
-    super(`Transcript changed while reading ${sourceFile}`, { cause });
+    super("Transcript changed while reading " + sourceFile, { cause });
     this.name = "TranscriptChangedError";
   }
 }
 
+function rethrowMissing(sourceFile: string, error: unknown): never {
+  if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+    throw new TranscriptChangedError(sourceFile, error);
+  }
+  throw error;
+}
+
+function unchanged(before: BigIntStats, after: BigIntStats): boolean {
+  return before.dev === after.dev && before.ino === after.ino && before.size === after.size
+    && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
+}
+
 export class CapturedTranscriptFile {
-  readonly fileSize: number;
+  private readonly physicalSize: number;
+  private logicalSize = 0;
+  private finalNewline = 0;
+  private seal = "";
+  private revision = 0;
   private readonly beginning = { offset: 0, hash: createHash("sha256") };
   private readonly verified = new Map<number, Hash>([[0, this.beginning.hash]]);
   private latestBatch?: { offset: number; hash: Hash };
-  private finalNewline?: Promise<number>;
 
   private constructor(readonly sourceFile: string, private observed: BigIntStats) {
-    this.fileSize = Number(observed.size);
-    if (!Number.isSafeInteger(this.fileSize)) throw new RangeError(`Transcript exceeds the supported byte range: ${sourceFile}`);
+    this.physicalSize = Number(observed.size);
+    this.checkSize(this.physicalSize);
   }
 
+  get fileSize(): number { return this.logicalSize; }
+  get statRevision(): number { return this.revision; }
+
   static async inspect<T>(sourceFile: string, inspect: (chunks: AsyncIterable<Buffer>) => Promise<T>) {
-    const handle = await open(sourceFile, "r");
+    const handle = await open(sourceFile, "r").catch(error => rethrowMissing(sourceFile, error));
     try {
       const file = new CapturedTranscriptFile(sourceFile, await handle.stat({ bigint: true }));
-      const result = await inspect(file.readRange(handle, 0, file.fileSize));
-      await file.verifyPath();
-      return { file, result };
+      const chunks = file.capture(handle);
+      try {
+        // Discovery can stop at a header. Keep hashing the very same stream through the fixed extent.
+        const result = await inspect({ [Symbol.asyncIterator]: () => ({ next: () => chunks.next() }) });
+        for await (const _chunk of chunks) { /* drain the bytes after the last discovery record */ }
+        await file.verifyPath();
+        return { file, result };
+      } finally {
+        await chunks.return(undefined);
+      }
     } finally {
       await handle.close();
     }
   }
 
+  /** A raw date query reads one fixed file range without retaining its contents or a descriptor. */
+  static async *read(sourceFile: string): AsyncGenerator<Buffer> {
+    const handle = await open(sourceFile, "r");
+    try {
+      const file = new CapturedTranscriptFile(sourceFile, await handle.stat({ bigint: true }));
+      yield* file.readRange(handle, 0, Infinity);
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private async *capture(handle: FileHandle): AsyncGenerator<Buffer> {
+    const hash = createHash("sha256");
+    for await (const chunk of this.readRange(handle, 0, Infinity)) {
+      const index = chunk.lastIndexOf(0x0a);
+      if (index >= 0) this.finalNewline = this.logicalSize + index + 1;
+      this.logicalSize += chunk.length;
+      this.checkSize(this.logicalSize);
+      hash.update(chunk);
+      yield chunk;
+    }
+    this.seal = hash.copy().digest("hex");
+    this.verified.set(this.logicalSize, hash);
+  }
+
+  private checkSize(size: number): void {
+    if (!Number.isSafeInteger(size)) throw new RangeError("Transcript exceeds the supported byte range: " + this.sourceFile);
+  }
+
   async *chunks(start: number, end: number): AsyncGenerator<Buffer> {
-    const handle = await this.openVerified();
+    const handle = await this.openChecked();
     try {
       yield* this.readRange(handle, start, Math.min(end, this.fileSize));
     } finally {
@@ -43,35 +100,8 @@ export class CapturedTranscriptFile {
   }
 
   async completeEnd(): Promise<number> {
-    this.finalNewline ??= this.findLastNewline();
-    const offset = await this.finalNewline;
     await this.verifyPath();
-    return offset;
-  }
-
-  private async findLastNewline(): Promise<number> {
-    const handle = await this.openVerified();
-    try {
-      let end = this.fileSize;
-      // Most captures end at a newline. Read back in bounded chunks only for an unfinished suffix.
-      let size = 1;
-      while (end > 0) {
-        const start = Math.max(0, end - size);
-        let position = start;
-        let last = 0;
-        for await (const chunk of this.readRange(handle, start, end)) {
-          const index = chunk.lastIndexOf(0x0a);
-          if (index >= 0) last = position + index + 1;
-          position += chunk.length;
-        }
-        if (last) return last;
-        end = start;
-        size = 64 * 1024;
-      }
-      return 0;
-    } finally {
-      await handle.close();
-    }
+    return this.finalNewline;
   }
 
   async prefixDigests(offsets: readonly number[]): Promise<{ offset: number; prefixDigest: string }[]> {
@@ -80,35 +110,52 @@ export class CapturedTranscriptFile {
     }
     const missing = [...new Set(offsets)].filter(offset => !this.verified.has(offset)).sort((a, b) => a - b);
     if (missing.length) {
+      const revision = this.revision;
       const { offset: start, hash } = this.hashBefore(missing[0]);
-      let position = start;
-      const handle = await this.openVerified();
-      try {
-        const snapshots = new Map<number, Hash>();
-        for (const offset of missing) {
-          for await (const chunk of this.readRange(handle, position, offset)) hash.update(chunk);
-          snapshots.set(offset, hash.copy());
-          position = offset;
-        }
-        await this.verifyPath();
-        for (const [offset, snapshot] of snapshots) this.verified.set(offset, snapshot);
-      } finally {
-        await handle.close();
-      }
+      const end = missing[missing.length - 1];
+      const snapshots = await this.hashOffsets(this.chunks(start, end), start, hash, missing, end);
+      await this.verifyPath(snapshots, revision);
+      for (const [offset, snapshot] of snapshots) this.verified.set(offset, snapshot);
     } else await this.verifyPath();
-    return offsets.map(offset => ({ offset, prefixDigest: this.hashBefore(offset).hash.digest("hex") }));
-  }
-
-  async startBatch(offset: number): Promise<Hash> {
-    const { offset: start, hash } = this.hashBefore(offset);
-    if (start < offset) {
-      for await (const chunk of this.chunks(start, offset)) hash.update(chunk);
+    const result = offsets.map(offset => ({ offset, prefixDigest: this.hashBefore(offset).hash.digest("hex") }));
+    // A caller can request many checkpoints over the lifetime of one capture. Only the cache is bounded.
+    for (const offset of this.verified.keys()) {
+      if (this.verified.size <= 64) break;
+      if (offset !== 0 && offset !== this.fileSize) this.verified.delete(offset);
     }
-    return hash;
+    return result;
   }
 
-  finishBatch(offset: number, hash: Hash): string {
-    // Another reader can start at this boundary while the current reader is suspended.
+  /** Read all requested snapshots in one pass, including when a compressed range must start at byte zero. */
+  private async hashOffsets(chunks: AsyncIterable<Buffer>, position: number, hash: Hash, offsets: number[], end: number) {
+    const snapshots = new Map<number, Hash>();
+    let next = 0;
+    if (offsets[0] === position) snapshots.set(offsets[next++], hash.copy());
+    for await (const chunk of chunks) {
+      const following = position + chunk.length;
+      let start = 0;
+      while (next < offsets.length && offsets[next] <= following) {
+        const cut = offsets[next] - position;
+        hash.update(chunk.subarray(start, cut));
+        snapshots.set(offsets[next++], hash.copy());
+        start = cut;
+      }
+      hash.update(chunk.subarray(start));
+      position = following;
+    }
+    if (position !== end || next !== offsets.length) throw new TranscriptChangedError(this.sourceFile);
+    return snapshots;
+  }
+
+  async startBatch(offset: number): Promise<{ revision: number; hash: Hash }> {
+    const revision = this.revision;
+    const { offset: start, hash } = this.hashBefore(offset);
+    if (start < offset) for await (const chunk of this.chunks(start, offset)) hash.update(chunk);
+    return { revision, hash };
+  }
+
+  async finishBatch(offset: number, hash: Hash, revision: number): Promise<string> {
+    await this.verifyPath(new Map([[offset, hash]]), revision);
     this.latestBatch = { offset, hash: hash.copy() };
     return hash.copy().digest("hex");
   }
@@ -123,10 +170,10 @@ export class CapturedTranscriptFile {
     return { offset: closest.offset, hash: closest.hash.copy() };
   }
 
-  private async openVerified(): Promise<FileHandle> {
-    const handle = await open(this.sourceFile, "r").catch(error => this.rethrowMissing(error));
+  private async openChecked(): Promise<FileHandle> {
+    const handle = await open(this.sourceFile, "r").catch(error => rethrowMissing(this.sourceFile, error));
     try {
-      this.verify(await handle.stat({ bigint: true }));
+      this.checkStat(this.observed, await handle.stat({ bigint: true }));
       return handle;
     } catch (error) {
       await handle.close();
@@ -134,27 +181,78 @@ export class CapturedTranscriptFile {
     }
   }
 
-  async verifyPath(): Promise<void> {
-    this.verify(await stat(this.sourceFile, { bigint: true }).catch(error => this.rethrowMissing(error)));
+  async verifyPath(provisional?: Map<number, Hash>, revision = this.revision): Promise<void> {
+    const current = await this.pathStat();
+    this.checkStat(this.observed, current);
+    if (unchanged(this.observed, current) && revision === this.revision) return;
+    // Size growth can include an in-place rewrite. Prove the whole original extent and the actual bytes
+    // accumulated by a reader that overlapped a change before publishing any of its provisional work.
+    const offsets = [...new Set([...(provisional?.keys() ?? []), this.fileSize])].sort((a, b) => a - b);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const handle = await this.openChecked();
+      try {
+        const before = await handle.stat({ bigint: true });
+        const hashes = await this.hashOffsets(this.readRange(handle, 0, Infinity), 0, createHash("sha256"), offsets, this.fileSize);
+        const after = await this.pathStat();
+        this.checkStat(before, after);
+        const digest = (offset: number) => hashes.get(offset)?.copy().digest("hex");
+        if (digest(this.fileSize) !== this.seal) throw new TranscriptChangedError(this.sourceFile);
+        for (const [offset, hash] of provisional ?? []) {
+          if (digest(offset) !== hash.copy().digest("hex")) throw new TranscriptChangedError(this.sourceFile);
+        }
+        if (unchanged(before, after)) {
+          this.checkStat(this.observed, after);
+          if (!unchanged(this.observed, after)) this.revision++;
+          this.observed = after;
+          return;
+        }
+      } finally {
+        await handle.close();
+      }
+    }
+    throw new TranscriptChangedError(this.sourceFile);
   }
 
-  private verify(current: BigIntStats): void {
-    const saved = this.observed;
-    const touched = current.mtimeNs !== saved.mtimeNs || current.ctimeNs !== saved.ctimeNs;
-    if (current.dev !== saved.dev || current.ino !== saved.ino || current.size < saved.size || (current.size === saved.size && touched)) {
-      throw new TranscriptChangedError(this.sourceFile);
-    }
-    this.observed = current;
+  private pathStat() {
+    return stat(this.sourceFile, { bigint: true }).catch(error => rethrowMissing(this.sourceFile, error));
   }
 
-  private rethrowMissing(error: unknown): never {
-    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
-      throw new TranscriptChangedError(this.sourceFile, error);
-    }
-    throw error;
+  private checkStat(before: BigIntStats, after: BigIntStats): void {
+    if (before.dev !== after.dev || before.ino !== after.ino || after.size < before.size
+      || (after.size === before.size && !unchanged(before, after))) throw new TranscriptChangedError(this.sourceFile);
   }
 
   private async *readRange(handle: FileHandle, start: number, end: number): AsyncGenerator<Buffer> {
+    if (start >= end) return;
+    if (!this.sourceFile.endsWith(".jsonl.zst")) {
+      yield* this.rawRange(handle, start, Math.min(end, this.physicalSize));
+      return;
+    }
+    const input = Readable.from(this.rawRange(handle, 0, this.physicalSize), { objectMode: false });
+    const decoder = createZstdDecompress();
+    const observed = this.observed;
+    const decoded = pipeline(input, decoder);
+    // The iterator below propagates errors. The pipeline may settle while the caller holds a batch.
+    void decoded.catch(() => {});
+    try {
+      let offset = 0;
+      for await (const chunk of decoder as AsyncIterable<Buffer>) {
+        const next = offset + chunk.length;
+        if (next > start) yield chunk.subarray(Math.max(0, start - offset), Math.min(chunk.length, end - offset));
+        if (next >= end) break;
+        offset = next;
+      }
+    } catch (error) {
+      if (!unchanged(observed, await this.pathStat())) throw new TranscriptChangedError(this.sourceFile, error);
+      throw error;
+    } finally {
+      input.destroy();
+      decoder.destroy();
+      await decoded.catch(() => {});
+    }
+  }
+
+  private async *rawRange(handle: FileHandle, start: number, end: number): AsyncGenerator<Buffer> {
     let offset = start;
     while (offset < end) {
       const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, end - offset));

@@ -45,20 +45,20 @@ test("an unresolved subagent call requires native corroboration in its parent", 
   assert.deepEqual(f.view("agent").diagnostics.map(row => [row.sourceOrder, row.byteRange]), [[3, { startOffset: 40, endOffset: 55 }]]);
 });
 
-test("matching a copied advisor iteration requires the same iteration in a verified ancestor", () => {
+test("a verified parent request owns a copied advisor even if only a descendant recorded it", () => {
   const f = new F();
   f.submit("c", [
     F.row("copy", "m", "r", { parentSessionId: "p", transcriptUuid: "child" }),
     F.row("copy", "m", "r", { parentSessionId: "p", transcriptUuid: "child" }, "advisor"),
   ], "p");
   f.submit("g", [F.row("copy", "m", "different", { parentSessionId: "c", parentMessageUuid: "child" }, "advisor")], "c");
-  f.submit("p", [F.row("own", "m", "r")]);
-  assert.equal(f.view("c").diagnostics.length, 1);
-  assert.equal(f.view("g").diagnostics.length, 1);
-  const changed = f.submit("p", [F.row("own", "m", "r", {}, "advisor")]);
+  const changed = f.submit("p", [F.row("own", "m", "r")]);
   assert(changed.has("c") && changed.has("g"));
   assert.deepEqual(f.view("c"), { usage: [], diagnostics: [] });
   assert.deepEqual(f.view("g"), { usage: [], diagnostics: [] });
+  assert.deepEqual(f.view("p").usage.map(row => row.iterationId), [undefined, "advisor"]);
+  f.submit("p", [F.row("own", "m", "r", {}, "advisor")]);
+  assert.deepEqual(f.view("p").usage.map(row => row.iterationId), [undefined, "advisor"]);
 });
 
 test("a cycle or contradicted original cannot establish a copied call's owner", () => {

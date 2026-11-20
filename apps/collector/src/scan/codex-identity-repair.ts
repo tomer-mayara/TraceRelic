@@ -1,0 +1,101 @@
+import { TranscriptChangedError, type TranscriptSource } from "../history/index.ts";
+import { legacyScannerLine, needsHistoryVerification, type AcknowledgedSource, type Checkpoint, type CodexIdentityProof, type CollectorStorage,
+  type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
+import { ScanPendingError } from "./scan-pending.ts";
+import { captureProof, readStorage } from "./scan-recovery.ts";
+import { sourceId, type SourceSighting } from "./source-sightings.ts";
+
+interface Seen<Entry> { sighting: SourceSighting; transcript: TranscriptSource<Entry> }
+type IdentitiesAt = (paths: ReadonlySet<string>) => AsyncIterable<{ path: string; sessionId: string }>;
+
+/** A filename only selects candidates. Both accepted checkpoints must match one sealed native capture. */
+export class CodexIdentityRepair {
+  constructor(private readonly storage: CollectorStorage, private readonly scope: SourceScope) {}
+
+  async reconcile<Entry>(known: ReadonlyMap<string, AcknowledgedSource>, seen: Iterable<Seen<Entry>>, identitiesAt?: IdentitiesAt) {
+    const peers = new Map<string, Seen<Entry>[]>();
+    for (const other of seen) {
+      const path = other.sighting.observation.location.path;
+      const located = peers.get(path) ?? [];
+      located.push(other);
+      peers.set(path, located);
+    }
+    const rows = [...known.values()].filter(row => row.acceptedOffset > 0 && (!row.codexIdentityStatus || row.codexIdentityStatus === "unverified"));
+    const outside = new Map<string, Set<string>>();
+    if (identitiesAt && (this.scope.sessionIds?.length || this.scope.projectPaths?.length)) {
+      const paths = new Set(rows.map(row => row.location.path).filter(path => !peers.has(path)));
+      if (paths.size) for await (const { path, sessionId } of identitiesAt(paths)) {
+        const ids = outside.get(path) ?? new Set<string>();
+        ids.add(sessionId);
+        outside.set(path, ids);
+      }
+    }
+    const selected = new Map([...known].filter(([, row]) => row.codexIdentityStatus === "unverified" || row.codexIdentityStatus === "messages-repaired")
+      .map(([id, row]) => [id, row.source]));
+    for (const row of rows) {
+      const candidates = peers.get(row.location.path) ?? [];
+      const otherIds = outside.get(row.location.path);
+      if (!candidates.length && (!otherIds?.size || otherIds.has(row.source.sessionId))) continue;
+      if (await this.repair(row, candidates)) selected.set(sourceId(row.source), row.source);
+    }
+    return [...selected.values()];
+  }
+
+  private async repair<Entry>(row: AcknowledgedSource, candidates: Seen<Entry>[]) {
+    const storage = this.storage;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const { checkpoint, version } = await readStorage(row.source, () => storage.readCheckpoint(row.source));
+      if (!checkpoint || !needsHistoryVerification(row.source, checkpoint, row.location) || row.codexIdentityStatus === "repaired" || row.codexIdentityStatus === "messages-repaired") return false;
+      if (version !== row.version) {
+        const fresh = await this.reload(row.source);
+        if (!fresh) return false;
+        row = fresh;
+        continue;
+      }
+      const proven: CodexIdentityProof[] = [];
+      for (const candidate of candidates) {
+        const proof = await this.proof(checkpoint, candidate);
+        if (proof) proven.push(proof);
+      }
+      const codexIdentity = proven.length === 1 ? proven[0] : { status: "unverified" } as const;
+      if (codexIdentity.status === "unverified" && row.codexIdentityStatus === "unverified") return false;
+      const update = { source: row.source, location: row.location, observedEnd: row.observedEnd, observedPrefixDigest: row.observedPrefixDigest,
+        presence: row.presence, expectedVersion: version, expectedOffset: checkpoint.offset, codexIdentity };
+      try {
+        const result = await readStorage(row.source, () => storage.recordPresence(update));
+        if (result === "committed") return true;
+        if (result === "invalid") throw new Error("Storage rejected Codex source identity evidence");
+      } catch (error) {
+        if (!(error instanceof ScanPendingError)) throw error;
+        const durable = await this.reload(row.source);
+        if (durable && durable.version > version && durable.codexIdentityStatus && durable.codexIdentityStatus !== row.codexIdentityStatus) return true;
+        if (durable && !attempt) { row = durable; continue; }
+        throw error;
+      }
+      const fresh = await this.reload(row.source);
+      if (!fresh) return false;
+      row = fresh;
+    }
+    throw new ScanPendingError("version-conflict", row.source);
+  }
+
+  private reload(source: StreamKey) {
+    return readStorage(source, async () => (await this.storage.listSources({ ...this.scope, sessionIds: [source.sessionId], projectPaths: [] }))
+      .find(row => sourceId(row.source) === sourceId(source)));
+  }
+
+  private async proof<Entry>(old: Checkpoint, { sighting, transcript }: Seen<Entry>): Promise<CodexIdentityProof | undefined> {
+    const headerEnd = transcript.codexHeaderEnd;
+    if (sighting.rejected || !old.prefixDigest || !headerEnd || headerEnd > old.offset || legacyScannerLine(old) === undefined) return;
+    const { checkpoint, version } = await readStorage(sighting.source, () => this.storage.readCheckpoint(sighting.source));
+    if (!checkpoint?.evidenceVersion || !checkpoint.prefixDigest || checkpoint.offset < old.offset) return;
+    try {
+      if (!await captureProof(transcript, old) || !await captureProof(transcript, checkpoint)) return;
+    } catch (error) {
+      if (error instanceof TranscriptChangedError) return;
+      throw error;
+    }
+    return { status: "verified", headerEnd, peerSessionId: sighting.source.sessionId, peerStreamId: sighting.source.streamId, expectedPeerVersion: version,
+      accepted: { offset: old.offset, prefixDigest: old.prefixDigest }, peer: { offset: checkpoint.offset, prefixDigest: checkpoint.prefixDigest } };
+  }
+}
