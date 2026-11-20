@@ -4,7 +4,7 @@ import { BeforeAll, Given, Then, When, setWorldConstructor } from "@cucumber/cuc
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import type {
-  Batch, CollectorStorage, CommitResult, SessionKey, SessionView,
+  Batch, CheckpointSnapshot, CollectorStorage, CommitResult, SessionKey, SessionView,
 } from "../../../src/storage/collector-storage.ts";
 import { initialPlanningBatch, observation, prompt } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
@@ -26,12 +26,20 @@ class StorageScenario {
   batch = initialPlanningBatch();
   readonly source = this.batch.source;
   readonly key: SessionKey = { harness: this.source.harness, sessionId: this.source.sessionId };
+  secondBatch?: Batch;
   result?: CommitResult;
 
-  async commit(): Promise<void> {
-    checkWireValue("Batch", this.batch);
-    this.result = await this.store.commit(this.batch);
+  async commit(batch = this.batch): Promise<void> {
+    checkWireValue("Batch", batch);
+    this.result = await this.store.commit(batch);
     checkWireValue("CommitResult", this.result);
+  }
+
+  async readCheckpoint(source = this.source): Promise<CheckpointSnapshot> {
+    checkWireValue("StreamKey", source);
+    const snapshot = await this.store.readCheckpoint(source);
+    checkWireValue("CheckpointSnapshot", snapshot);
+    return snapshot;
   }
 
   async view(): Promise<SessionView> {
@@ -48,9 +56,22 @@ setWorldConstructor(StorageScenario);
 BeforeAll(function () {
   const { batch } = new StorageScenario();
   checkWireValue("Batch", batch);
+  for (const field of ["expectedVersion", "expectedOffset"] as const) {
+    const incomplete: Partial<Batch> = { ...batch };
+    delete incomplete[field];
+    assert.equal(contract.validate("Batch.json", incomplete), false, field);
+    assert(contract.errors?.some(error => error.params.missingProperty === field), contract.errorsText());
+  }
+  for (const invalid of [null, { checkpoint: null }, { version: 0 }, { version: -1, checkpoint: null }]) {
+    assert.equal(contract.validate("CheckpointSnapshot.json", invalid), false, JSON.stringify(invalid));
+  }
   const message = prompt("Plan");
   const malformed: [Partial<Batch>, string][] = [
+    [{ expectedVersion: -1 }, "/expectedVersion"],
+    [{ expectedVersion: 0.5 }, "/expectedVersion"],
+    [{ expectedVersion: Number.MAX_SAFE_INTEGER + 1 }, "/expectedVersion"],
     [{ expectedOffset: -1 }, "/expectedOffset"],
+    [{ source: { ...batch.source, installationId: "" } }, "/source/installationId"],
     [{ messages: [{ ...message, sourceOrder: 0 }] }, "/messages/0/sourceOrder"],
     [{ messages: [{ ...message, sourceOrder: Number.MAX_SAFE_INTEGER + 1 }] }, "/messages/0/sourceOrder"],
     [{ messages: [{ ...message, blockIndex: -1 }] }, "/messages/0/blockIndex"],
@@ -67,8 +88,8 @@ BeforeAll(function () {
 });
 
 Given("an empty remote storage fixture", async function (this: StorageScenario) {
+  assert.deepEqual(await this.readCheckpoint(), { version: 0, checkpoint: null });
   assert.equal(await this.store.readSession(this.key), null);
-  assert.equal(await this.store.readCheckpoint(this.source), null);
 });
 
 When("a collector submits the message {string} without usage", async function (this: StorageScenario, text: string) {
@@ -107,17 +128,14 @@ When("a collector retries that batch from its original position", async function
 
 Then("the collector is told to reload its checkpoint", async function (this: StorageScenario) {
   assert.equal(this.result, "conflict");
-  checkWireValue("StreamKey", this.source);
-  const stored = await this.store.readCheckpoint(this.source);
-  checkWireValue("Checkpoint", stored);
-  assert.deepEqual(stored, this.batch.checkpoint);
+  assert.deepEqual(await this.readCheckpoint(), { version: 1, checkpoint: this.batch.checkpoint });
 });
 
 When("the same request is revised to {int} input tokens and {int} output tokens", async function (
   this: StorageScenario, input: number, output: number,
 ) {
   this.batch = {
-    ...this.batch, expectedOffset: 100, checkpoint: { offset: 200, parserState: "{}" },
+    ...this.batch, expectedVersion: 1, expectedOffset: 100, checkpoint: { offset: 200, parserState: "{}" },
     usage: [observation(input, output, 2)],
   };
   await this.commit();
@@ -145,5 +163,39 @@ Then("the entire batch is rejected", function (this: StorageScenario) {
 
 Then("the session and its checkpoint are absent", async function (this: StorageScenario) {
   assert.equal(await this.store.readSession(this.key), null);
-  assert.equal(await this.store.readCheckpoint(this.source), null);
+  assert.deepEqual(await this.readCheckpoint(), { version: 0, checkpoint: null });
+});
+
+Given("two sources start with version zero for the same session", async function (this: StorageScenario) {
+  const otherSource = { ...this.source, streamId: "second-log" };
+  const first = await this.readCheckpoint();
+  const second = await this.readCheckpoint(otherSource);
+  assert.deepEqual(first, { version: 0, checkpoint: null });
+  assert.deepEqual(second, first);
+  this.batch.expectedVersion = first.version;
+  this.batch.messages = [prompt("First source")];
+  this.secondBatch = {
+    ...this.batch, source: otherSource, expectedVersion: second.version,
+    messages: [{ ...prompt("Second source"), id: "m2" }], usage: [observation(4, 2)],
+    metadata: { branch: "other" }, hasGap: true,
+  };
+});
+
+When("the first commits a message and the second submits its original batch", async function (this: StorageScenario) {
+  assert(this.secondBatch);
+  await this.commit();
+  assert.equal(this.result, "committed");
+  await this.commit(this.secondBatch);
+});
+
+Then("the second source has no checkpoint and sees session version {int}", async function (
+  this: StorageScenario, version: number,
+) {
+  assert(this.secondBatch);
+  assert.equal(this.result, "conflict");
+  assert.deepEqual(await this.readCheckpoint(this.secondBatch.source), { version, checkpoint: null });
+  assert.deepEqual(await this.readCheckpoint(), { version, checkpoint: this.batch.checkpoint });
+  assert.deepEqual(await this.view(), {
+    key: this.key, metadata: {}, messages: this.batch.messages, usage: [], coverage: "unknown", observedTotalTokens: null,
+  });
 });

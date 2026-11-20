@@ -7,15 +7,15 @@ export const planning: Message = {
   id: "m1", at: observedAt, role: "user", text: "Plan the search feature",
 };
 
-export function batch(expectedOffset: number, fields: Partial<Batch> = {}): Batch {
+export function batch(expectedVersion: number, expectedOffset: number, fields: Partial<Batch> = {}): Batch {
   return {
-    source, expectedOffset, checkpoint: { offset: expectedOffset + 10, parserState: "{}" },
+    source, expectedVersion, expectedOffset, checkpoint: { offset: expectedOffset + 10, parserState: "{}" },
     messages: [], usage: [], ...fields,
   };
 }
 
 export function initialPlanningBatch(): Batch {
-  return batch(0, {
+  return batch(0, 0, {
     source: { harness: "claude", sessionId: "planning", streamId: "main" },
     checkpoint: { offset: 100, parserState: "{}" },
   });

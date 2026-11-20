@@ -33,11 +33,12 @@ export class GlobalConfigLoader {
       throw new Error(`Invalid configuration file ${filename}. ${reason}`);
     }
 
-    const { codexPath, claudePath } = config;
+    const { codexPath, claudePath, installationId } = config;
     const directory = dirname(filename);
     return new GlobalConfig(
       GlobalConfigLoader.resolvePath(directory, codexPath),
       claudePath === undefined ? undefined : GlobalConfigLoader.resolvePath(directory, claudePath),
+      installationId,
     );
   }
 

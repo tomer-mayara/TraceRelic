@@ -16,11 +16,17 @@ export interface SessionKey {
 
 export interface StreamKey extends SessionKey {
   streamId: Identifier;
+  installationId?: Identifier;
 }
 
 export interface Checkpoint {
   offset: Count;
   parserState: string;
+}
+
+export interface CheckpointSnapshot {
+  version: Count;
+  checkpoint: Checkpoint | null;
 }
 
 export interface Metadata {
@@ -61,6 +67,7 @@ export interface Usage {
 
 export interface Batch {
   source: StreamKey;
+  expectedVersion: Count;
   expectedOffset: Count;
   checkpoint: Checkpoint;
   metadata?: Metadata;
@@ -80,7 +87,7 @@ export interface SessionView {
 }
 
 export interface CollectorStorage {
-  readCheckpoint(source: StreamKey): Promise<Checkpoint | null>;
+  readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot>;
   commit(batch: Batch): Promise<CommitResult>;
   readSession(key: SessionKey): Promise<SessionView | null>;
 }

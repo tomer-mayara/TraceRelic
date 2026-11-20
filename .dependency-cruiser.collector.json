@@ -1,6 +1,12 @@
 {
   "forbidden": [
     {
+      "name": "scanner-reads-files-through-history",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/scan/" },
+      "to": { "path": "^(node:)?fs(/promises)?$" }
+    },
+    {
       "name": "scanner-uses-only-the-storage-port",
       "severity": "error",
       "from": { "path": "^apps/collector/src/scan/" },

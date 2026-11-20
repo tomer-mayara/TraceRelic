@@ -20,6 +20,13 @@ export class CodexChatFixture {
     }));
   }
 
+  static async *batches(...groups: ReturnType<typeof CodexChatFixture.entries>[]) {
+    for (const entries of groups) {
+      const lineNumber = entries.at(-1)?.lineNumber ?? 0;
+      yield { entries, next: { lineNumber, offset: lineNumber * 100 } };
+    }
+  }
+
   static record(type: string, payload: unknown, timestamp = this.at): CodexRecord {
     return { type, payload, timestamp };
   }

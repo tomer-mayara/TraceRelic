@@ -21,11 +21,19 @@ union CommitResult { "committed", "conflict", "invalid" }
 
 model StreamKey extends SessionKey {
   streamId: Identifier;
+  /** Stable collector installation when set in the configuration. */
+  installationId?: Identifier;
 }
 
 model Checkpoint {
   offset: Count;
   parserState: string;
+}
+
+model CheckpointSnapshot {
+  /** All sources for the session share this version. A new session starts at zero. */
+  version: Count;
+  checkpoint: Checkpoint | null;
 }
 
 model Metadata {
@@ -69,6 +77,7 @@ model Usage {
 
 model Batch {
   source: StreamKey;
+  expectedVersion: Count;
   expectedOffset: Count;
   checkpoint: Checkpoint;
   metadata?: Metadata;
@@ -89,7 +98,8 @@ model SessionView {
 }
 
 interface CollectorStorage {
-  readCheckpoint(source: StreamKey): Checkpoint | null;
+  /** Return the current session version even when this source has no checkpoint. */
+  readCheckpoint(source: StreamKey): CheckpointSnapshot;
   commit(batch: Batch): CommitResult;
   readSession(key: SessionKey): SessionView | null;
 }

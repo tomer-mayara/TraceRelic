@@ -1,35 +1,52 @@
-import { createHash } from "node:crypto";
 import type { ClaudeTranscript, ClaudeTranscriptEntry } from "../history/index.ts";
 import type { Metadata } from "../storage/collector-storage.ts";
-import type { DecodedChat } from "./decoded-chat.ts";
+import { stateRecord, TextOccurrences } from "./chat-parser-state.ts";
+import type { ChatParser, DecodedChat } from "./decoded-chat.ts";
 
 type TextBlock = { text: string; blockIndex: number };
 
-export class ClaudeChat {
-  private readonly result: DecodedChat = { messages: [], metadata: {} };
-  private readonly occurrences = new Map<string, number>();
+export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
+  private readonly previousCopy: boolean;
+  private readonly occurrences: TextOccurrences;
 
-  private constructor() {}
-
-  static decode(transcript: ClaudeTranscript): DecodedChat {
-    const chat = new ClaudeChat();
-    for (const entry of transcript.entries) chat.read(entry, transcript.previousCopy);
-    return chat.result;
+  private constructor(previousCopy: boolean, occurrences: TextOccurrences) {
+    this.previousCopy = previousCopy;
+    this.occurrences = occurrences;
   }
 
-  private read({ record, timestamp, lineNumber, sourceFile }: ClaudeTranscriptEntry, previousCopy: boolean): void {
+  static resume(previousCopy: boolean, state?: unknown): ClaudeChat {
+    if (state === undefined) return new ClaudeChat(previousCopy, new TextOccurrences());
+    const saved = stateRecord(state, ["occurrences"]);
+    return new ClaudeChat(previousCopy, TextOccurrences.restore(saved.occurrences));
+  }
+
+  static decode(transcript: ClaudeTranscript): DecodedChat {
+    return ClaudeChat.resume(transcript.previousCopy).decodeBatch(transcript.entries);
+  }
+
+  decodeBatch(entries: readonly ClaudeTranscriptEntry[]): DecodedChat {
+    const result: DecodedChat = { messages: [], metadata: {} };
+    for (const entry of entries) this.read(entry, result);
+    return result;
+  }
+
+  snapshot(): object {
+    return { occurrences: this.occurrences.snapshot() };
+  }
+
+  private read({ record, timestamp, lineNumber, sourceFile }: ClaudeTranscriptEntry, result: DecodedChat): void {
     const uuid = identifier(record.uuid);
-    if (previousCopy && !uuid) return;
+    if (this.previousCopy && !uuid) return;
 
     const context: Metadata = {};
     const cwd = identifier(record.cwd);
     const repository = identifier(record.repository);
     const branch = identifier(record.gitBranch);
-    if (cwd) context.cwd = this.result.metadata.cwd = cwd;
-    if (repository) context.repository = this.result.metadata.repository = repository;
+    if (cwd) context.cwd = result.metadata.cwd = cwd;
+    if (repository) context.repository = result.metadata.repository = repository;
     if (branch) {
-      context.branch = this.result.metadata.branch = branch;
-      this.result.branchObservation = { sourceOrder: lineNumber, ...(timestamp && { at: timestamp }) };
+      context.branch = result.metadata.branch = branch;
+      result.branchObservation = { sourceOrder: lineNumber, ...(timestamp && { at: timestamp }) };
     }
 
     const role = record.type;
@@ -41,20 +58,14 @@ export class ClaudeChat {
     if (!blocks.length) return;
     const turnId = identifier(record.turnId);
     const requestId = identifier(record.requestId);
-    const identity = uuid ? `native:${uuid}` : this.fallback([sourceFile, role, timestamp, turnId, requestId, blocks]);
+    const identity = uuid ? `native:${uuid}`
+      : this.occurrences.identify([sourceFile, role, timestamp, turnId, requestId, blocks]);
     for (const { text, blockIndex } of blocks) {
-      this.result.messages.push({
+      result.messages.push({
         id: `${identity}:${blockIndex}`, role, at: timestamp, sourceOrder: lineNumber, blockIndex, text,
         ...(turnId && { turnId }), ...(requestId && { requestId }), ...((cwd || repository || branch) && { context }),
       });
     }
-  }
-
-  private fallback(fields: readonly unknown[]): string {
-    const hash = createHash("sha256").update(JSON.stringify(fields)).digest("hex");
-    const occurrence = (this.occurrences.get(hash) ?? 0) + 1;
-    this.occurrences.set(hash, occurrence);
-    return `text:${hash}:${occurrence}`;
   }
 }
 

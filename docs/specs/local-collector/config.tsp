@@ -13,6 +13,9 @@ model GlobalConfig {
    * Omit this field to read only Codex history. */
   @pattern("^(?=[\\s\\S]*\\S)[^\\u0000]+$")
   claudePath?: string;
+  /** Stable identity for one collector installation. Omit it to keep the existing root-based source keys. */
+  @minLength(1)
+  installationId?: string;
 }
 
 interface GlobalConfigLoader {

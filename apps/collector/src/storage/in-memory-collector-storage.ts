@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import type {
-  Batch, BranchObservation, Checkpoint, CollectorStorage, CommitResult, Coverage, Message, Metadata, SessionKey,
-  SessionView, StreamKey, Usage,
+  Batch, BranchObservation, Checkpoint, CheckpointSnapshot, CollectorStorage, CommitResult, Coverage,
+  Message, Metadata, SessionKey, SessionView, StreamKey, Usage,
 } from "./collector-storage.ts";
 
 function encodeSessionKey(key: SessionKey): string {
@@ -10,7 +10,9 @@ function encodeSessionKey(key: SessionKey): string {
 }
 
 function encodeStreamKey(source: StreamKey): string {
-  return JSON.stringify([source.harness, source.sessionId, source.streamId]);
+  const parts = [source.harness, source.sessionId, source.streamId];
+  if (source.installationId !== undefined) parts.push(source.installationId);
+  return JSON.stringify(parts);
 }
 
 function isCount(value: number): boolean {
@@ -91,14 +93,15 @@ function replayMessage(known: StoredMessage, incoming: Message, streamId: string
   return { streamId: positioned ? known.streamId : streamId, value };
 }
 
-function mergeMessages(previous: Map<string, StoredMessage> | undefined, batch: Batch): Map<string, StoredMessage> | null {
+function mergeMessages(
+  previous: Map<string, StoredMessage> | undefined, incoming: Message[], streamId: string,
+): Map<string, StoredMessage> | null {
   const messages = new Map(previous);
-  for (const entry of batch.messages) {
+  for (const entry of incoming) {
     if (!hasValidMessage(entry)) return null;
     const value = definedFields(entry);
     if (value.context) value.context = definedFields(value.context);
     const existing = messages.get(value.id);
-    const streamId = batch.source.streamId;
     const next = existing ? replayMessage(existing, value, streamId) : { streamId, value };
     if (!next) return null;
     messages.set(value.id, next);
@@ -168,11 +171,12 @@ function recordedBranch(streamId: string, name: string, observation: BranchObser
   return { ...branch, instant: { second, fraction } };
 }
 
-function mergeBranches(previous: BranchHistory | undefined, batch: Batch): BranchHistory | null | undefined {
+function mergeBranches(
+  previous: BranchHistory | undefined, batch: Batch, streamId: string,
+): BranchHistory | null | undefined {
   const observation = batch.branchObservation;
   if (observation === undefined) return previous;
   if (!observation || !batch.metadata?.branch) return null;
-  const streamId = batch.source.streamId;
   const candidate = recordedBranch(streamId, batch.metadata.branch, observation);
   if (!candidate) return null;
   const known = previous?.byStream.get(streamId);
@@ -192,6 +196,8 @@ function mergeBranches(previous: BranchHistory | undefined, batch: Batch): Branc
 }
 
 interface StoredSession {
+  version: number;
+  checkpoints: Map<string, Checkpoint>;
   view: Omit<SessionView, "messages">;
   messages: Map<string, StoredMessage>;
   branches?: BranchHistory;
@@ -203,12 +209,33 @@ function coverage(records: number, hasGap: boolean): Coverage {
   return hasGap ? "partial" : "reported";
 }
 
+function mergeSessionRecords(
+  previous: StoredSession | undefined, batch: Batch, stream: string,
+): Omit<StoredSession, "version" | "checkpoints"> | null {
+  if (!hasValidMetadata(batch.metadata)) return null;
+  const messages = mergeMessages(previous?.messages, batch.messages, stream);
+  const usage = mergeUsage(previous?.view.usage ?? [], batch.usage);
+  const branches = mergeBranches(previous?.branches, batch, stream);
+  if (!messages || !usage || branches === null) return null;
+  const total = usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
+  if (!isCount(total)) return null;
+  const hasGap = previous?.hasGap === true || batch.hasGap === true;
+  const metadata = { ...previous?.view.metadata, ...definedFields(batch.metadata ?? {}) };
+  if (branches) metadata.branch = branches.latest.name;
+  const view = {
+    key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata, usage,
+    coverage: coverage(usage.length, hasGap), observedTotalTokens: usage.length ? total : null,
+  };
+  return { view, messages, branches, hasGap };
+}
+
 export class InMemoryCollectorStorage implements CollectorStorage {
   private readonly sessions = new Map<string, StoredSession>();
-  private readonly checkpoints = new Map<string, Checkpoint>();
 
-  async readCheckpoint(source: StreamKey): Promise<Checkpoint | null> {
-    return structuredClone(this.checkpoints.get(encodeStreamKey(source)) ?? null);
+  async readCheckpoint(source: StreamKey): Promise<CheckpointSnapshot> {
+    const session = this.sessions.get(encodeSessionKey(source));
+    const checkpoint = session?.checkpoints.get(encodeStreamKey(source)) ?? null;
+    return { version: session?.version ?? 0, checkpoint: structuredClone(checkpoint) };
   }
 
   async readSession(key: SessionKey): Promise<SessionView | null> {
@@ -217,34 +244,25 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   }
 
   async commit(batch: Batch): Promise<CommitResult> {
-    const { source, checkpoint } = batch;
-    const stream = encodeStreamKey(source);
-    if (!source.sessionId || !source.streamId || !isCount(batch.expectedOffset)) return "invalid";
-    // Keep the comparison and both writes in one synchronous turn.
-    if (batch.expectedOffset !== (this.checkpoints.get(stream)?.offset ?? 0)) return "conflict";
-    if (!isCount(checkpoint.offset) || checkpoint.offset <= batch.expectedOffset) return "invalid";
-    if (!hasValidMetadata(batch.metadata)) return "invalid";
+    const { source, checkpoint, expectedVersion, expectedOffset } = batch;
+    if (!isIdentifier(source.sessionId) || !isIdentifier(source.streamId)
+      || (source.installationId !== undefined && !isIdentifier(source.installationId))) return "invalid";
+    if (!isCount(expectedVersion) || !isCount(expectedOffset)) return "invalid";
     const session = encodeSessionKey(source);
+    const stream = encodeStreamKey(source);
+    // Compare both values and publish the complete session in one synchronous turn.
     const previous = this.sessions.get(session);
-    const messages = mergeMessages(previous?.messages, batch);
-    const usage = mergeUsage(previous?.view.usage ?? [], batch.usage);
-    const branches = mergeBranches(previous?.branches, batch);
-    if (!messages || !usage || branches === null) return "invalid";
-    const total = usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
-    if (!isCount(total)) return "invalid";
-    const hasGap = previous?.hasGap === true || batch.hasGap === true;
-    const metadata = { ...previous?.view.metadata, ...definedFields(batch.metadata ?? {}) };
-    if (branches) metadata.branch = branches.latest.name;
-    const view: StoredSession["view"] = {
-      key: { harness: source.harness, sessionId: source.sessionId },
-      metadata,
-      usage,
-      coverage: coverage(usage.length, hasGap),
-      observedTotalTokens: usage.length ? total : null,
-    };
-    const nextCheckpoint = structuredClone(checkpoint);
-    this.sessions.set(session, structuredClone({ view, messages, branches, hasGap }));
-    this.checkpoints.set(stream, nextCheckpoint);
+    const currentVersion = previous?.version ?? 0;
+    const currentOffset = previous?.checkpoints.get(stream)?.offset ?? 0;
+    if (expectedVersion !== currentVersion || expectedOffset !== currentOffset) return "conflict";
+    const version = currentVersion + 1;
+    if (!isCount(version) || !isCount(checkpoint.offset) || checkpoint.offset <= currentOffset
+      || typeof checkpoint.parserState !== "string") return "invalid";
+    const records = mergeSessionRecords(previous, batch, stream);
+    if (!records) return "invalid";
+    const checkpoints = new Map(previous?.checkpoints);
+    checkpoints.set(stream, structuredClone(checkpoint));
+    this.sessions.set(session, { version, checkpoints, ...structuredClone(records) });
     return "committed";
   }
 }

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFile, copyFile, stat, symlink } from "node:fs/promises";
+import { appendFile, copyFile, rename, stat, symlink, truncate } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
@@ -28,7 +28,9 @@ test("selects Codex rollouts by their first native header within the configured 
   const sessionIds = async (selection?: CodexSelection) => {
     const ids: string[] = [];
     for await (const rollout of reader.readRollouts(selection)) ids.push(rollout.sessionId);
-    return ids.sort();
+    const sources = await Array.fromAsync(reader.discoverSources(selection));
+    assert.deepEqual(sources.map(source => source.sessionId).sort(), ids.sort());
+    return ids;
   };
   assert.deepEqual(await sessionIds(), ["active", "archived"]);
   assert.deepEqual(await sessionIds({ sessionIds: [], projectPaths: [] }), ["active", "archived"]);
@@ -37,6 +39,75 @@ test("selects Codex rollouts by their first native header within the configured 
   assert.deepEqual(await sessionIds({ projectPaths: [project + "-old"] }), ["archived"]);
   assert.deepEqual(await sessionIds({ sessionIds: ["archived"], projectPaths: [project] }), ["active", "archived"]);
   assert.deepEqual(await sessionIds({ sessionIds: ["outside", "copied"], projectPaths: ["/other"] }), []);
+});
+
+test("reads Codex batches from the specified byte and physical line, with a large UTF-8 record alone", async t => {
+  const fixture = await Rollout.create();
+  t.after(() => fixture.close());
+  const header = Rollout.header("one");
+  const sourceFile = await fixture.write([{ note: "before the native header" }, header]);
+  const start = { offset: (await stat(sourceFile)).size, lineNumber: 2 };
+  const first = JSON.stringify({ text: "é" }) + "\r\n";
+  const second = JSON.stringify({ text: "🌱" }) + "\n";
+  const budget = Buffer.byteLength(first + second);
+  const prefix = Buffer.byteLength(first + second + '{"text":"');
+  // The four-byte character straddles a 64 KiB read boundary after the seek.
+  const largeText = "x".repeat(64 * 1024 - 1 - prefix) + "🌱" + "y".repeat(200 * 1024);
+  const large = JSON.stringify({ text: largeText }) + "\n";
+  const final = JSON.stringify({ text: "done" }) + "\n";
+  await appendFile(sourceFile, first + second + large + final);
+
+  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const [source] = await Array.fromAsync(reader.discoverSources());
+  const { readBatches: _readBatches, ...info } = source;
+  assert.deepEqual(info, { sourceFile, sessionId: "one", previousCopy: false, fileSize: (await stat(sourceFile)).size });
+  const throughPair = { offset: start.offset + budget, lineNumber: 4 };
+  const throughLarge = { offset: throughPair.offset + Buffer.byteLength(large), lineNumber: 5 };
+  const throughFinal = { offset: throughLarge.offset + Buffer.byteLength(final), lineNumber: 6 };
+
+  for (const maxBytes of [undefined, budget]) {
+    const batches = await Array.fromAsync(source.readBatches(start, maxBytes));
+    assert.deepEqual(batches.map(batch => batch.next), [throughPair, throughLarge, throughFinal]);
+    assert.deepEqual(batches.map(batch => batch.entries.map(entry => entry.lineNumber)), [[3, 4], [5], [6]]);
+    assert.deepEqual(batches[1].entries[0].record, { text: largeText });
+  }
+  const shortBatches = await Array.fromAsync(source.readBatches(start, budget - 1, throughPair.offset));
+  assert.deepEqual(shortBatches.map(batch => batch.next), [
+    { offset: start.offset + Buffer.byteLength(first), lineNumber: 3 }, throughPair,
+  ]);
+  const prefixBatches = await Array.fromAsync(source.readBatches({ offset: 0, lineNumber: 0 }, undefined, start.offset));
+  assert.deepEqual(prefixBatches.flatMap(batch => batch.entries.map(entry => entry.record)), [header]);
+});
+
+test("rejects an equally long replacement between discovery and the batch read", async t => {
+  const fixture = await Rollout.create();
+  t.after(() => fixture.close());
+  const sourceFile = await fixture.write([Rollout.header("original")]);
+  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const [source] = await Array.fromAsync(reader.discoverSources());
+  await rename(sourceFile, sourceFile + ".old");
+  await fixture.write([Rollout.header("replaced")]);
+  assert.equal((await stat(sourceFile)).size, source.fileSize);
+  await assert.rejects(Array.fromAsync(source.readBatches({ offset: 0, lineNumber: 0 })), {
+    name: "TranscriptChangedError", sourceFile,
+  });
+});
+
+test("discards a pending batch when a captured file shrinks between reads", async t => {
+  const fixture = await Rollout.create();
+  t.after(() => fixture.close());
+  const sourceFile = await fixture.write([Rollout.header("chat"), { text: "pending" }]);
+  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const [source] = await Array.fromAsync(reader.discoverSources());
+  const batches = source.readBatches({ offset: 0, lineNumber: 0 }, 1)[Symbol.asyncIterator]();
+  const first = await batches.next();
+  assert(!first.done);
+  try {
+    await truncate(sourceFile, first.value.next.offset);
+    await assert.rejects(batches.next(), { name: "TranscriptChangedError", sourceFile });
+  } finally {
+    await batches.return?.();
+  }
 });
 
 test("returns undated Codex metadata and the byte position after the last decoded record", async t => {

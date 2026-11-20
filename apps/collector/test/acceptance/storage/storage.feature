@@ -23,3 +23,8 @@ Feature: Store a collector batch
     When a batch includes a message and more cached input tokens than input tokens
     Then the entire batch is rejected
     And the session and its checkpoint are absent
+
+  Scenario: Two sources write to one session
+    Given two sources start with version zero for the same session
+    When the first commits a message and the second submits its original batch
+    Then the second source has no checkpoint and sees session version 1

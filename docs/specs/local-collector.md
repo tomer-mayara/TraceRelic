@@ -91,7 +91,7 @@ Use one scan operation under `apps/collector`. The command `scan --once` runs it
 
 ### Existing fixture and planned changes
 
-Today, `readCheckpoint(source)` returns an offset and parser state, or `null`. `commit(batch)` compares `expectedOffset` and requires the next offset to advance. `readSession(key)` returns the stored messages, latest usage per ID, metadata, total and coverage. A fixture instance represents one workspace. Keep that instance alive when a test restarts the scanner. [Storage interface](../../apps/collector/src/storage/collector-storage.ts) · [In-memory fixture](../../apps/collector/test/fixtures/in-memory-collector-storage.ts) · [Existing contract](local-collector/storage.tsp)
+`readCheckpoint(source)` returns the session version and the source checkpoint. A new session starts at version zero. A source that has never committed has a null checkpoint. `commit(batch)` compares both `expectedVersion` and `expectedOffset`, requires the next offset to advance, and increments the session version on success. `readSession(key)` returns the stored messages, latest usage per ID, metadata, total and coverage. A fixture instance represents one workspace. Keep that instance alive when a test restarts the scanner. [Storage interface](../../apps/collector/src/storage/collector-storage.ts) · [In-memory fixture](../../apps/collector/test/fixtures/in-memory-collector-storage.ts) · [Storage contract](local-collector/storage.tsp)
 
 Keep the existing outcomes `committed`, `conflict` and `invalid`. Require RFC 3339 timestamps and nonnegative safe integer counts, including the session total. Cache reads and writes are disjoint parts of inclusive input. Reasoning is part of output. An identical message is safe to replay. Conflicting content under an immutable message ID rejects the batch. A higher usage revision replaces the prior observation. Equal revisions must agree. An invalid batch changes nothing.
 
@@ -113,7 +113,7 @@ Use synthetic files in a temporary directory. Run the scanner against the fixtur
 
 Track new sessions, rejected lines and batches, known gaps, version conflicts, and the age of the oldest pending source. Log identifiers and byte ranges. Keep chat text in the stored conversation. At the API, measure commit outcomes and latency. Set a production service objective after measurements exist.
 
-Use the repository's pinned Node and Bun versions. Run the checks below from the repository root. The storage check builds the project, compiles TypeSpec, checks dependency rules, and runs the four implemented storage scenarios. Keep those behaviors when updating the test steps for the revised interface. When the client and API share generated models, check in CI that they match TypeSpec. [Storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) · [Component manifest](../../apps/collector/component.yaml) · [Dependency rules](../../.dependency-cruiser.collector.json) · [Repository checks](../../README.md#run-the-checks)
+Use the repository's pinned Node and Bun versions. Run the checks below from the repository root. The storage check builds the project, compiles TypeSpec, checks dependency rules, and runs the storage scenarios. When the client and API share generated models, check in CI that they match TypeSpec. [Storage scenarios](../../apps/collector/test/acceptance/storage/storage.feature) · [Component manifest](../../apps/collector/component.yaml) · [Dependency rules](../../.dependency-cruiser.collector.json) · [Repository checks](../../README.md#run-the-checks)
 
 ```sh
 bun install --frozen-lockfile
@@ -300,6 +300,7 @@ Feature: Resume a growing file
     When I scan once, finish the second line and scan with a fresh collector
     Then the first scan stores only the first message
     And the second scan stores "café" once and acknowledges its ending newline
+    And both checkpoints record the accepted line and session version
 ```
 
 **Needs** LC-01. **First failure** The scanner advances past incomplete bytes or loses the second message.
@@ -307,6 +308,17 @@ Feature: Resume a growing file
 1. **Interface.** Read across both a batch boundary and a multibyte character. Return completed lines and the next unread byte. Read a large valid record in chunks and allow it to occupy a batch by itself.
 2. **Interface.** Update the storage contract and fixture. If two writers use the same version, only the first write succeeds. A new source in an existing session must see that session's current version.
 3. **Integration.** Restart against the same fixture. Restore the parser state and byte offset saved with the first batch.
+
+| LC-03 constraint | Decision and check |
+| --- | --- |
+| Behavior | A fresh scanner resumes both providers after the last accepted newline. A split UTF-8 character waits for its full line. Read bounded batches by bytes and give an oversized record a batch of its own. Run the [growing-file scenario](../../apps/collector/test/acceptance/scan/resume-growing-file.feature) with `bun run check:collector-scan` and the reader and restart tests with `bun run test`. |
+| Observability | Each acknowledged source has a next byte, a physical line number and versioned parser state. Reading a checkpoint returns the session version even for a new source. The [concurrent-writer scenario](../../apps/collector/test/acceptance/storage/storage.feature) checks that a rejected batch leaves both records and progress intact. Run `bun run check:collector-storage` and `bun run test`. |
+| Architecture | The history readers own discovery and bounded local file reads. Provider decoders carry forward the context, occurrence counts and mirror evidence needed by the next batch. The scanner coordinates the readers and the [storage port](../../apps/collector/src/storage/collector-storage.ts). The [dependency rules](../../.dependency-cruiser.collector.json) keep file access in history and storage behind the port. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds sources, absolute byte and line positions, and batches. The [storage contract](local-collector/storage.tsp) requires the expected session version and source offset on each commit. A successful append advances both atomically. The [configuration](local-collector/config.tsp) can name an installation that shares storage with others. Omitted IDs preserve existing source keys. A scanner can rebuild the earlier empty parser state from the accepted prefix. Run `bun run check:collector-history`, `bun run check:collector-scan` and `bun run check:collector-storage`. |
+
+An internal batch boundary must preserve the text blocks, native IDs and positions that LC-01 would import from the same complete Codex file. A lookup over the unread portion can match copies that cross a batch boundary. Keep only their identifying details and block positions. A copy appended after a scan keeps its earlier accepted message. Check both cases in `bun run test`.
+
+Codex discovery reads through the first valid session header. A Claude file can contain several session IDs. Discovery reads its records to identify the sessions and their first working directories. An ID-only selection can stop once it finds all requested IDs in that file. Each selected session then imports from its own saved byte.
 
 #### LC-04 · Reconcile Codex token counts
 

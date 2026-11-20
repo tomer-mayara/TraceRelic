@@ -23,3 +23,9 @@ test("GlobalConfig stores an optional normalized Claude path", () => {
     assert.throws(() => new GlobalConfig(root, path), /claudePath/);
   }
 });
+
+test("GlobalConfig accepts a nonempty installation ID", () => {
+  assert.equal(new GlobalConfig(tmpdir()).installationId, undefined);
+  assert.equal(new GlobalConfig(tmpdir(), undefined, "laptop").installationId, "laptop");
+  assert.throws(() => new GlobalConfig(tmpdir(), undefined, ""), /installationId/);
+});

@@ -20,7 +20,10 @@ test("selects Claude sessions by ID, first recorded working directory, or exact 
   const reader = new LocalLLMHistoryClaude(new GlobalConfig("/codex", fixture.home));
   const ids = async (selection?: ScanSelection) => {
     const transcripts = await Array.fromAsync(reader.readTranscripts(selection));
-    return transcripts.map(transcript => transcript.sessionId).sort();
+    const expected = transcripts.map(transcript => transcript.sessionId).sort();
+    const sources = await Array.fromAsync(reader.discoverSources(selection));
+    assert.deepEqual(sources.map(source => source.sessionId).sort(), expected);
+    return expected;
   };
   assert.deepEqual(await ids(), ["one", "three", "two"]);
   assert.deepEqual(await ids({ sessionIds: [], projectPaths: [] }), ["one", "three", "two"]);
@@ -32,6 +35,7 @@ test("selects Claude sessions by ID, first recorded working directory, or exact 
   assert.deepEqual(selected.entries.map(entry => entry.lineNumber), [1, 3, 4]);
   const disabled = new LocalLLMHistoryClaude(new GlobalConfig(fixture.home));
   assert.deepEqual(await Array.fromAsync(disabled.readTranscripts()), []);
+  assert.deepEqual(await Array.fromAsync(disabled.discoverSources()), []);
 });
 
 test("returns complete Claude records grouped by effective session with byte offsets and original line numbers", async t => {
@@ -60,6 +64,13 @@ test("returns complete Claude records grouped by effective session with byte off
   ] });
   assert.deepEqual(await Array.fromAsync(reader.readTranscripts({ sessionIds: [childId] })), [childTranscript]);
   assert.deepEqual(await Array.fromAsync(reader.readTranscripts({ sessionIds: ["parent"] })), []);
+  const sources = await Array.fromAsync(reader.discoverSources());
+  assert.deepEqual(sources.map(source => source.sessionId), [childId, "independent"]);
+  for (const [i, transcript] of [childTranscript, otherTranscript].entries()) {
+    const batches = await Array.fromAsync(sources[i].readBatches({ offset: 0, lineNumber: 0 }));
+    assert.deepEqual(batches.flatMap(batch => batch.entries), transcript.entries);
+    assert.deepEqual(batches.at(-1)?.next, { offset: metadataEnd, lineNumber: 4 });
+  }
 });
 
 test("reads current Claude sources before orphaned and superseded copies", async t => {
@@ -98,6 +109,64 @@ test("includes prior Claude copies only for their own selected file and session 
   const sources = await Array.fromAsync(reader.readTranscripts({ projectPaths: ["/work/selected"] }));
   assert.deepEqual(sources.map(source => [source.sourceFile, source.sessionId]).sort(),
     [current, orphan, superseded, separate].map(path => [path, sessionId]).sort());
+  const discovered = await Array.fromAsync(reader.discoverSources({ projectPaths: ["/work/selected"] }));
+  assert.deepEqual(discovered.map(source => [source.sourceFile, source.sessionId, source.previousCopy]),
+    sources.map(source => [source.sourceFile, source.sessionId, source.previousCopy]));
+});
+
+test("captures the discovered file size and resumes Claude after malformed lines and a split UTF-8 character", async t => {
+  const fixture = await Claude.create();
+  t.after(() => fixture.close());
+  const first = Claude.user("native", "2026-02-01T12:00:00Z", "Before");
+  const final = Claude.user("native", "2026-02-01T13:00:00Z", "café");
+  const sourceFile = await fixture.write("project", "transcript", [first]);
+  const afterFirst = { offset: (await stat(sourceFile)).size, lineNumber: 1 };
+  const broken = Buffer.from(JSON.stringify(final) + "\r\n");
+  broken[broken.indexOf("é")] = 0xff;
+  const afterBroken = { offset: afterFirst.offset + broken.length, lineNumber: 2 };
+  const suffix = Buffer.from(JSON.stringify(final) + "\r\n");
+  const split = suffix.indexOf("é") + 1;
+  await appendFile(sourceFile, Buffer.concat([broken, suffix.subarray(0, split)]));
+
+  const reader = new LocalLLMHistoryClaude(new GlobalConfig("/codex", fixture.home));
+  const [original] = await Array.fromAsync(reader.discoverSources());
+  assert.equal(original.fileSize, afterBroken.offset + split);
+  await appendFile(sourceFile, suffix.subarray(split));
+  const initial = await Array.fromAsync(original.readBatches({ offset: 0, lineNumber: 0 }, undefined, Number.MAX_SAFE_INTEGER));
+  assert.deepEqual(initial.flatMap(batch => batch.entries.map(entry => entry.record)), [first]);
+  assert.deepEqual(initial.at(-1)?.next, afterBroken);
+
+  const [updated] = await Array.fromAsync(reader.discoverSources());
+  const finalPosition = { offset: afterBroken.offset + suffix.length, lineNumber: 3 };
+  assert.equal(updated.fileSize, finalPosition.offset);
+  assert.deepEqual(await Array.fromAsync(updated.readBatches(afterBroken, undefined, finalPosition.offset - 1)), []);
+  assert.deepEqual(await Array.fromAsync(updated.readBatches(afterBroken)), [{
+    entries: [{
+      harness: "claude", sessionId: "native", sourceFile, record: final, timestamp: final.timestamp,
+      lineNumber: 3, endOffset: finalPosition.offset,
+    }],
+    next: finalPosition,
+  }]);
+  assert.deepEqual(await Array.fromAsync(updated.readBatches(finalPosition)), []);
+});
+
+test("stops ID-only discovery once all IDs are present and decodes only the requested suffix", async t => {
+  const fixture = await Claude.create();
+  t.after(() => fixture.close());
+  const sourceFile = await fixture.write("project", "mixed", [
+    { sessionId: "one" }, { sessionId: "other" }, { sessionId: "two" },
+    { sessionId: "two", text: "already accepted text" },
+  ]);
+  const position = { offset: (await stat(sourceFile)).size, lineNumber: 4 };
+  const tail = { sessionId: "two", text: "next text" };
+  await appendFile(sourceFile, JSON.stringify(tail) + "\n");
+  const reader = new LocalLLMHistoryClaude(new GlobalConfig("/codex", fixture.home));
+  const parsed = t.mock.method(JSON, "parse");
+  const sources = await Array.fromAsync(reader.discoverSources({ sessionIds: ["two", "one", "one"] }));
+  assert.deepEqual(sources.map(source => source.sessionId), ["one", "two"]);
+  const resumed = await Array.fromAsync(sources[1].readBatches(position));
+  assert.deepEqual(resumed.flatMap(batch => batch.entries.map(entry => entry.record)), [tail]);
+  assert(!parsed.mock.calls.some(call => call.arguments[0].includes("already accepted text")));
 });
 
 test("uses the first absolute Claude working directory without a NUL character", async t => {

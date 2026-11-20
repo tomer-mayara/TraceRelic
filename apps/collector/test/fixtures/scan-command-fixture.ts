@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
@@ -128,8 +129,27 @@ export class ScanCommandFixture {
     ]);
   }
 
-  async scan(...selection: string[]): Promise<void> {
-    await this.command.run(["scan", "--once", "--config", this.configFile, ...selection]);
+  async writeGrowingClaudeFile(character: string, secondText: string) {
+    const sessionId = this.claudeKey.sessionId;
+    const firstText = "First message";
+    const first = ClaudeProjectFixture.user(sessionId, "2026-02-01T12:00:00Z", firstText);
+    const second = ClaudeProjectFixture.user(sessionId, "2026-02-01T12:00:01Z", secondText);
+    const streamId = await this.claude.write("project", sessionId, [first]);
+    const firstOffset = Buffer.byteLength(JSON.stringify(first) + "\n");
+    const secondLine = Buffer.from(JSON.stringify(second) + "\n");
+    const charStart = secondLine.indexOf(Buffer.from(character));
+    assert.equal(Buffer.byteLength(character), 2);
+    assert(charStart >= 0);
+    await appendFile(streamId, secondLine.subarray(0, charStart + 1));
+    return {
+      firstText, firstOffset, secondOffset: firstOffset + secondLine.length,
+      source: { ...this.claudeKey, streamId },
+      finish: () => appendFile(streamId, secondLine.subarray(charStart + 1)),
+    };
+  }
+
+  async scan(...selection: string[]) {
+    return this.command.run(["scan", "--once", "--config", this.configFile, ...selection]);
   }
 
   restart(): void {

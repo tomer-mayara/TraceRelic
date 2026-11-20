@@ -3,6 +3,7 @@ import type { JSONSchemaType } from "ajv/dist/2020.js";
 export interface GlobalConfigFile {
   readonly codexPath: string;
   readonly claudePath?: string;
+  readonly installationId?: string;
 }
 
 const pathSchema = {
@@ -19,6 +20,7 @@ export const globalConfigFileSchema = {
   properties: {
     codexPath: pathSchema,
     claudePath: pathSchema,
+    installationId: { type: "string", minLength: 1, description: "a nonempty installation ID" },
   },
   additionalProperties: true,
 } as const satisfies JSONSchemaType<Required<GlobalConfigFile>>;

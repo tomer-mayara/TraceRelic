@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { isAbsolute, relative, sep } from "node:path";
 import type { harnesses } from "@tracerelic/shared";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
+import { CapturedTranscriptFile } from "./captured-transcript-file.ts";
 
 export interface ScanSelection {
   readonly sessionIds?: readonly string[];
@@ -31,11 +32,42 @@ export interface Transcript<Entry> {
   readonly entries: readonly Entry[];
 }
 
+export interface ReadPosition {
+  readonly offset: number;
+  readonly lineNumber: number;
+}
+
+export interface RecordBatch<Entry> {
+  readonly entries: Entry[];
+  readonly next: ReadPosition;
+}
+
+interface TranscriptSourceInfo {
+  readonly sessionId: string;
+  readonly sourceFile: string;
+  readonly fileSize: number;
+  readonly previousCopy: boolean;
+}
+
+export interface TranscriptSource<Entry> extends TranscriptSourceInfo {
+  readBatches(position: ReadPosition, maxBatchBytes?: number, endOffset?: number): AsyncIterable<RecordBatch<Entry>>;
+}
+
 interface DecodedRecord extends Pick<LocalHistoryEntry, "lineNumber" | "record"> {
   readonly endOffset: number;
 }
 
+interface SelectedFile<H extends LocalHistoryEntry["harness"]> extends Pick<TranscriptSourceInfo, "sessionId" | "previousCopy"> {
+  readonly file: CapturedTranscriptFile;
+  readonly harness: H;
+  matches(record: LocalHistoryEntry["record"], lineNumber: number): boolean;
+}
+const beginning: ReadPosition = { offset: 0, lineNumber: 0 };
+const defaultBatchBytes = 256 * 1024;
+
 export abstract class LocalLLMHistory {
+  private readonly decoder = new TextDecoder("utf-8", { fatal: true });
+
   abstract readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]>;
 
   protected selected({ sessionIds = [], projectPaths = [] }: ScanSelection, sessionId: string, cwd: unknown): boolean {
@@ -81,32 +113,99 @@ export abstract class LocalLLMHistory {
     }
   }
 
-  protected async *readRecords(sourceFile: string): AsyncGenerator<DecodedRecord> {
-    const decoder = new TextDecoder("utf-8", { fatal: true });
-    let lineNumber = 0;
-    let endOffset = 0;
-    for await (const line of this.completeLines(sourceFile)) {
-      lineNumber++;
-      endOffset += line.length + 1;
-      let record: unknown;
-      try {
-        record = JSON.parse(decoder.decode(line));
-      } catch {
-        continue;
+  protected transcriptSource<H extends LocalHistoryEntry["harness"]>(source: SelectedFile<H>): TranscriptSource<TranscriptEntry<H>> {
+    const { file, sessionId, previousCopy } = source;
+    return {
+      sessionId, previousCopy, sourceFile: file.sourceFile, fileSize: file.fileSize,
+      readBatches: (position, maxBatchBytes = defaultBatchBytes, endOffset = file.fileSize) =>
+        this.readBatches(source, position, maxBatchBytes, endOffset),
+    };
+  }
+
+  protected async snapshot<E extends DecodedRecord>(source: TranscriptSource<E>): Promise<Transcript<E> | undefined> {
+    const entries: E[] = [];
+    for await (const batch of source.readBatches(beginning)) {
+      for (const entry of batch.entries) entries.push(entry);
+    }
+    const last = entries.at(-1);
+    if (last) return { sessionId: source.sessionId, sourceFile: source.sourceFile, entries, endOffset: last.endOffset };
+  }
+
+  private async *readBatches<H extends LocalHistoryEntry["harness"]>(
+    source: SelectedFile<H>, position: ReadPosition, maxBatchBytes: number, endOffset: number,
+  ): AsyncGenerator<RecordBatch<TranscriptEntry<H>>> {
+    if (!Number.isSafeInteger(maxBatchBytes) || maxBatchBytes <= 0) throw new RangeError("Expected a positive batch byte limit");
+    if (![position.offset, position.lineNumber, endOffset].every(n => Number.isSafeInteger(n) && n >= 0)) {
+      throw new RangeError("Expected nonnegative byte and line positions");
+    }
+    const { file, harness, sessionId } = source;
+    let entries: TranscriptEntry<H>[] = [];
+    let next = position;
+    let batchStart = position.offset;
+    for await (const line of this.completeLines(file.chunks(position.offset, endOffset))) {
+      const offset = next.offset + line.length + 1;
+      if (next.offset > batchStart && offset - batchStart > maxBatchBytes) {
+        await file.verifyPath();
+        yield { entries, next };
+        entries = [];
+        batchStart = next.offset;
       }
-      if (this.isRecord(record)) yield { lineNumber, endOffset, record };
+      const lineNumber = next.lineNumber + 1;
+      next = { offset, lineNumber };
+      const record = this.decode(line);
+      if (record && source.matches(record, lineNumber)) {
+        const { timestamp } = record;
+        entries.push({ harness, sessionId, sourceFile: file.sourceFile, record, lineNumber, endOffset: offset,
+          ...(this.hasRecordedTimestamp(timestamp) ? { timestamp } : {}) });
+      }
+      if (offset - batchStart >= maxBatchBytes) {
+        await file.verifyPath();
+        yield { entries, next };
+        entries = [];
+        batchStart = offset;
+      }
+    }
+    await file.verifyPath();
+    if (next.offset > batchStart) yield { entries, next };
+  }
+
+  protected inspectFile<T>(sourceFile: string, inspect: (records: AsyncIterable<DecodedRecord>) => Promise<T>) {
+    return CapturedTranscriptFile.inspect(sourceFile, chunks => inspect(this.decodeRecords(chunks)));
+  }
+
+  protected readRecords(sourceFile: string): AsyncIterable<DecodedRecord> {
+    return this.decodeRecords(createReadStream(sourceFile));
+  }
+
+  private async *decodeRecords(chunks: AsyncIterable<Buffer>): AsyncGenerator<DecodedRecord> {
+    let lineNumber = 0;
+    let offset = 0;
+    for await (const line of this.completeLines(chunks)) {
+      lineNumber++;
+      offset += line.length + 1;
+      const record = this.decode(line);
+      if (record) yield { lineNumber, endOffset: offset, record };
     }
   }
 
-  private async *completeLines(sourceFile: string): AsyncGenerator<Buffer> {
+  private decode(line: Buffer): LocalHistoryEntry["record"] | undefined {
+    try {
+      const record: unknown = JSON.parse(this.decoder.decode(line));
+      if (this.isRecord(record)) return record;
+    } catch {
+      // Skip malformed UTF-8 or JSON. It is still one physical line in the source.
+    }
+  }
+
+  private async *completeLines(chunks: AsyncIterable<Buffer>): AsyncGenerator<Buffer> {
     const fragments: Buffer[] = [];
-    const chunks: AsyncIterable<Buffer> = createReadStream(sourceFile);
     for await (const chunk of chunks) {
       let start = 0;
       for (let end = chunk.indexOf(0x0a); end >= 0; end = chunk.indexOf(0x0a, start)) {
         const part = chunk.subarray(start, end);
-        yield fragments.length ? Buffer.concat([...fragments, part]) : part;
+        const line = fragments.length ? Buffer.concat([...fragments, part]) : part;
         fragments.length = 0;
+        yield line;
         start = end + 1;
       }
       if (start < chunk.length) fragments.push(chunk.subarray(start));

@@ -100,3 +100,13 @@ test("identifies an invalid Claude path in the configuration file", async t => {
     });
   }
 });
+
+test("loads a stable installation ID and rejects an invalid ID", async t => {
+  const config = await ConfigFileFixture.create(t);
+  await config.write(JSON.stringify({ codexPath: ".", installationId: "workstation" }));
+  assert.equal((await GlobalConfigLoader.load(config.file)).installationId, "workstation");
+  for (const installationId of ["", 0, null]) {
+    await config.write(JSON.stringify({ codexPath: ".", installationId }));
+    await assert.rejects(GlobalConfigLoader.load(config.file), /installationId/);
+  }
+});

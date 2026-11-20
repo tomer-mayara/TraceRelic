@@ -109,3 +109,49 @@ test("attaches a recorded repository only to the row that supplied it", () => {
   assert.deepEqual(messages.map(m => m.context), [{ repository }, undefined]);
   assert.deepEqual(metadata, { repository });
 });
+
+test("a fresh parser retains anonymous block IDs and emits only newly recorded text and metadata", () => {
+  const blocks = [F.text("A private question"), { type: "tool_use" }, F.text("A second part")];
+  const prompt = F.row("user", blocks);
+  const transcript = F.transcript([
+    F.row("assistant", [{ type: "tool_use" }], { gitBranch: "main", cwd: "/work" }), prompt, prompt,
+    F.row("assistant", [{ type: "tool_use" }], { gitBranch: "next" }),
+  ]);
+  const { entries } = transcript;
+  const first = ClaudeChat.resume(false);
+  const accepted = first.decodeBatch(entries.slice(0, 2));
+  assert.deepEqual(accepted.branchObservation, { sourceOrder: 1, at: F.at });
+  const saved = JSON.stringify(first.snapshot());
+  assert.ok(!saved.includes("A private question"));
+  const fresh = ClaudeChat.resume(false, JSON.parse(saved));
+  const suffix = fresh.decodeBatch(entries.slice(2, 3));
+  assert.deepEqual(suffix.messages, ClaudeChat.decode(transcript).messages.slice(2));
+  assert.deepEqual(suffix.metadata, {});
+  assert.equal(suffix.branchObservation, undefined);
+  assert.equal(new Set([...accepted.messages, ...suffix.messages].map(m => m.id)).size, 4);
+  assert.deepEqual(fresh.decodeBatch(entries.slice(3)), {
+    messages: [], metadata: { branch: "next" }, branchObservation: { sourceOrder: 4, at: F.at },
+  });
+});
+
+test("a resumed earlier copy accepts only UUID-backed records and keeps their actual block positions", () => {
+  const { entries } = F.transcript([
+    F.row("user", "Accepted", { uuid: "one", gitBranch: "main" }),
+    F.row("user", "Anonymous", { gitBranch: "unverified" }),
+    F.row("assistant", [{ type: "tool_use" }, F.text("Additional")], { uuid: "two" }),
+  ], "/fixture/previous.jsonl", true);
+  const first = ClaudeChat.resume(true);
+  first.decodeBatch(entries.slice(0, 1));
+  const fresh = ClaudeChat.resume(true, JSON.parse(JSON.stringify(first.snapshot())));
+  assert.deepEqual(fresh.decodeBatch(entries.slice(1)), {
+    messages: [{ id: "native:two:1", role: "assistant", at: F.at, sourceOrder: 3, blockIndex: 1, text: "Additional" }],
+    metadata: {},
+  });
+});
+
+test("rejects malformed Claude checkpoint state without disclosing the supplied data", () => {
+  const detail = "private record contents";
+  for (const state of [null, [], detail, { occurrences: detail }, { occurrences: { ["a".repeat(64)]: -1 } }]) {
+    assert.throws(() => ClaudeChat.resume(false, state), { name: "Error", message: "Invalid chat parser state" });
+  }
+});
