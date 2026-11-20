@@ -12,6 +12,8 @@ export class ScanCommandFixture {
   readonly claudeKey = { harness: "claude", sessionId: "claude-plan" } as const;
   codexMessages: Pick<Message, "at" | "role" | "text">[] = [];
   readonly claudeTexts = ["How should we evaluate search?", "Check relevance first.", "Then measure latency."];
+  claudeMessages: Pick<Message, "at" | "role" | "text">[] = [];
+  readonly projectPath: string;
   private readonly claude: ClaudeProjectFixture;
   readonly configFile: string;
   private command = new CollectorCommand(this.storage);
@@ -20,6 +22,7 @@ export class ScanCommandFixture {
 
   private constructor(private readonly codex: CodexRolloutFixture) {
     this.claude = new ClaudeProjectFixture(join(codex.home, "claude"));
+    this.projectPath = join(codex.home, "work", "search");
     this.configFile = join(codex.home, "collector.json");
   }
 
@@ -80,6 +83,32 @@ export class ScanCommandFixture {
     report.payload.info.total_token_usage = usage(total);
     report.payload.info.last_token_usage = usage(last);
     return report;
+  }
+
+  async writeRepeatedClaudePrompt(prompt: string): Promise<void> {
+    const sessionId = this.claudeKey.sessionId;
+    const promptAt = "2026-02-01T12:02:00.123Z";
+    const answerAt = "2026-02-01T12:02:01.234Z";
+    const repeatAt = "2026-02-01T12:02:02.345Z";
+    const first = "  Check relevance first.";
+    const second = "Then measure latency.\n";
+    this.claudeMessages = [
+      { at: promptAt, role: "user", text: prompt },
+      { at: answerAt, role: "assistant", text: first },
+      { at: answerAt, role: "assistant", text: second },
+      { at: repeatAt, role: "user", text: prompt },
+    ];
+    await this.claude.write("project", sessionId, [
+      { ...ClaudeProjectFixture.user(sessionId, promptAt, prompt), cwd: this.projectPath, uuid: "prompt-first" },
+      { sessionId, timestamp: answerAt, type: "assistant", uuid: "reply", message: {
+        role: "assistant", content: [
+          { type: "text", text: first },
+          { type: "tool_use", id: "tool-1", name: "Read", input: { file_path: "timings.md" } },
+          { type: "text", text: second },
+        ],
+      } },
+      { ...ClaudeProjectFixture.user(sessionId, repeatAt, prompt), uuid: "prompt-repeat" },
+    ]);
   }
 
   async writeClaudeRequest(input: number, provisional: number, final: number): Promise<void> {

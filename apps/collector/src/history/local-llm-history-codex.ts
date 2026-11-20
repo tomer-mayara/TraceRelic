@@ -1,25 +1,12 @@
-import { isAbsolute, join, relative, sep } from "node:path";
+import { join } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
-import { LocalLLMHistory, type LocalHistoryEntry } from "./local-llm-history.ts";
+import { LocalLLMHistory, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry } from "./local-llm-history.ts";
 
-export interface CodexSelection {
-  readonly sessionIds?: readonly string[];
-  readonly projectPaths?: readonly string[];
-}
+export type CodexSelection = ScanSelection;
+export type CodexRolloutEntry = TranscriptEntry<"codex">;
+export type CodexRollout = Transcript<CodexRolloutEntry>;
 
-type SourceEntry = Omit<LocalHistoryEntry, "timestamp" | "harness"> & { readonly harness: "codex" };
-
-export interface CodexRolloutEntry extends SourceEntry {
-  readonly timestamp?: string;
-  readonly endOffset: number;
-}
-
-export interface CodexRollout {
-  readonly sessionId: string;
-  readonly sourceFile: string;
-  readonly endOffset: number;
-  readonly entries: readonly CodexRolloutEntry[];
-}
+type SourceEntry = Omit<CodexRolloutEntry, "endOffset" | "timestamp">;
 
 export class LocalLLMHistoryCodex extends LocalLLMHistory {
   private readonly config: GlobalConfig;
@@ -84,16 +71,5 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
       endOffset = row.endOffset;
     }
     if (sessionId !== undefined) return { sessionId, endOffset };
-  }
-
-  private selected({ sessionIds = [], projectPaths = [] }: CodexSelection, sessionId: string, cwd: unknown): boolean {
-    if (!sessionIds.length && !projectPaths.length) return true;
-    if (sessionIds.includes(sessionId)) return true;
-    if (typeof cwd !== "string" || !cwd.length) return false;
-    return projectPaths.some(root => {
-      if (!root.length) return false;
-      const path = relative(root, cwd);
-      return !isAbsolute(path) && path !== ".." && !path.startsWith(".." + sep);
-    });
   }
 }

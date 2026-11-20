@@ -7,6 +7,7 @@ behavior:
   - test/interface/history/history-windows.feature
   - test/acceptance/config/local-config.feature
   - test/acceptance/scan/codex-planning.feature
+  - test/acceptance/scan/claude-conversation.feature
   - test/acceptance/scan/two-chats.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp

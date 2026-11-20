@@ -1,15 +1,9 @@
 import { createHash } from "node:crypto";
 import type { CodexRolloutEntry } from "../history/index.ts";
-import type { BranchObservation, Message, Metadata, Role } from "../storage/collector-storage.ts";
+import type { BranchObservation, Metadata, Role } from "../storage/collector-storage.ts";
+import type { DecodedChat, PositionedMessage } from "./decoded-chat.ts";
 
-type PositionedMessage = Message & { sourceOrder: number; blockIndex: number };
 type ChatEntry = Pick<CodexRolloutEntry, "sessionId" | "lineNumber" | "timestamp" | "record">;
-
-interface DecodedChat {
-  messages: PositionedMessage[];
-  metadata: Metadata;
-  branchObservation?: BranchObservation;
-}
 
 export class CodexChat {
   private readonly context: Metadata = {};

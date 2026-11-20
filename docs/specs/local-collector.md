@@ -125,7 +125,7 @@ bun run lint
 bun run habit-hooks --all
 ```
 
-The scan check runs the planning chat and verifies every `@two_chats` step has a binding. To run the cross-provider token assertions before LC-04 and LC-05, follow the scan check with `bun run --cwd apps/collector check:scan-scenarios --tags @two_chats`.
+The scan check runs the Codex planning chat and the repeated Claude prompt. It verifies every `@two_chats` step has a binding. To run the cross-provider token assertions before LC-04 and LC-05, follow the scan check with `bun run --cwd apps/collector check:scan-scenarios --tags @two_chats`.
 
 ## Tickets
 
@@ -282,6 +282,13 @@ Feature: Preserve Claude Code conversations
 
 1. **Unit.** Decode a plain string and a block array. Use the row UUID and block position when present. Test identical prompts, tool results and images separately.
 2. **Integration.** Scan mixed roots with equal Codex and Claude session IDs. Read two separate sessions. Verify an orphaned copy does not create a third session.
+
+| LC-02 constraint | Decision and check |
+| --- | --- |
+| Behavior | Running `scan --once` twice preserves two identical prompts and each visible answer block in source order. The Claude row UUID and original block index identify text across copies. Within a single source, rows without a UUID use stable fields and an occurrence number. The [conversation scenario](../../apps/collector/test/acceptance/scan/claude-conversation.feature) runs in `bun run check:collector-scan`. |
+| Observability | The command returns one session view per provider and session ID. An earlier copy with no recoverable records adds no session. Raw tool output, thinking and attachments stay out of the conversation. Until token accounting is available, Claude text has unknown coverage and a null total. Run `bun run test` for stored views and replay. |
+| Architecture | The existing scanner reads the configured Claude projects through the [Claude history reader](../../apps/collector/src/history/local-llm-history-claude.ts) and commits through the [storage port](../../apps/collector/src/storage/collector-storage.ts). The existing [dependency rules](../../.dependency-cruiser.collector.json) cover both providers. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) adds Claude transcripts with their native session identity, source positions and prior-copy flag. Select a session by its first recorded working directory or the exact transcript project directory. Earlier copies of that selected file can recover identifiable rows for the same session even if its working directory changed. The storage contract already carries positions and context. Run `bun run check:collector-scan` for schema agreement and `bun run check:collector-history` for compatibility. |
 
 #### LC-03 · Resume at a complete record
 

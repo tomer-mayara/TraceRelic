@@ -1,10 +1,18 @@
 import { readdir } from "node:fs/promises";
-import { extname, join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
-import { LocalLLMHistory, type LocalHistoryEntry } from "./local-llm-history.ts";
+import { LocalLLMHistory, type LocalHistoryEntry, type ScanSelection, type Transcript, type TranscriptEntry } from "./local-llm-history.ts";
 
-interface ClaudeTranscript {
+export type ClaudeTranscriptEntry = TranscriptEntry<"claude">;
+
+export interface ClaudeTranscript extends Transcript<ClaudeTranscriptEntry> {
+  readonly previousCopy: boolean;
+}
+
+interface TranscriptFile {
   sourceFile: string;
+  projectDir: string;
+  currentFile?: string;
   subagent?: { parentId: string; agentId: string };
 }
 
@@ -19,39 +27,108 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
   async readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]> {
     const inRange = this.dateFilter(fromDate, toDate);
     const entries: LocalHistoryEntry[] = [];
-    if (this.config.claudePath === undefined) return entries;
-    const projects = join(this.config.claudePath, "projects");
-    for await (const { sourceFile, subagent } of this.transcripts(projects)) {
-      for await (const { lineNumber, record } of this.readRecords(sourceFile)) {
-        const { sessionId: nativeId, timestamp } = record;
-        if (typeof nativeId !== "string" || !nativeId || typeof timestamp !== "string" || !inRange(timestamp)) continue;
-        let sessionId = nativeId;
-        if (subagent && nativeId === subagent.parentId) {
-          const agentId = typeof record.agentId === "string" && record.agentId ? record.agentId : subagent.agentId;
-          sessionId = `${encodeURIComponent(nativeId)}/subagents/${encodeURIComponent(agentId)}`;
+    for await (const file of this.transcriptFiles(false)) {
+      for await (const { lineNumber, record } of this.readRecords(file.sourceFile)) {
+        const { timestamp } = record;
+        const sessionId = this.sessionId(record, file.subagent);
+        if (sessionId && typeof timestamp === "string" && inRange(timestamp)) {
+          entries.push({ harness: "claude", sessionId, sourceFile: file.sourceFile, lineNumber, timestamp, record });
         }
-        entries.push({ harness: "claude", sessionId, sourceFile, lineNumber, timestamp, record });
       }
     }
     return entries;
   }
 
-  private async *transcripts(projects: string): AsyncGenerator<ClaudeTranscript> {
+  async *readTranscripts(selection: ScanSelection = {}): AsyncGenerator<ClaudeTranscript> {
+    const previous: TranscriptFile[] = [];
+    const selectedFamilies = selection.projectPaths?.length ? new Set<string>() : undefined;
+    for await (const file of this.transcriptFiles(true)) {
+      if (file.currentFile) previous.push(file);
+      else yield* this.readFileSessions(file, selection, selectedFamilies);
+    }
+    for (const file of previous) yield* this.readFileSessions(file, selection, selectedFamilies);
+  }
+
+  private async *readFileSessions(
+    file: TranscriptFile, selection: ScanSelection, selectedFamilies?: Set<string>,
+  ): AsyncGenerator<ClaudeTranscript> {
+    const { sourceFile, currentFile } = file;
+    const selectedProject = selection.projectPaths?.some(path => path.length > 0 && relative(path, file.projectDir) === "");
+    const sessions = new Map<string, { entries: ClaudeTranscriptEntry[]; selected?: boolean }>();
+    for await (const { record, lineNumber, endOffset } of this.readRecords(sourceFile)) {
+      const sessionId = this.sessionId(record, file.subagent);
+      if (!sessionId) continue;
+      let session = sessions.get(sessionId);
+      if (!session) {
+        const selected = selectedProject || this.selected(selection, sessionId, undefined)
+          || (currentFile && selectedFamilies?.has(`${currentFile}\0${sessionId}`));
+        if (!selected && !selectedFamilies) continue;
+        session = { entries: [], selected: selected ? true : undefined };
+        sessions.set(sessionId, session);
+      }
+      const { cwd } = record;
+      if (session.selected === undefined && typeof cwd === "string" && isAbsolute(cwd) && !cwd.includes("\0")) {
+        session.selected = this.selected(selection, sessionId, cwd);
+        if (!session.selected) session.entries.length = 0;
+        else if (!currentFile) selectedFamilies?.add(`${sourceFile}\0${sessionId}`);
+      }
+      if (session.selected === false) continue;
+      const { timestamp } = record;
+      session.entries.push({
+        harness: "claude", sessionId, sourceFile, record, lineNumber, endOffset,
+        ...(this.hasRecordedTimestamp(timestamp) ? { timestamp } : {}),
+      });
+    }
+    for (const [sessionId, { entries, selected }] of sessions) {
+      if (selected) {
+        yield { sessionId, sourceFile, previousCopy: currentFile !== undefined, entries, endOffset: entries[entries.length - 1].endOffset };
+      }
+    }
+  }
+
+  private sessionId(record: LocalHistoryEntry["record"], subagent?: TranscriptFile["subagent"]): string | undefined {
+    const nativeId = record.sessionId;
+    if (typeof nativeId !== "string" || !nativeId.length) return;
+    if (!subagent || nativeId !== subagent.parentId) return nativeId;
+    const agentId = typeof record.agentId === "string" && record.agentId ? record.agentId : subagent.agentId;
+    return `${encodeURIComponent(nativeId)}/subagents/${encodeURIComponent(agentId)}`;
+  }
+
+  private async *transcriptFiles(scan: boolean): AsyncGenerator<TranscriptFile> {
+    if (this.config.claudePath === undefined) return;
+    const projects = join(this.config.claudePath, "projects");
     for (const project of await this.listDirectoryIfPresent(projects)) {
       if (!project.isDirectory()) continue;
       const projectDir = join(projects, project.name);
       for (const entry of await readdir(projectDir, { withFileTypes: true })) {
         const path = join(projectDir, entry.name);
-        if (entry.isFile() && extname(entry.name) === ".jsonl") yield { sourceFile: path };
+        if (entry.isFile()) {
+          const name = this.transcriptName(entry.name, scan);
+          if (name) yield { sourceFile: path, projectDir, currentFile: name.previousCopy ? join(projectDir, name.stem + ".jsonl") : undefined };
+        }
         if (!entry.isDirectory()) continue;
         const agents = join(path, "subagents");
         for (const file of await this.listDirectoryIfPresent(agents)) {
-          const match = /^agent-(.+)\.jsonl$/.exec(file.name);
-          if (file.isFile() && match) {
-            yield { sourceFile: join(agents, file.name), subagent: { parentId: entry.name, agentId: match[1] } };
-          }
+          if (!file.isFile()) continue;
+          const name = this.transcriptName(file.name, scan);
+          if (!name || !name.stem.startsWith("agent-") || name.stem.length <= "agent-".length) continue;
+          yield {
+            sourceFile: join(agents, file.name), projectDir,
+            currentFile: name.previousCopy ? join(agents, name.stem + ".jsonl") : undefined,
+            subagent: { parentId: entry.name, agentId: name.stem.slice("agent-".length) },
+          };
         }
       }
     }
+  }
+
+  private transcriptName(name: string, scan: boolean): { stem: string; previousCopy: boolean } | undefined {
+    // Date queries keep their original .jsonl file set. A scan also recognizes earlier copies.
+    if (scan) {
+      const prior = /^(.+)\.orphaned-\d.*-.+\.jsonl$/.exec(name) ?? /^(.+)\.jsonl\.superseded-\d.*$/.exec(name);
+      if (prior) return { stem: prior[1], previousCopy: true };
+    }
+    const current = /^(.+)\.jsonl$/.exec(name);
+    if (current) return { stem: current[1], previousCopy: false };
   }
 }

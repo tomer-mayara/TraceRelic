@@ -4,7 +4,7 @@ import { After, Before, Given, Then, When, setWorldConstructor } from "@cucumber
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
-import { LocalLLMHistoryCodex } from "@tracerelic/collector/history";
+import { LocalLLMHistoryClaude, LocalLLMHistoryCodex } from "@tracerelic/collector/history";
 import type { SessionKey, SessionView } from "../../../src/storage/collector-storage.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 
@@ -57,6 +57,34 @@ Then("its session contains both messages in source order with their roles and re
 
 Then("its token total is null with unknown coverage", async function (this: ScanScenario) {
   const session = await this.session(this.fixture.codexKey);
+  assert.equal(session.observedTotalTokens, null);
+  assert.equal(session.coverage, "unknown");
+  assert.deepEqual(session.usage, []);
+});
+
+Given("a Claude session contains {string} twice and one assistant response has two text blocks", async function (
+  this: ScanScenario, prompt: string,
+) {
+  await this.fixture.writeRepeatedClaudePrompt(prompt);
+  const selection = { projectPaths: [this.fixture.projectPath] };
+  assert(contract.validate("ScanSelection.json", selection), contract.errorsText());
+  const reader = new LocalLLMHistoryClaude(await GlobalConfigLoader.load(this.fixture.configFile));
+  const transcripts = await Array.fromAsync(reader.readTranscripts(selection));
+  assert.equal(transcripts.length, 1);
+  assert.equal(transcripts[0].sessionId, this.fixture.claudeKey.sessionId);
+  assert(contract.validate("ClaudeTranscript.json", transcripts[0]), contract.errorsText());
+});
+
+When("I scan its project twice", async function (this: ScanScenario) {
+  await this.fixture.scan("--project", this.fixture.projectPath);
+  await this.fixture.scan("--project", this.fixture.projectPath);
+});
+
+Then("both prompts appear and both answer blocks appear once in their original order", async function (this: ScanScenario) {
+  const session = await this.session(this.fixture.claudeKey);
+  assert.deepEqual(session.messages.map(({ at, role, text }) => ({ at, role, text })), this.fixture.claudeMessages);
+  const promptIds = session.messages.filter(message => message.role === "user").map(message => message.id);
+  assert.equal(new Set(promptIds).size, 2);
   assert.equal(session.observedTotalTokens, null);
   assert.equal(session.coverage, "unknown");
   assert.deepEqual(session.usage, []);

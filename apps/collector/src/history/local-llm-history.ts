@@ -1,7 +1,13 @@
 import { createReadStream, type Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
+import { isAbsolute, relative, sep } from "node:path";
 import type { harnesses } from "@tracerelic/shared";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
+
+export interface ScanSelection {
+  readonly sessionIds?: readonly string[];
+  readonly projectPaths?: readonly string[];
+}
 
 export interface LocalHistoryEntry {
   readonly harness: (typeof harnesses)[number];
@@ -12,12 +18,36 @@ export interface LocalHistoryEntry {
   readonly record: Readonly<Record<string, unknown>>;
 }
 
+export interface TranscriptEntry<Harness extends LocalHistoryEntry["harness"]> extends Omit<LocalHistoryEntry, "timestamp" | "harness"> {
+  readonly harness: Harness;
+  readonly timestamp?: string;
+  readonly endOffset: number;
+}
+
+export interface Transcript<Entry> {
+  readonly sessionId: string;
+  readonly sourceFile: string;
+  readonly endOffset: number;
+  readonly entries: readonly Entry[];
+}
+
 interface DecodedRecord extends Pick<LocalHistoryEntry, "lineNumber" | "record"> {
   readonly endOffset: number;
 }
 
 export abstract class LocalLLMHistory {
   abstract readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]>;
+
+  protected selected({ sessionIds = [], projectPaths = [] }: ScanSelection, sessionId: string, cwd: unknown): boolean {
+    if (!sessionIds.length && !projectPaths.length) return true;
+    if (sessionIds.includes(sessionId)) return true;
+    if (typeof cwd !== "string" || !cwd.length) return false;
+    return projectPaths.some(root => {
+      if (!root.length) return false;
+      const path = relative(root, cwd);
+      return !isAbsolute(path) && path !== ".." && !path.startsWith(".." + sep);
+    });
+  }
 
   protected isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
