@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { appendFile, copyFile, utimes } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { appendFile, copyFile, symlink, utimes } from "node:fs/promises";
+import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
 import { LocalLLMHistoryCodex, type LocalLLMHistory } from "@tracerelic/collector/history";
@@ -17,6 +17,22 @@ test("reads the original Codex message with its session and source position", as
   const reader: LocalLLMHistory = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
   assert.deepEqual(await reader.readLocalHistory(start, end), [{
     harness: "codex", sessionId: "c1", sourceFile, lineNumber: 2, timestamp: message.timestamp, record: message,
+  }]);
+});
+
+test("reads the date window through a symlinked sessions directory", async t => {
+  const configured = await Rollout.create();
+  t.after(() => configured.close());
+  const stored = await Rollout.create();
+  t.after(() => stored.close());
+  const message = Rollout.message(start.toISOString(), "Stored elsewhere");
+  const file = await stored.write([Rollout.header("c1"), message]);
+  await symlink(join(stored.home, "sessions"), join(configured.home, "sessions"), "dir");
+
+  const reader: LocalLLMHistory = new LocalLLMHistoryCodex(new GlobalConfig(configured.home));
+  assert.deepEqual(await reader.readLocalHistory(start, end), [{
+    harness: "codex", sessionId: "c1", sourceFile: join(configured.home, relative(stored.home, file)),
+    lineNumber: 2, timestamp: message.timestamp, record: message,
   }]);
 });
 

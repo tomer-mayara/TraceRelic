@@ -1,6 +1,25 @@
-import { join } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import type { GlobalConfig } from "../config/global-config.ts";
 import { LocalLLMHistory, type LocalHistoryEntry } from "./local-llm-history.ts";
+
+export interface CodexSelection {
+  readonly sessionIds?: readonly string[];
+  readonly projectPaths?: readonly string[];
+}
+
+type SourceEntry = Omit<LocalHistoryEntry, "timestamp" | "harness"> & { readonly harness: "codex" };
+
+export interface CodexRolloutEntry extends SourceEntry {
+  readonly timestamp?: string;
+  readonly endOffset: number;
+}
+
+export interface CodexRollout {
+  readonly sessionId: string;
+  readonly sourceFile: string;
+  readonly endOffset: number;
+  readonly entries: readonly CodexRolloutEntry[];
+}
 
 export class LocalLLMHistoryCodex extends LocalLLMHistory {
   private readonly config: GlobalConfig;
@@ -13,28 +32,68 @@ export class LocalLLMHistoryCodex extends LocalLLMHistory {
   async readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]> {
     const inRange = this.dateFilter(fromDate, toDate);
     const entries: LocalHistoryEntry[] = [];
-    for (const directory of ["sessions", "archived_sessions"]) {
-      const root = join(this.config.codexPath, directory);
-      for (const file of await this.listDirectoryIfPresent(root, true)) {
-        if (file.isFile() && /^rollout-.*\.jsonl$/.test(file.name)) {
-          await this.readRollout(join(file.parentPath, file.name), inRange, entries);
-        }
-      }
+    for await (const file of this.rolloutFiles()) {
+      await this.readRollout(file, {}, entry => {
+        const { timestamp } = entry.record;
+        if (typeof timestamp === "string" && inRange(timestamp)) entries.push({ ...entry, timestamp });
+      });
     }
     return entries;
   }
 
-  private async readRollout(sourceFile: string, inRange: (timestamp: string) => boolean, entries: LocalHistoryEntry[]): Promise<void> {
-    let sessionId: string | undefined;
-    for await (const { lineNumber, record } of this.readRecords(sourceFile)) {
-      if (!sessionId && record.type === "session_meta" && this.isRecord(record.payload)) {
-        const id = [record.payload.id, record.payload.session_id].find(value => typeof value === "string" && value.length > 0);
-        if (typeof id === "string") sessionId = id;
-      }
-      const timestamp = record.timestamp;
-      if (sessionId && typeof timestamp === "string" && inRange(timestamp)) {
-        entries.push({ harness: "codex", sessionId, sourceFile, lineNumber, timestamp, record });
-      }
+  async *readRollouts(selection: CodexSelection = {}): AsyncGenerator<CodexRollout> {
+    for await (const sourceFile of this.rolloutFiles()) {
+      const entries: CodexRolloutEntry[] = [];
+      const source = await this.readRollout(sourceFile, selection, (entry, endOffset) => {
+        const { timestamp } = entry.record;
+        entries.push({ ...entry, endOffset, ...(this.hasRecordedTimestamp(timestamp) ? { timestamp } : {}) });
+      });
+      if (source) yield { ...source, sourceFile, entries };
     }
+  }
+
+  private async *rolloutFiles(): AsyncGenerator<string> {
+    for (const name of ["sessions", "archived_sessions"]) {
+      yield* this.rolloutsIn(join(this.config.codexPath, name));
+    }
+  }
+
+  private async *rolloutsIn(directory: string): AsyncGenerator<string> {
+    for (const entry of await this.listDirectoryIfPresent(directory)) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) yield* this.rolloutsIn(path);
+      else if (entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) yield path;
+    }
+  }
+
+  private async readRollout(
+    sourceFile: string, selection: CodexSelection, visit: (entry: SourceEntry, endOffset: number) => void,
+  ): Promise<Pick<CodexRollout, "sessionId" | "endOffset"> | undefined> {
+    let sessionId: string | undefined;
+    let endOffset = 0;
+    for await (const row of this.readRecords(sourceFile)) {
+      const { lineNumber, record } = row;
+      if (sessionId === undefined) {
+        if (record.type !== "session_meta" || !this.isRecord(record.payload)) continue;
+        const { id, session_id, cwd } = record.payload;
+        sessionId = [id, session_id].find((value): value is string => typeof value === "string" && value.length > 0);
+        if (sessionId === undefined) continue;
+        if (!this.selected(selection, sessionId, cwd)) return;
+      }
+      visit({ harness: "codex", sessionId, sourceFile, lineNumber, record }, row.endOffset);
+      endOffset = row.endOffset;
+    }
+    if (sessionId !== undefined) return { sessionId, endOffset };
+  }
+
+  private selected({ sessionIds = [], projectPaths = [] }: CodexSelection, sessionId: string, cwd: unknown): boolean {
+    if (!sessionIds.length && !projectPaths.length) return true;
+    if (sessionIds.includes(sessionId)) return true;
+    if (typeof cwd !== "string" || !cwd.length) return false;
+    return projectPaths.some(root => {
+      if (!root.length) return false;
+      const path = relative(root, cwd);
+      return !isAbsolute(path) && path !== ".." && !path.startsWith(".." + sep);
+    });
   }
 }

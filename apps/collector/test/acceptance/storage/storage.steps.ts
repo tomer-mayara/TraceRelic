@@ -4,7 +4,7 @@ import { BeforeAll, Given, Then, When, setWorldConstructor } from "@cucumber/cuc
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import type {
-  CollectorStorage, CommitResult, SessionKey, SessionView,
+  Batch, CollectorStorage, CommitResult, SessionKey, SessionView,
 } from "../../../src/storage/collector-storage.ts";
 import { initialPlanningBatch, observation, prompt } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
@@ -48,9 +48,22 @@ setWorldConstructor(StorageScenario);
 BeforeAll(function () {
   const { batch } = new StorageScenario();
   checkWireValue("Batch", batch);
-  const malformed = { ...batch, expectedOffset: -1 };
-  assert.equal(contract.validate("Batch.json", malformed), false);
-  assert(contract.errors?.some(error => error.instancePath === "/expectedOffset" && error.keyword === "minimum"));
+  const message = prompt("Plan");
+  const malformed: [Partial<Batch>, string][] = [
+    [{ expectedOffset: -1 }, "/expectedOffset"],
+    [{ messages: [{ ...message, sourceOrder: 0 }] }, "/messages/0/sourceOrder"],
+    [{ messages: [{ ...message, sourceOrder: Number.MAX_SAFE_INTEGER + 1 }] }, "/messages/0/sourceOrder"],
+    [{ messages: [{ ...message, blockIndex: -1 }] }, "/messages/0/blockIndex"],
+    [{ messages: [{ ...message, turnId: "" }] }, "/messages/0/turnId"],
+    [{ messages: [{ ...message, requestId: "" }] }, "/messages/0/requestId"],
+    [{ messages: [{ ...message, context: { parentSessionId: "" } }] }, "/messages/0/context/parentSessionId"],
+    [{ metadata: { branch: "topic" }, branchObservation: { at: message.at, sourceOrder: 0 } }, "/branchObservation/sourceOrder"],
+    [{ metadata: { branch: "topic" }, branchObservation: { at: "today", sourceOrder: 1 } }, "/branchObservation/at"],
+  ];
+  for (const [fields, path] of malformed) {
+    assert.equal(contract.validate("Batch.json", { ...batch, ...fields }), false, path);
+    assert(contract.errors?.some(error => error.instancePath === path), contract.errorsText());
+  }
 });
 
 Given("an empty remote storage fixture", async function (this: StorageScenario) {
@@ -59,13 +72,18 @@ Given("an empty remote storage fixture", async function (this: StorageScenario) 
 });
 
 When("a collector submits the message {string} without usage", async function (this: StorageScenario, text: string) {
-  this.batch.messages.push(prompt(text));
+  const message = prompt(text);
+  this.batch.messages.push(message);
+  this.batch.metadata = { branch: "topic" };
+  this.batch.branchObservation = { at: message.at, sourceOrder: 1 };
   await this.commit();
   assert.equal(this.result, "committed");
 });
 
 Then("the session contains {string}", async function (this: StorageScenario, text: string) {
-  assert.deepEqual((await this.view()).messages, [prompt(text)]);
+  const view = await this.view();
+  assert.deepEqual(view.messages, [prompt(text)]);
+  assert.deepEqual(view.metadata, { branch: "topic" });
 });
 
 Then("its token total is unknown", async function (this: StorageScenario) {

@@ -25,6 +25,9 @@ jobs:
       - name: Test collector storage
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run check:collector-storage
+      - name: Test collector scan
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bun run check:collector-scan
       - name: Test shared logging
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run check:shared-logging

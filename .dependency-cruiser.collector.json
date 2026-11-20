@@ -1,6 +1,12 @@
 {
   "forbidden": [
     {
+      "name": "scanner-uses-only-the-storage-port",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/scan/" },
+      "to": { "path": "^apps/collector/src/storage/(?!collector-storage\\.ts$)", "reachable": true }
+    },
+    {
       "name": "collector-uses-storage-port",
       "severity": "error",
       "from": { "path": "^apps/collector/src/" },

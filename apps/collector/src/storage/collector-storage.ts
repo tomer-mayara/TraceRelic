@@ -4,6 +4,7 @@ export type Harness = (typeof harnesses)[number];
 export type Identifier = string;
 export type Count = number;
 export type Revision = Count;
+export type SourceOrder = Count;
 export type Role = "user" | "assistant";
 export type Coverage = "unknown" | "partial" | "reported";
 export type CommitResult = "committed" | "conflict" | "invalid";
@@ -34,6 +35,16 @@ export interface Message {
   at: string;
   role: Role;
   text: string;
+  sourceOrder?: SourceOrder;
+  blockIndex?: Count;
+  turnId?: Identifier;
+  requestId?: Identifier;
+  context?: Metadata;
+}
+
+export interface BranchObservation {
+  at?: string;
+  sourceOrder: SourceOrder;
 }
 
 export interface Usage {
@@ -53,6 +64,7 @@ export interface Batch {
   expectedOffset: Count;
   checkpoint: Checkpoint;
   metadata?: Metadata;
+  branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
   hasGap?: boolean;

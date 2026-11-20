@@ -12,6 +12,9 @@ scalar Count extends integer;
 @minValue(1)
 scalar Revision extends Count;
 
+@minValue(1)
+scalar SourceOrder extends Count;
+
 union Role { "user", "assistant" }
 union Coverage { "unknown", "partial", "reported" }
 union CommitResult { "committed", "conflict", "invalid" }
@@ -37,6 +40,19 @@ model Message {
   at: utcDateTime;
   role: Role;
   text: string;
+  /** One-based record number in the source transcript. */
+  sourceOrder?: SourceOrder;
+  /** Zero-based position in the original content array. */
+  blockIndex?: Count;
+  turnId?: Identifier;
+  requestId?: Identifier;
+  context?: Metadata;
+}
+
+model BranchObservation {
+  /** Omit the time when the source only establishes record order. */
+  at?: utcDateTime;
+  sourceOrder: SourceOrder;
 }
 
 model Usage {
@@ -56,6 +72,8 @@ model Batch {
   expectedOffset: Count;
   checkpoint: Checkpoint;
   metadata?: Metadata;
+  /** Position where metadata.branch was recorded. */
+  branchObservation?: BranchObservation;
   messages: Message[];
   usage: Usage[];
   hasGap?: boolean;

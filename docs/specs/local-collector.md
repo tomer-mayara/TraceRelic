@@ -119,10 +119,13 @@ Use the repository's pinned Node and Bun versions. Run the checks below from the
 bun install --frozen-lockfile
 bun run check:collector-history
 bun run check:collector-storage
+bun run check:collector-scan
 bun run test
 bun run lint
 bun run habit-hooks --all
 ```
+
+The scan check runs the planning chat and verifies every `@two_chats` step has a binding. To run the cross-provider token assertions before LC-04 and LC-05, follow the scan check with `bun run --cwd apps/collector check:scan-scenarios --tags @two_chats`.
 
 ## Tickets
 
@@ -256,6 +259,13 @@ Feature: Import visible Codex chat text
 1. **Interface.** Put rollouts in active, archive and unselected locations. Check root precedence and workspace selection. Discover only the selected sources.
 2. **Unit.** Give two blocks the same timestamp and mirror a message in both event formats. Keep the original order and one visible copy. Check a missing branch and a later branch switch.
 3. **Integration.** Reuse the Codex reader's discovery and decoding in the real `scan --once` handler. Read the stored chat through `readSession`.
+
+| LC-01 constraint | Decision and check |
+| --- | --- |
+| Behavior | `collector scan --once --config <file>` reads active and archived Codex rollouts. Repeat `--session <id>` or `--project <directory>` to select sessions for the destination workspace. Either match selects a session. With neither option the command selects the configured root. The [planning chat scenario](../../apps/collector/test/acceptance/scan/codex-planning.feature) runs in `bun run check:collector-scan`. The [two-chat scenario](../../apps/collector/test/acceptance/scan/two-chats.feature) has executable bindings now and becomes required after LC-04 and LC-05. |
+| Observability | The command writes the selected session views as JSON. A planning chat with no measurements has unknown coverage and a null total. Storage rejections identify the source and attempted byte range. The command and storage checks exercise these outcomes. |
+| Architecture | One scanner uses the [Codex reader](../../apps/collector/src/history/local-llm-history-codex.ts) and the [storage port](../../apps/collector/src/storage/collector-storage.ts). Each injected storage instance represents one workspace. The standalone command uses process-local memory for this delivery. The [dependency rules](../../.dependency-cruiser.collector.json) keep the storage implementation outside the scanner. Run `bun run check:collector-deps`. |
+| Interface | The [scan contract](local-collector/scan.tsp) defines source selection, the Codex reader's complete records and byte positions, and the stored session results. The [storage contract](local-collector/storage.tsp) adds optional message positions, turn and request IDs, recorded context and the position of a branch observation. An undated branch change has an order within its source. A branch from another source supersedes the current hint only when recorded times establish which came later. Earlier batches can omit the new fields. Run `bun run test`, `bun run check:collector-storage` and `bun run check:collector-scan`. |
 
 #### LC-02 · Read Claude Code text blocks
 

@@ -6,15 +6,20 @@ behavior:
   - test/interface/history/claude-history.feature
   - test/interface/history/history-windows.feature
   - test/acceptance/config/local-config.feature
+  - test/acceptance/scan/codex-planning.feature
+  - test/acceptance/scan/two-chats.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp
   - ../../docs/specs/local-collector/history.tsp
   - ../../docs/specs/local-collector/config.tsp
+  - ../../docs/specs/local-collector/scan.tsp
 dependencyRules: ../../.dependency-cruiser.collector.json
 storagePort: src/storage/collector-storage.ts
+memoryStorage: src/storage/in-memory-collector-storage.ts
 storageFixture: test/fixtures/in-memory-collector-storage.ts
 historyReader: src/history/index.ts
 configFile: ../../tracerelic.config.json
 configSchema: src/config/global-config-schema.ts
 configLoader: src/config/global-config-loader.ts
 cli: src/cli.ts
+scanner: src/scan/local-collector.ts

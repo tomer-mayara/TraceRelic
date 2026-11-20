@@ -30,7 +30,19 @@ const entries = await reader.readLocalHistory(
 );
 ```
 
-Run `bun run check:collector-history` to check startup and both readers. Run `bun run check:collector-storage` to exercise the in-memory storage fixture. [Local collector engineering spec](docs/specs/local-collector.md)
+Run `bun run check:collector-history` to check startup and both readers.
+
+## Scan a Codex planning chat
+
+Run the one-time scan with a native Codex session ID. It prints a JSON array of sessions with the visible user and assistant text in source order. LC-01 imports chat text and returns `observedTotalTokens: null` with `coverage: "unknown"`. LC-04 adds Codex token measurements.
+
+```sh
+bun run collector scan --once --config ./tracerelic.config.json --session 0190a2b3-c4d5-7000-8000-000000000001
+```
+
+Use `--project <directory>` to select sessions whose recorded working directory is that directory or a descendant. Repeat either option to include more sessions. Omit both options to scan all active and archived Codex rollouts under the configured root.
+
+The standalone command uses memory for the duration of one invocation. TypeScript callers can pass their workspace's storage instance to `LocalCollector` and reuse it across scans. Run `bun run check:collector-scan` for the planning chat and `bun run check:collector-storage` for the storage contract. [Local collector engineering spec](docs/specs/local-collector.md)
 
 ## Run the checks
 

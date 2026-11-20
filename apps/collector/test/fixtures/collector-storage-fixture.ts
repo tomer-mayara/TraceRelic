@@ -29,7 +29,10 @@ export function request(fields: Partial<Usage> = {}): Usage {
 }
 
 export function prompt(text: string): Message {
-  return { id: "message-1", role: "user", at: observedAt, text };
+  return {
+    id: "message-1", role: "user", at: observedAt, text, sourceOrder: 2, blockIndex: 0,
+    turnId: "turn-1", requestId: "request-1", context: { cwd: "/demo", repository: "trace", branch: "topic" },
+  };
 }
 
 export function observation(inputTokens: number, outputTokens: number, revision = 1): Usage {

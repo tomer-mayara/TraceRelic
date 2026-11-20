@@ -189,3 +189,125 @@ test("an absent optional property has the same meaning before and after wire ser
   assert.deepEqual(session?.usage, [request()]);
   assert.deepEqual(session?.metadata, { branch: "main" });
 });
+
+test("a replay can identify a legacy message and preserves its first verified position", async () => {
+  const store = new InMemoryCollectorStorage();
+  const identified = {
+    ...planning, sourceOrder: 7, blockIndex: 1, turnId: "turn-1", context: { cwd: "/demo" },
+  };
+  const copy = { ...source, streamId: "archived-copy" };
+  assert.equal(await store.commit(batch(0, { messages: [planning] })), "committed");
+  assert.equal(await store.commit(batch(10, { messages: [identified] })), "committed");
+  assert.equal(await store.commit(batch(0, {
+    source: copy, messages: [{
+      ...planning, sourceOrder: 2, blockIndex: 0, requestId: "request-1", context: { branch: "topic" },
+    }],
+  })), "committed");
+  assert.equal(await store.commit(batch(20, { messages: [planning] })), "committed");
+  const view = await store.readSession(source);
+  assert.deepEqual(view?.messages, [{
+    ...identified, requestId: "request-1", context: { cwd: "/demo", branch: "topic" },
+  }]);
+  assert.equal(view?.coverage, "unknown");
+  assert.equal(view?.observedTotalTokens, null);
+});
+
+test("blocks within one stream use their record and block positions even when they arrive out of order", async () => {
+  const store = new InMemoryCollectorStorage();
+  const first = { ...planning, sourceOrder: 1, blockIndex: 0 };
+  const second = { ...planning, id: "block-2", sourceOrder: 1, blockIndex: 2 };
+  const later = { ...planning, id: "later", sourceOrder: 3 };
+  const other = { ...source, streamId: "other-log" };
+  const independent = { ...planning, id: "other", sourceOrder: 1 };
+  await store.commit(batch(0, { messages: [later] }));
+  await store.commit(batch(0, { source: other, messages: [independent] }));
+  await store.commit(batch(10, { messages: [second, first] }));
+  const view = await store.readSession(source);
+  assert.deepEqual(view?.messages.filter(message => message.id !== independent.id), [first, second, later]);
+  assert.equal(view?.messages.filter(message => message.id === independent.id).length, 1);
+});
+
+test("the latest branch follows recorded order within a stream and recorded time between streams", async () => {
+  const store = new InMemoryCollectorStorage();
+  const other = { ...source, streamId: "other-log" };
+  const instant = "2026-02-01T10:00:00.000002Z";
+  const tied = "2026-02-01T12:00:00.000002+02:00";
+  const branch = async (offset: number, stream: typeof source, name: string, at: string, sourceOrder: number) => {
+    assert.equal(await store.commit(batch(offset, {
+      source: stream, metadata: { branch: name }, branchObservation: { at, sourceOrder },
+    })), "committed");
+    return (await store.readSession(source))?.metadata.branch;
+  };
+
+  assert.equal(await branch(0, source, "main", instant, 7), "main");
+  assert.equal(await branch(10, source, "later-line", "2026-02-01T09:00:00Z", 9), "later-line");
+  assert.equal(await branch(20, source, "replayed", instant, 7), "later-line");
+  assert.equal(await branch(0, other, "later-instant", instant, 1), "later-instant");
+  assert.equal(await branch(30, source, "tied", tied, 12), "later-instant");
+  assert.equal(await branch(40, source, "newest", "2026-02-01T10:00:00.000003Z", 13), "newest");
+  assert.equal(await branch(10, other, "replay-at-same-position", "2026-03-01T00:00:00Z", 1), "newest");
+  assert.equal(await store.commit(batch(50, { metadata: { branch: "unpositioned", cwd: "/demo" } })), "committed");
+  assert.deepEqual((await store.readSession(source))?.metadata, { cwd: "/demo", branch: "newest" });
+});
+
+test("an undated branch advances in its own stream and has no recorded order against another stream", async () => {
+  const store = new InMemoryCollectorStorage();
+  const other = { ...source, streamId: "other-log" };
+  const dated = { sourceOrder: 3, at: planning.at };
+  const changes = [
+    { stream: source, offset: 0, observation: dated, branch: "main", expected: "main" },
+    { stream: source, offset: 10, observation: { sourceOrder: 4 }, branch: "topic", expected: "topic" },
+    { stream: source, offset: 20, observation: dated, branch: "main", expected: "topic" },
+    { stream: other, offset: 0, observation: dated, branch: "independent", expected: "topic" },
+    { stream: source, offset: 30, observation: { sourceOrder: 5, at: planning.at }, branch: "dated", expected: "dated" },
+    { stream: other, offset: 10, observation: { sourceOrder: 6 }, branch: "undated-copy", expected: "dated" },
+  ];
+  for (const { stream, offset, observation, branch, expected } of changes) {
+    assert.equal(await store.commit(batch(offset, {
+      source: stream, metadata: { branch }, branchObservation: observation,
+    })), "committed", branch);
+    assert.equal((await store.readSession(source))?.metadata.branch, expected);
+  }
+});
+
+test("invalid message evidence or a branch observation rejects the batch and its checkpoint", async () => {
+  const store = new InMemoryCollectorStorage();
+  const branchObservation = { at: planning.at, sourceOrder: 1 };
+  const invalid: Partial<Batch>[] = [
+    ...[0, -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map(sourceOrder => ({ messages: [{ ...planning, sourceOrder }] })),
+    ...[-1, 0.5, Number.MAX_SAFE_INTEGER + 1].map(blockIndex => ({ messages: [{ ...planning, blockIndex }] })),
+    { messages: [{ ...planning, turnId: "" }] }, { messages: [{ ...planning, requestId: "" }] },
+    { messages: [{ ...planning, context: { parentSessionId: "" } }] },
+    { messages: [{ ...planning, context: { cwd: 9 as unknown as string } }] },
+    { branchObservation }, { metadata: { branch: "" }, branchObservation },
+    { metadata: { branch: "topic" }, branchObservation: { ...branchObservation, at: "yesterday" } },
+    ...[0, 1.5, Number.MAX_SAFE_INTEGER + 1].map(sourceOrder => ({
+      metadata: { branch: "topic" }, branchObservation: { ...branchObservation, sourceOrder },
+    })),
+  ];
+  for (const fields of invalid) {
+    assert.equal(await store.commit(batch(0, { usage: [request()], ...fields })), "invalid", JSON.stringify(fields));
+  }
+  assert.equal(await store.readSession(source), null);
+  assert.equal(await store.readCheckpoint(source), null);
+});
+
+test("a replay with contradictory recorded evidence leaves the original message and checkpoint intact", async () => {
+  const store = new InMemoryCollectorStorage();
+  const original = {
+    ...planning, sourceOrder: 4, turnId: "turn-1", requestId: "request-1", context: { repository: "trace" },
+  };
+  const first = batch(0, { messages: [original] });
+  assert.equal(await store.commit(first), "committed");
+  for (const fields of [
+    { role: "assistant" as const }, { text: "changed" }, { at: "2026-03-01T00:00:00Z" },
+    { turnId: "turn-2" }, { requestId: "request-2" }, { context: { repository: "another" } },
+  ]) {
+    assert.equal(await store.commit(batch(10, {
+      messages: [{ ...original, ...fields }], metadata: { branch: "rejected" },
+    })), "invalid");
+    assert.deepEqual(await store.readCheckpoint(source), first.checkpoint);
+    assert.deepEqual((await store.readSession(source))?.messages, [original]);
+    assert.deepEqual((await store.readSession(source))?.metadata, {});
+  }
+});
