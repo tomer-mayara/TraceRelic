@@ -18,6 +18,12 @@ interface PresenceState {
   unverifiedEarlierHistory?: true;
 }
 
+/** Unversioned LC-17 journal entries establish which rules govern this generation until its evidence is repaired. */
+export interface SourceGeneration {
+  generation: number;
+  lc17Evidence: boolean;
+}
+
 type Dialect = NonNullable<ReturnType<typeof recordedPathDialect>>;
 
 function codexName(path: string, dialect: Dialect): boolean {
@@ -86,7 +92,9 @@ function completeExtent(checkpoint: Checkpoint, observation?: SourceObservation,
   return { observedEnd, observedPrefixDigest: freshDigest ?? savedDigest ?? bound?.prefixDigest };
 }
 
-function outstandingExtent(batch: Batch, original?: ObservedExtent, outstanding?: ObservedExtent): ObservedExtent | undefined {
+function outstandingExtent(batch: Batch, original?: ObservedExtent, outstanding?: ObservedExtent, lc17 = false): ObservedExtent | undefined {
+  // LC-17 considered a recorded loss recovered once the same generation had accepted the entire suffix.
+  if (lc17) return !batch.resetFrom && outstanding && outstanding.offset > batch.checkpoint.offset ? outstanding : undefined;
   if (!original?.prefixDigest) return outstanding;
   const { checkpoint } = batch;
   const checked = batch.sourceObservation?.checkedPrefix;
@@ -123,9 +131,9 @@ function earlierHistory(prior: PresenceState | undefined, batch: Batch, location
 /** Keep each acknowledged source's presence and loss evidence with its checkpoint in the same transaction. */
 export class StoredSource {
   private constructor(readonly source: StreamKey, readonly checkpoint: Checkpoint, readonly generation: number,
-    private readonly state: PresenceState) {}
+    private readonly state: PresenceState, readonly lc17Evidence: boolean) {}
 
-  static accept(previous: StoredSource | undefined, batch: Batch, generation: number): StoredSource | null {
+  static accept(previous: StoredSource | undefined, batch: Batch, generation: number, lc17Journal = false): StoredSource | null {
     const { source, checkpoint, sourceObservation } = batch;
     const prior = previous?.state;
     const known = prior?.location ?? (source.installationId === undefined ? legacyScannerLocation(source.harness, source.streamId) : undefined);
@@ -137,18 +145,20 @@ export class StoredSource {
     const present = sourceObservation !== undefined || reset || checkpoint.offset > batch.expectedOffset;
     const state: PresenceState = {
       location, presence: present ? "present" : prior?.presence ?? "present",
-      unrecovered: outstandingExtent(batch, previous?.observedThrough, prior?.unrecovered),
+      unrecovered: outstandingExtent(batch, previous?.observedThrough, prior?.unrecovered, lc17Journal),
       ...completeExtent(checkpoint, sourceObservation, current),
       ...legacyCodexEvidence(batch, current),
       ...earlierHistory(prior, batch, location),
     };
     const { harness, sessionId, streamId, installationId } = source;
     const key = previous?.source ?? definedFields({ harness, sessionId, streamId, installationId });
-    return new StoredSource(key, checkpoint, generation, state);
+    const lc17Evidence = !checkpoint.evidenceVersion && (lc17Journal || (!reset && previous?.lc17Evidence === true));
+    return new StoredSource(key, checkpoint, generation, state, lc17Evidence);
   }
 
   sharesEvidence(other: StoredSource): boolean {
-    return this.generation === other.generation && !this.hasGap && !other.hasGap && !!this.checkpoint.prefixDigest
+    return this.generation === other.generation && this.lc17Evidence === other.lc17Evidence
+      && !this.hasGap && !other.hasGap && !!this.checkpoint.prefixDigest
       && isDeepStrictEqual(this.checkpoint, other.checkpoint) && isDeepStrictEqual(this.state, other.state);
   }
 
@@ -176,7 +186,7 @@ export class StoredSource {
     return unrecovered ?? (observedEnd > this.checkpoint.offset ? definedFields({ offset: observedEnd, prefixDigest: observedPrefixDigest }) : undefined);
   }
 
-  record(update: PresenceWrite, identity?: CodexIdentityStatus): StoredSource | null {
+  record(update: PresenceWrite, identity?: CodexIdentityStatus, lc17Journal = false): StoredSource | null {
     const accepted = this.checkpoint.offset;
     const previous = this.state;
     if ((update.presence !== "present" && update.presence !== "missing")
@@ -188,10 +198,12 @@ export class StoredSource {
     const observedEnd = Math.max(previous.observedEnd, update.observedEnd);
     const observedPrefixDigest = update.observedEnd === observedEnd && update.observedPrefixDigest ? update.observedPrefixDigest :
       previous.observedEnd === observedEnd ? previous.observedPrefixDigest : undefined;
-    const loss = recordLoss(previous, update, definedFields({ offset: observedEnd, prefixDigest: observedPrefixDigest }), accepted);
+    const loss = lc17Journal && this.lc17Evidence
+      ? { earlierGap: previous.earlierGap, unrecovered: update.presence === "missing" && observedEnd > accepted ? { offset: observedEnd } : previous.unrecovered }
+      : recordLoss(previous, update, definedFields({ offset: observedEnd, prefixDigest: observedPrefixDigest }), accepted);
     const state = { ...previous, ...loss, presence: update.presence, location, observedEnd, observedPrefixDigest,
       ...(identity && { codexIdentityStatus: identity }) };
-    return isDeepStrictEqual(state, previous) ? this : new StoredSource(this.source, this.checkpoint, this.generation, state);
+    return isDeepStrictEqual(state, previous) ? this : new StoredSource(this.source, this.checkpoint, this.generation, state, this.lc17Evidence);
   }
 
   selected(scope: SourceScope | undefined, version: number): AcknowledgedSource | undefined {

@@ -28,13 +28,22 @@ The table links the public behaviors and regression checks for the combined stac
 | Remote sync | The API accepts versioned, digest-checked transfers under the existing credential. It can resume large histories and resolve proved aliases across both installation settings. [Long call sequence](../../apps/api/test/acceptance/collector/remote-sync.feature) · [17,000 anonymous messages and restart](../../apps/api/test/integration/collector/long-anonymous-history.test.ts) |
 | PostgreSQL and CI | PostgreSQL projects changed records and their positions. Ordinary presence requires zero record updates. CI builds the workspace and shared schemas once and reports the individual contract and behavior checks. [Competing writes and projection](../../apps/api/test/acceptance/postgres/competing-writes.feature) · [CI workflow](../../.github/workflows/collector.yml) |
 
-Three upgrade cases use the same public contracts and checks. Preserve uncertainty for a known
-scanner file whose legacy checkpoint has an empty decoder and a positive offset. Require a physical
-line number before retracting text across sessions. Keep the original precedence of Claude current
-and backup metadata during correction. Exercise both behaviors through a scanner restart. Replay an
-LC-17 PostgreSQL journal with its original session revisions so a corrected peer ownership decision
-cannot block later writes. Check the stored views, both session versions and an unrelated write
-after reopening the database. The scanner and PostgreSQL contract suites cover these cases.
+### Upgrade checks
+
+- A known scanner file can have an empty decoder and a positive accepted offset. If that file is
+  lost or replaced, its records remain visible with a source diagnostic. Retracting text from another
+  session requires a recorded physical line. Appends, usage corrections and parser upgrades preserve
+  the history evidence marker. [Missing and replaced files](../../apps/collector/test/integration/scan/message-evidence.test.ts) ·
+  [Marker continuity](../../apps/collector/test/unit/storage/evidence-version.test.ts)
+- A Claude backup keeps the fallback metadata it originally supplied. The verified correction also
+  preserves the parent used for ownership. A suppressed backup parent previously reduced a confirmed
+  130-token call to 100. [Metadata and ownership after restart](../../apps/api/test/integration/postgres/claude-copy-metadata.test.ts)
+- Replaying old Claude and Codex fork writes previously advanced peer session versions and could
+  block every write to the workspace. A database populated by the original LC-17 scanner now accepts
+  a new chat while its parent and child retain totals of 100 and 25. After a verified reread, the
+  parent gains the 30-token advisor, the child stays at 25 and both totals survive another restart.
+  [Historical journals](../../apps/api/test/integration/postgres/legacy-journal.test.ts) ·
+  [Authenticated API upgrade](../../apps/api/test/acceptance/postgres/restart.feature)
 
 ## Review snapshot
 
@@ -254,7 +263,7 @@ reader and CLI used by this stack. The fractional-bound finding also applies to 
 ## Verification and release
 
 The original review passed 533 Node tests and 68 Cucumber scenario executions. New regression tests
-cover the failures reproduced above. The repaired workspace passes 617 Node tests and 86 Cucumber
+cover the failures reproduced above. The repaired workspace passes 640 Node tests and 91 Cucumber
 scenario executions across the six standalone checks. The shared scenarios run against each supported
 adapter. The history suite also runs its six compression checks under Bun. Workspace lint, dependency
 boundaries, generated contracts and Habit Hooks pass. Verification

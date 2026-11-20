@@ -55,16 +55,17 @@ function totalTokens(usage: readonly Usage[]): number {
 }
 
 function mergeSessionRecords(
-  previous: StoredSession | undefined, batch: Batch, stream: string, generation: number,
+  previous: StoredSession | undefined, batch: Batch, stream: string, source: StoredSource,
 ): Omit<StoredSession, "version" | "checkpoints"> | null {
   if (!Array.isArray(batch.messages)) return null;
+  const { generation, lc17Evidence } = source;
   const messages = SessionMessages.apply(previous?.messages, batch, stream, generation);
   const measurements = mergeMeasurements(previous, batch, stream, generation);
   const sourceEvidence = new Map(previous?.sourceEvidence);
   const key = JSON.stringify([stream, generation]);
   const metadata = SessionMetadata.apply(previous?.metadata, batch, key, batch.expectedVersion + 1);
   let prior = batch.repairEvidenceFrom ? undefined : sourceEvidence.get(key);
-  if (batch.reconcileCodexForkFrom && prior?.diagnostics?.some(row => row.code === "unresolved-codex-fork")) {
+  if (!lc17Evidence && batch.reconcileCodexForkFrom && prior?.diagnostics?.some(row => row.code === "unresolved-codex-fork")) {
     const remaining = prior.diagnostics.filter(row => row.code !== "unresolved-codex-fork");
     prior = { diagnostics: remaining, hasGap: prior.hasGap && remaining.length > 0 };
   }
@@ -124,21 +125,21 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   }
 
   private withoutAliasEvidence(session: StoredSession, candidate: StoredSource) {
-    const { checkpoint, source, generation } = candidate;
+    const { checkpoint, source } = candidate;
     const remove: Batch = { source, expectedVersion: session.version, expectedOffset: checkpoint.offset,
       checkpoint, repairEvidenceFrom: checkpoint, messages: [], usage: [] };
-    const records = mergeSessionRecords(session, remove, encodeStreamKey(source), generation);
+    const records = mergeSessionRecords(session, remove, encodeStreamKey(source), candidate);
     if (!records || records.hasGap !== session.hasGap || !isDeepStrictEqual(records.view, session.view)
         || !isDeepStrictEqual(records.messages.ordered(), session.messages.ordered())) return;
     if (source.harness === "claude") {
-      const ownership = this.claudeOwners.prepare(remove, records.measurements.claude?.measurements ?? [], undefined, generation);
+      const ownership = this.claudeOwners.prepare(remove, records.measurements.claude?.measurements ?? [], undefined, candidate);
       if (!ownership || ownership.changedSessions.size) return;
       const before = this.claudeOwners.view(source.sessionId, session.view.usage, session.measurements.order);
       const after = ownership.owners.view(source.sessionId, records.view.usage, records.measurements.order);
       if (!isDeepStrictEqual(before, after)) return;
       return { records, publish: () => { this.claudeOwners = ownership.owners; } };
     }
-    const ownership = this.codexOwners.prepare(remove, records.view.usage, id => this.verifiedParent(id, session), false, generation);
+    const ownership = this.codexOwners.prepare(remove, records.view.usage, id => this.verifiedParent(id, session), false, candidate);
     if (ownership === null || ownership?.transfers.size) return;
     if (ownership?.replacement) {
       const before = this.codexOwners.visible(source.sessionId, session.view.usage, session.measurements.aliases);
@@ -171,10 +172,19 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     changed?.push({ ...session.view.key, version: session.version });
   }
 
-  async recordPresence(update: PresenceWrite, changed?: SessionRevision[]): Promise<CommitResult> {
+  /** The database calls this only while restoring writes that already committed. */
+  restoreRevisions(revisions: readonly SessionRevision[]): void {
+    for (const revision of revisions) {
+      const key = encodeSessionKey(revision);
+      const session = this.sessions.get(key);
+      if (session && session.version !== revision.version) this.sessions.set(key, { ...session, version: revision.version });
+    }
+  }
+
+  async recordPresence(update: PresenceWrite, changed?: SessionRevision[], lc17Journal = false): Promise<CommitResult> {
     if (!hasValidPosition(update)) return "invalid";
     const alias = this.aliases.get(encodeStreamKey(update.source));
-    if (alias !== undefined) return this.recordPresence({ ...update, source: { ...update.source, streamId: alias } }, changed);
+    if (alias !== undefined) return this.recordPresence({ ...update, source: { ...update.source, streamId: alias } }, changed, lc17Journal);
     const key = encodeSessionKey(update.source);
     const stream = encodeStreamKey(update.source);
     const session = this.sessions.get(key);
@@ -184,7 +194,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const repair = codexSourceIdentity(update, { file: current, messages: session.messages, stream, version: session.version },
       source => this.messageSource(source));
     if (typeof repair === "string") return repair;
-    const next = current.record(update, repair.status);
+    const next = current.record(update, repair.status, lc17Journal);
     if (!next) return "invalid";
     if (next === current) return "committed";
     const version = session.version + 1;
@@ -266,11 +276,10 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     return true;
   }
 
-  private publishOwnership(batch: Batch, next: StoredSession, current: Checkpoint | undefined, changed?: SessionRevision[]): boolean {
+  private publishOwnership(batch: Batch, next: StoredSession, source: StoredSource, current: Checkpoint | undefined, changed?: SessionRevision[]): boolean {
     if (batch.source.harness === "claude") {
       if (batch.codexCallClaims !== undefined) return false;
-      const generation = next.checkpoints.get(encodeStreamKey(batch.source))?.generation ?? 0;
-      const staged = this.claudeOwners.prepare(batch, next.measurements.claude?.measurements ?? [], batch.metadata?.parentSessionId, generation);
+      const staged = this.claudeOwners.prepare(batch, next.measurements.claude?.measurements ?? [], batch.metadata?.parentSessionId, source);
       if (!staged) return false;
       const validUsage = (session: StoredSession) => {
         const projected = staged.owners.view(session.view.key.sessionId, session.view.usage, session.measurements.order);
@@ -283,8 +292,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     if (!isCount(totalTokens(next.view.usage))) return false;
     const newProof = batch.checkpoint.codexFork?.inheritedThrough !== undefined &&
       !isDeepStrictEqual(batch.checkpoint.codexFork, current?.codexFork);
-    const generation = next.checkpoints.get(encodeStreamKey(batch.source))?.generation ?? 0;
-    const ownership = this.codexOwners.prepare(batch, next.view.usage, id => this.verifiedParent(id, next), newProof, generation);
+    const ownership = this.codexOwners.prepare(batch, next.view.usage, id => this.verifiedParent(id, next), newProof, source);
     if (ownership === null) return false;
     if (!ownership) return true;
     if (!this.advancePeers(batch.source, ownership.transfers, changed)) return false;
@@ -292,10 +300,10 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     return true;
   }
 
-  async commit(batch: Batch, changed?: SessionRevision[]): Promise<CommitResult> {
+  async commit(batch: Batch, changed?: SessionRevision[], lc17Journal = false): Promise<CommitResult> {
     if (!hasValidPosition(batch)) return "invalid";
     const alias = this.aliases.get(encodeStreamKey(batch.source));
-    if (alias !== undefined) return this.commit({ ...batch, source: { ...batch.source, streamId: alias } }, changed);
+    if (alias !== undefined) return this.commit({ ...batch, source: { ...batch.source, streamId: alias } }, changed, lc17Journal);
     const { source, expectedVersion, expectedOffset } = batch;
     const session = encodeSessionKey(source);
     const stream = encodeStreamKey(source);
@@ -311,14 +319,17 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const incoming = structuredClone(batch);
     // A rewritten file can describe the same counters through a different set of reports.
     const generation = incoming.resetFrom ? version : current?.generation ?? 0;
-    const accepted = StoredSource.accept(current, incoming, generation);
+    const accepted = StoredSource.accept(current, incoming, generation, lc17Journal);
     if (!accepted) return "invalid";
-    const records = mergeSessionRecords(previous, incoming, stream, generation);
+    if (incoming.repairEvidenceFrom) {
+      previous?.metadata.restoreBackupFields(incoming, JSON.stringify([stream, generation]), accepted.selected(undefined, version)?.location);
+    }
+    const records = mergeSessionRecords(previous, incoming, stream, accepted);
     if (!records) return "invalid";
     const checkpoints = new Map(previous?.checkpoints);
     checkpoints.set(stream, accepted);
     const next = { version, checkpoints, ...records };
-    if (!this.publishOwnership(incoming, next, current?.checkpoint, changed)) return "invalid";
+    if (!this.publishOwnership(incoming, next, accepted, current?.checkpoint, changed)) return "invalid";
     this.saveSession(session, next, changed);
     return "committed";
   }

@@ -13,6 +13,12 @@ Feature: Store a collector batch
     Then the collector is told to reload its checkpoint
     And the session still contains one usage record totaling 130 tokens
 
+  Scenario: Appending a record cannot certify an earlier unverified prefix
+    Given a batch with 120 input tokens and 10 output tokens was stored
+    When a collector appends usage and marks the whole history verified
+    Then the entire batch is rejected
+    And the session still contains one usage record totaling 130 tokens
+
   Scenario: A provider completes an earlier usage observation
     Given a Claude request reported 40 input tokens and 2 output tokens
     When the same request is revised to 40 input tokens and 91 output tokens

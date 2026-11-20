@@ -1,5 +1,6 @@
 import { basename, dirname, join, relative } from "node:path";
 import { matchesRecordedPath } from "@tracerelic/shared";
+import { claudeCopyStem } from "../claude-transcript-copy.ts";
 import type { GlobalConfig } from "../config/global-config.ts";
 import { type DirectoryListing, listDirectory, TranscriptDirectories } from "./transcript-directories.ts";
 import {
@@ -205,8 +206,8 @@ export class LocalLLMHistoryClaude extends LocalLLMHistory {
   private transcriptName(name: string, scan: boolean): { stem: string; previousCopy: boolean } | undefined {
     // Date queries keep their original .jsonl file set. A scan also recognizes earlier copies.
     if (scan) {
-      const prior = /^(.+)\.orphaned-\d.*-.+\.jsonl$/.exec(name) ?? /^(.+)\.jsonl\.superseded-\d.*$/.exec(name);
-      if (prior) return { stem: prior[1], previousCopy: true };
+      const stem = claudeCopyStem(name);
+      if (stem) return { stem, previousCopy: true };
     }
     const current = /^(.+)\.jsonl$/.exec(name);
     if (current) return { stem: current[1], previousCopy: false };

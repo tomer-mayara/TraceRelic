@@ -20,11 +20,11 @@ export class ClaudeSessionOwnership {
 
   constructor(sessionId: string, records: ClaudeOriginReports, parent?: ClaudeOriginReports, known?: ClaudeSessionOwnership) {
     for (const call of records.calls.values()) this.assigned.set(call.key, this.owner(sessionId, call, parent, known));
-    for (const { report, origin, callKey } of records.rows) {
+    for (const { report, origin, callKey, lc17 } of records.rows) {
       const owner = this.assigned.get(callKey);
       if (owner) {
         const reports = this.contributions.get(owner.sessionId) ?? [];
-        const located: OwnedReport = { ...report, origin };
+        const located: OwnedReport = lc17 ? report : { ...report, origin };
         reports.push(owner.sessionId === sessionId ? located : rekey(located, owner));
         this.contributions.set(owner.sessionId, reports);
       } else if (origin) this.note(origin);
@@ -35,7 +35,7 @@ export class ClaudeSessionOwnership {
     let match: NativeCall | undefined;
     if (parent) for (const row of call.origins.length ? call.origins : [undefined]) {
       if (row?.kind === "copy" && !row.parentSessionId) continue;
-      const candidate = parent.match(call, row);
+      const candidate = parent.match(call, row, call.requestOwnsIterations);
       if (candidate === null || (candidate && match && match !== candidate)) return null;
       if (candidate) match = candidate;
     }

@@ -27,7 +27,7 @@ export class ClaudeCallOwners {
     this.measured = new Map(previous?.measured);
   }
 
-  prepare(batch: Batch, usage: readonly Usage[], parentSessionId?: string, generation = 0): { owners: ClaudeCallOwners; changedSessions: ReadonlySet<string> } | null {
+  prepare(batch: Batch, usage: readonly Usage[], parentSessionId?: string, generation = { generation: 0, lc17Evidence: false }): { owners: ClaudeCallOwners; changedSessions: ReadonlySet<string> } | null {
     const { sessionId } = batch.source;
     const previous = this.records.get(sessionId);
     if (!previous && !parentSessionId && !usage.length && !batch.claudeUsageReports?.length) {

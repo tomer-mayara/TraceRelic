@@ -71,7 +71,7 @@ A Claude fork or subagent keeps its own chat and links to its parent. If it copi
 
 `observedTotalTokens` sums the accepted input and output. An explicit zero counts as a measurement. A session without accepted measurements has a null total and unknown coverage. A known gap makes measured coverage partial.
 
-After an upgrade, a scan can correct an earlier chat or token total by rereading the bytes that produced its checkpoint. If those bytes are missing or their owner is uncertain, the session keeps the earlier evidence and reports `unverified-source-history`. Restoring the original file and scanning the affected sessions lets the collector check the evidence again.
+An API upgrade preserves the token totals already stored for each chat. Run `scan --once` on an affected installation to correct an earlier chat or token total from the bytes that produced its checkpoint. If those bytes are missing or their owner is uncertain, the session keeps the earlier evidence and reports `unverified-source-history`. Restoring the original file and scanning the affected sessions lets the collector check the evidence again.
 
 The scanner keeps reading after a damaged complete line. For damaged lines and unsupported usage, including a Claude cache breakdown, `usageDiagnostics` gives the source, line number and byte range. The range includes the terminating newline. Codex keeps independently identified calls and resumes counting cumulative changes from the next reliable snapshot. [Local collector engineering spec](docs/specs/local-collector.md)
 

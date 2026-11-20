@@ -74,11 +74,11 @@ export class CodexCallOwners {
     });
   }
 
-  prepare(batch: Batch, stored: readonly Usage[], parentOf: ParentLookup, newProof: boolean, generation = 0): OwnershipUpdate | null | undefined {
+  prepare(batch: Batch, stored: readonly Usage[], parentOf: ParentLookup, newProof: boolean, generation = { generation: 0, lc17Evidence: false }): OwnershipUpdate | null | undefined {
     const claims = batch.codexCallClaims;
     if (claims !== undefined && (!Array.isArray(claims) || batch.source.harness !== "codex")) return null;
-    const source = JSON.stringify([batch.source.sessionId, batch.source.streamId, batch.source.installationId, generation]);
-    if (batch.repairEvidenceFrom || batch.reconcileCodexForkFrom) return this.repair(batch, stored, parentOf, source, generation);
+    const source = JSON.stringify([batch.source.sessionId, batch.source.streamId, batch.source.installationId, generation.generation]);
+    if (batch.repairEvidenceFrom || (batch.reconcileCodexForkFrom && !generation.lc17Evidence)) return this.repair(batch, stored, parentOf, source, generation.generation);
     if (!claims?.length && (!newProof || !this.contested.size)) return;
     const { sessionId } = batch.source;
     const known = this.bySession.get(sessionId);
@@ -109,7 +109,7 @@ export class CodexCallOwners {
     }
     for (const [id, decision] of replacement.decisions) if (decision.candidates) replacement.contested.add(id);
     const next = replacement.prepare({ ...batch, repairEvidenceFrom: undefined, reconcileCodexForkFrom: undefined },
-      stored, parentOf, true, generation);
+      stored, parentOf, true, { generation, lc17Evidence: false });
     if (next === null) return null;
     if (next) replacement.publish(next);
     const transfers = new Set<string>();

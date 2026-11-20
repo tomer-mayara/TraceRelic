@@ -1,4 +1,5 @@
 import type { GlobalConfig } from "../config/global-config.ts";
+import { claudeCopyFallbackFields } from "../claude-transcript-copy.ts";
 import {
   LocalLLMHistoryClaude, LocalLLMHistoryCodex, TranscriptChangedError, codexRolloutName, type ClaudeTranscriptEntry, type CodexRolloutEntry, type ScanSelection, type TranscriptSource,
 } from "../history/index.ts";
@@ -54,7 +55,7 @@ function preparePreviousCopy(chat: DecodedChat, known: SessionView | null, offse
   if (!offset && !known && !chat.messages.length && !Object.keys(chat.metadata).length
     && !chat.claudeUsageReports?.length && !chat.usageDiagnostics?.length) return false;
   // Earlier copies can fill missing fields. Storage compares branches by their recorded positions.
-  for (const field of ["cwd", "repository", "parentSessionId"] as const) {
+  for (const field of claudeCopyFallbackFields) {
     if (known?.metadata[field] !== undefined) delete chat.metadata[field];
   }
   return true;

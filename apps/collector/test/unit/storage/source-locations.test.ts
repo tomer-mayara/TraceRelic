@@ -117,3 +117,15 @@ test("inventory and missing reports expose only stream identity and location fie
   first.missingSources[0].source.streamId = "edited";
   assert.deepEqual((await store.readSession(source))?.missingSources?.[0].source, source);
 });
+
+test("legacy source aliases require the two generations to use compatible ownership rules", async () => {
+  for (const canonicalIsHistorical of [false, true]) {
+    const store = new InMemoryCollectorStorage();
+    const legacy = { ...source, streamId: JSON.stringify([location.root, location.path]) };
+    const checkpoint = { offset: 10, parserState: "{}", prefixDigest: "a".repeat(64) };
+    const first = batch(0, 0, { source: legacy, checkpoint, sourceObservation: { location, observedEnd: 10 } });
+    assert.equal(await store.commit(first, undefined, true), "committed");
+    assert.equal(await store.commit({ ...first, source, expectedVersion: 1 }, undefined, canonicalIsHistorical), "committed");
+    assert.equal(await store.mergeSourceAlias(legacy, source.streamId, 2), canonicalIsHistorical);
+  }
+});

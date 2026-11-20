@@ -35,7 +35,7 @@ test("concurrent startups apply the wire and storage migrations once and share l
   const scope = { harness: key.harness, root: inventory.location.root, installationId: source.installationId };
   assert.deepEqual(await reader.listSources(workspace, scope), [inventory]);
   assert.deepEqual(await reader.listSources(workspace, { ...scope, sessionIds: ["different"] }), []);
-  assert.deepEqual(await reader.write(workspace, tx => tx.entriesAfter("0")), [{ position, write }]);
+  assert.deepEqual(await reader.write(workspace, tx => tx.entriesAfter("0")), [{ position, write, revisions: [{ ...key, version: 1 }] }]);
   assert.deepEqual(await reader.write(workspace, tx => tx.entriesAfter(position)), []);
   assert.deepEqual(await reader.write("other", tx => tx.entriesAfter("0")), []);
 });

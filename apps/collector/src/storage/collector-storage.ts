@@ -143,22 +143,28 @@ export interface Checkpoint {
   claudeCallOrigins?: true;
 }
 
-/** The legacy scanner saved a positive physical line and decoder alongside its byte offset. */
-export function legacyScannerLine(checkpoint: Checkpoint): number | undefined {
+/** A legacy scanner checkpoint has either an empty state or a decoder with its last physical line. */
+function legacyScannerPosition(checkpoint: Checkpoint): number | "empty" | undefined {
   if (!checkpoint.offset || checkpoint.evidenceVersion) return;
   let state: { version?: unknown; lineNumber?: unknown; decoder?: unknown } | null;
-  try { state = JSON.parse(checkpoint.parserState); } catch { return; }
-  if (!state || typeof state.version !== "number" || !Number.isInteger(state.version) || state.version < 1 || state.version > 4
+  try { state = JSON.parse(checkpoint.parserState || "{}"); } catch { return; }
+  if (!state || typeof state !== "object" || Array.isArray(state)) return;
+  if (!Object.keys(state).length) return "empty";
+  if (typeof state.version !== "number" || !Number.isInteger(state.version) || state.version < 1 || state.version > 4
     || typeof state.lineNumber !== "number" || !Number.isSafeInteger(state.lineNumber) || state.lineNumber < 1 || state.lineNumber > checkpoint.offset
     || !state.decoder || typeof state.decoder !== "object" || Array.isArray(state.decoder)) return;
   return state.lineNumber;
 }
 
-/** An empty early scanner state identifies no line. Its source can still establish that history needs checking. */
+export function legacyScannerLine(checkpoint: Checkpoint): number | undefined {
+  const position = legacyScannerPosition(checkpoint);
+  return typeof position === "number" ? position : undefined;
+}
+
+/** An empty state identifies no line. Its source can still establish that history needs checking. */
 export function needsHistoryVerification(source: StreamKey, checkpoint: Checkpoint, location?: SourceLocation): boolean {
-  if (!checkpoint.offset || checkpoint.evidenceVersion) return false;
-  if (legacyScannerLine(checkpoint) !== undefined) return true;
-  if (checkpoint.parserState !== "" && !/^[ \t\r\n]*\{[ \t\r\n]*\}[ \t\r\n]*$/.test(checkpoint.parserState)) return false;
+  const position = legacyScannerPosition(checkpoint);
+  if (position !== "empty") return position !== undefined;
   const embedded = legacyScannerLocation(source.harness, source.streamId);
   if (embedded) return !location || (embedded.root === location.root && embedded.path === location.path);
   return !!location && source.streamId === location.path && legacyScannerStream(source.harness, location) !== undefined;

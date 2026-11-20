@@ -121,7 +121,9 @@ model VerifiedPrefix {
 model Checkpoint {
   offset: Count;
   parserState: string;
-  /** The scanner has reconciled the accepted bytes with the current message and usage identity rules. */
+  /** The scanner has reconciled the accepted bytes with the current message and usage identity rules.
+   * After accepting a positive offset, only a verified full-prefix repair can add this marker within
+   * the same generation. Appends, usage corrections and parser-only upgrades preserve it. */
   evidenceVersion?: 1;
   /** Older checkpoints can lack this evidence. After it is saved, each write supplies a digest.
    * A parser-only upgrade at the same byte preserves the accepted digest. */
@@ -365,7 +367,8 @@ model Batch {
   messages: Message[];
   /** Prove equivalent message occurrences in copies of the same logical transcript. */
   messageOrigins?: MessageOrigin[];
-  /** At the same byte, replace this source generation's contribution using its verified accepted prefix. */
+  /** At the same byte, replace this source generation's contribution using its verified accepted prefix.
+   * For a Claude backup, keep the fallback metadata fields and precedence established by its original writes. */
   repairEvidenceFrom?: Checkpoint;
   usage: Usage[];
   /** Bind a reliable native call to its workspace owner. Copied reports can name their verified parent. */

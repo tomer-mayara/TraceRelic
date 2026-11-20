@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DatabaseError, Pool, type PoolClient, type QueryResultRow } from "pg";
 import type { CollectorScope } from "../collector-credentials.ts";
+import type { SessionRevision } from "@tracerelic/collector/memory-storage";
 import { matchesSourceScope, needsHistoryVerification, sourceHistoryDiagnostic, StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint,
   type CheckpointSnapshot, type Message, type PresenceWrite, type SessionKey, type SessionView,
   type SourceScope, type StreamKey, type Usage } from "@tracerelic/collector/storage";
@@ -11,6 +12,7 @@ export type CollectorWrite = { kind: "batch"; value: Batch } | { kind: "presence
 
 type SourceAliasWrite = { kind: "alias"; value: { source: StreamKey; target: string; expectedVersion: number } };
 export type JournalWrite = CollectorWrite | SourceAliasWrite;
+interface JournalEntry { position: string; write: JournalWrite; revisions?: SessionRevision[] }
 
 export class SessionVersionConflict extends Error {
   constructor() { super("Collector session version conflict"); }
@@ -19,7 +21,8 @@ export class SessionVersionConflict extends Error {
 export interface CollectorTransaction {
   saveAlias(write: SourceAliasWrite, summary: PersistedSession["summary"]): Promise<string>;
   recordsFor(key: SessionKey): Promise<SessionRecords>;
-  entriesAfter(position: string, limit?: number): Promise<{ position: string; write: JournalWrite }[]>;
+  storedVersions(keys: readonly SessionKey[]): Promise<SessionRevision[]>;
+  entriesAfter(position: string, limit?: number): Promise<JournalEntry[]>;
   save(write: CollectorWrite, sessions: readonly PersistedSession[], checkpoint: Checkpoint,
     inventory: AcknowledgedSource | null): Promise<string>;
 }
@@ -99,10 +102,10 @@ async function flagUnverifiedHistory(sql: Queries): Promise<void> {
 class WorkspaceTransaction implements CollectorTransaction {
   constructor(private readonly workspace: Buffer, private readonly sql: Queries) {}
 
-  private async append(write: JournalWrite) {
+  private async append(write: JournalWrite, revisions: SessionRevision[]) {
     const [entry] = await this.sql.rows<{ position: string }>(
       "INSERT INTO tracerelic_collector.writes (workspace_key, entry) VALUES ($1, $2) RETURNING position::text",
-      [this.workspace, JSON.stringify(write)]);
+      [this.workspace, JSON.stringify({ ...write, revisions })]);
     return entry.position;
   }
 
@@ -116,12 +119,22 @@ class WorkspaceTransaction implements CollectorTransaction {
     await this.sql.rows(`INSERT INTO tracerelic_collector.source_aliases
       (workspace_key,harness,session_key,installation_key,stream_key,target) VALUES ($1,$2,$3,$4,$5,$6)`,
     [...key, identity(source.installationId), identity(source.streamId), JSON.stringify(target)]);
-    return this.append(write);
+    return this.append(write, []);
   }
 
-  entriesAfter(position: string, limit?: number): Promise<{ position: string; write: JournalWrite }[]> {
-    return this.sql.rows(`SELECT position::text AS position, entry AS write FROM tracerelic_collector.writes AS w
+  async entriesAfter(position: string, limit?: number): Promise<JournalEntry[]> {
+    const rows = await this.sql.rows<{ position: string; entry: JournalWrite & { revisions?: SessionRevision[] } }>(
+      `SELECT position::text AS position, entry FROM tracerelic_collector.writes AS w
       WHERE workspace_key = $1 AND w.position > $2::bigint ORDER BY w.position LIMIT $3`, [this.workspace, position, limit ?? null]);
+    return rows.map(({ position, entry: { revisions, ...write } }) => ({ position, write, revisions }));
+  }
+
+  async storedVersions(keys: readonly SessionKey[]): Promise<SessionRevision[]> {
+    const rows = await this.sql.rows<{ index: number; version: number }>(`SELECT wanted.ordinal::int-1 AS index, s.version::float8 AS version
+      FROM unnest($2::text[], $3::text[]) WITH ORDINALITY AS wanted(harness, key, ordinal)
+      JOIN tracerelic_collector.sessions s ON s.workspace_key=$1 AND s.harness=wanted.harness AND s.session_key=decode(wanted.key,'hex')`,
+    [this.workspace, keys.map(key => key.harness), keys.map(key => identity(key.sessionId).toString("hex"))]);
+    return rows.map(row => ({ ...keys[row.index], version: row.version }));
   }
 
   async recordsFor(key: SessionKey): Promise<SessionRecords> {
@@ -137,7 +150,7 @@ class WorkspaceTransaction implements CollectorTransaction {
     const { source, expectedVersion } = write.value;
     const sourceSession = sessions.find(({ summary: { key } }) => key.harness === source.harness && key.sessionId === source.sessionId);
     if (!sourceSession) throw new Error("Accepted collector write has no source session");
-    const position = await this.append(write);
+    const position = await this.append(write, sessions.map(({ summary, version }) => ({ ...summary.key, version })));
     await this.saveSession(sourceSession, expectedVersion, position);
     for (const peer of sessions) {
       if (peer !== sourceSession) await this.saveSession(peer, peer.version - 1);

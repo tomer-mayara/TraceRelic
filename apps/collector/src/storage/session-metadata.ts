@@ -1,5 +1,7 @@
+import { recordedPathDialect } from "@tracerelic/shared";
+import { claudeCopyFallbackFields, claudeCopyStem } from "../claude-transcript-copy.ts";
 import { recordedInstant } from "../recorded-timestamp.ts";
-import type { Batch, BranchObservation, Metadata } from "./collector-storage.ts";
+import type { Batch, BranchObservation, Metadata, SourceLocation } from "./collector-storage.ts";
 import { isCount, isIdentifier, isRecord } from "./usage-validation.ts";
 
 const fields = ["cwd", "repository", "branch", "parentSessionId"] as const;
@@ -24,6 +26,21 @@ export class SessionMetadata {
     this.sources = new Map(previous?.sources);
     this.branches = new Map(previous?.branches);
     this.latestBranch = previous?.latestBranch;
+  }
+
+  /** The original writes record which fallback fields the backup supplied, and when. Both the view and call ownership use these fields. */
+  restoreBackupFields(batch: Batch, source: string, location?: SourceLocation): void {
+    if (!location || batch.source.harness !== "claude" || !hasValidMetadata(batch.metadata)) return;
+    const filename = recordedPathDialect(location.root)?.basename(location.path);
+    if (!filename || !claudeCopyStem(filename)) return;
+    const metadata: Metadata = { ...batch.metadata };
+    const prior = this.sources.get(source);
+    for (const field of claudeCopyFallbackFields) {
+      const accepted = prior?.[field];
+      if (accepted) metadata[field] = accepted.value;
+      else delete metadata[field];
+    }
+    batch.metadata = metadata;
   }
 
   static apply(previous: SessionMetadata | undefined, batch: Batch, source: string, version: number): SessionMetadata | null {

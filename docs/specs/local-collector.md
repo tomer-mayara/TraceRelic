@@ -187,6 +187,9 @@ measurements and report `unverified-source-history` against the original source.
 legacy generation also carries that diagnostic when its records cannot be verified. An empty legacy
 decoder at a positive byte offset qualifies when the recorded source identifies a scanner file. A
 cross-session text correction also needs the physical line boundary of the accepted generation.
+When re-reading a Claude backup, preserve the working directory, repository and parent session fields
+it originally supplied and their order relative to other sources. Select branch observations by their
+recorded time and line.
 
 `watch` uses a 60,000 ms default interval, allows one active pass and skips elapsed ticks. Preserve
 pending age until work is resolved. Honor the longest applicable retry deadline, including a valid
@@ -218,6 +221,9 @@ source offset and commit records, ownership, presence and checkpoint. Stale comp
 conflict, including on first insert. A failed transaction leaves the previous state available for retry.
 Repeated acknowledged presence at its current version keeps the version stable. Project only record
 inserts, updates, order changes and removals. A cold writer rebuilds ownership from the journal.
+Replay previously accepted writes with their original session versions and ownership decisions. A
+collector's verified repair can then change the affected sessions together. An unrelated write after
+an API upgrade must succeed while earlier chats retain their accepted records and totals.
 An ordinary presence update only changes the summary and source inventory. Record commit outcome,
 authenticated scope and duration. Keep chat text, credentials and connection strings out of operational
 logs. A production service target awaits measurements.

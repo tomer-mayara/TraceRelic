@@ -5,6 +5,7 @@ import type { Batch, CollectorStorage, CommitResult } from "@tracerelic/collecto
 import { DurableApiFixture, firstBatch, type WorkspaceClients } from "../../fixtures/durable-api-fixture.ts";
 import { countProjectionRows } from "../../fixtures/collector-database-write.ts";
 import { batch as wireBatch, source as wireSource } from "../../fixtures/collector-wire-payloads.ts";
+import "./legacy-journal.steps.ts";
 
 interface DurabilityScenario {
   api: DurableApiFixture;
@@ -52,7 +53,7 @@ async function assertStored(storage: CollectorStorage, batch: Batch, tokens: num
   assert.deepEqual(snapshot, { version: 1, checkpoint: batch.checkpoint });
 }
 
-Before({ timeout: 120_000 }, async function (this: DurabilityScenario) {
+Before({ tags: "not @legacy-journal", timeout: 120_000 }, async function (this: DurabilityScenario) {
   this.api = await DurableApiFixture.open();
   this.clients = await this.api.start();
 });

@@ -10,23 +10,44 @@ class WorkspaceWriter {
   private position = "0";
   private recent = new Map<string, { version: number; records: SessionRecords }>();
 
-  private async apply(write: JournalWrite, changed?: SessionRevision[]): Promise<CommitResult> {
+  private async apply(write: JournalWrite, changed?: SessionRevision[], lc17Journal = false): Promise<CommitResult> {
     if (write.kind === "alias") {
       const { source, target, expectedVersion } = write.value;
       return await this.storage.mergeSourceAlias(source, target, expectedVersion) ? "committed" : "conflict";
     }
-    return write.kind === "batch" ? this.storage.commit(write.value, changed) : this.storage.recordPresence(write.value, changed);
+    return write.kind === "batch" ? this.storage.commit(write.value, changed, lc17Journal) : this.storage.recordPresence(write.value, changed, lc17Journal);
   }
 
   private async catchUp(tx: CollectorTransaction): Promise<void> {
     const pageSize = 64;
+    const unversioned = new Map<string, SessionKey>();
     for (;;) {
       const entries = await tx.entriesAfter(this.position, pageSize);
-      for (const entry of entries) {
-        if (await this.apply(entry.write) !== "committed") throw new Error("Cannot replay accepted collector write");
-        this.position = entry.position;
+      for (const { write, revisions, position } of entries) {
+        const source = write.value.source;
+        const changed: SessionRevision[] = [];
+        // A journal item's source version is an accepted fact. Old entries did not record which peers also advanced.
+        if (revisions) this.storage.restoreRevisions(revisions.map(row => ({ ...row, version: row.version - 1 })));
+        this.storage.restoreRevisions([{ ...source, version: write.value.expectedVersion }]);
+        const peer = write.kind === "presence" && write.value.codexIdentity;
+        if (peer && peer.status === "verified") this.storage.restoreRevisions([{ harness: source.harness, sessionId: peer.peerSessionId, version: peer.expectedPeerVersion }]);
+        const lc17 = !revisions && write.kind !== "alias"
+          && !(write.kind === "batch" ? write.value.checkpoint.evidenceVersion : write.value.codexIdentity);
+        if (await this.apply(write, changed, lc17) !== "committed") throw new Error("Cannot replay accepted collector write");
+        if (revisions) {
+          this.storage.restoreRevisions(changed.map(row => ({ ...row, version: row.version - 1 })));
+          this.storage.restoreRevisions(revisions);
+        } else {
+          for (const key of [source, ...changed]) unversioned.set(JSON.stringify([key.harness, key.sessionId]), key);
+        }
+        this.position = position;
       }
-      if (entries.length < pageSize) return;
+      if (entries.length < pageSize) break;
+    }
+    // LC-17 materialized every actual session version in the same transaction as its raw journal entry.
+    const keys = [...unversioned.values()];
+    for (let index = 0; index < keys.length; index += pageSize) {
+      this.storage.restoreRevisions(await tx.storedVersions(keys.slice(index, index + pageSize)));
     }
   }
 

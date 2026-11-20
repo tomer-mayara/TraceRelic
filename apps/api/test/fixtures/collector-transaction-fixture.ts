@@ -50,9 +50,11 @@ export class CollectorTransactionFixture {
     const result = await action({
       saveAlias: async () => { throw new Error("Unexpected alias write"); },
       recordsFor: async key => this.recordsFor(workspace, key),
+      storedVersions: async () => { throw new Error("Expected a journal with revision receipts"); },
       entriesAfter: async (position, limit?: number) => {
         this.cursors.push(position);
-        return this.saved.filter(row => row.workspace === workspace && BigInt(row.position) > BigInt(position)).slice(0, limit);
+        return this.saved.filter(row => row.workspace === workspace && BigInt(row.position) > BigInt(position)).slice(0, limit)
+          .map(row => ({ ...row, revisions: row.sessions.map(({ summary, version }) => ({ ...summary.key, version })) }));
       },
       save: async (write, sessions, checkpoint, inventory) => {
         const position = String(this.saved.length + 1);
