@@ -1,3 +1,3 @@
-export { Logger, LogLevel, type LogLevelName, type LogRecord } from "./logger.ts";
+export { Logger, LogLevel, type LoggerOptions, type LogLevelName, type LogRecord } from "./logger.ts";
 export { ConsoleLogger } from "./console-logger.ts";
-export { LocalFileLogger } from "./local-file-logger.ts";
+export { LocalFileLogger, type LocalFileLoggerOptions } from "./local-file-logger.ts";

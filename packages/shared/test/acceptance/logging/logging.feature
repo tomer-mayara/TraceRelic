@@ -16,9 +16,9 @@ Feature: Read a diagnostic and find the calling line
 
   Scenario Outline: Read the caller and the time of a warning
     Given a command runs on <runtime> and sends diagnostics to <destination>
-    When line 42 of "jobs/internal/logger.ts" reports "History file skipped"
+    When the command reports "History file skipped"
     Then <destination> contains one warning with the message "History file skipped"
-    And it identifies "jobs/internal/logger.ts" at line 42
+    And it identifies "jobs/internal/logger.ts" at line 10
     And its UTC timestamp falls between the start and end of the logging call
 
     @log01
@@ -43,14 +43,25 @@ Feature: Read a diagnostic and find the calling line
   @log01
   Scenario: Find a call in a build without source maps
     Given a compiled command runs without source maps
-    When line 17 of "dist/scan.js" reports "Read failed"
-    Then the entry identifies "dist/scan.js" at line 17
+    When the command reports "Read failed"
+    Then the entry identifies "dist/scan.js" at line 3
 
   @log02
   Scenario: Reopen a log file and finish pending writes
     Given a previous logger wrote "Earlier" and closed the file
     When a new logger writes "First" and "Second" to that path and closes
     Then the file contains three JSON entries with messages "Earlier", "First", and "Second" in that order
+
+  @log02
+  Scenario Outline: Reject an empty path when constructing a logger
+    When the application constructs <logger> with an empty <option>
+    Then construction throws a TypeError for that path
+
+    Examples:
+      | logger           | option     |
+      | a console logger | sourceRoot |
+      | a file logger    | sourceRoot |
+      | a file logger    | filePath   |
 
   @log03 @log-levels
   Scenario Outline: Show the levels selected for a destination
@@ -77,6 +88,17 @@ Feature: Read a diagnostic and find the calling line
     And it calls logger.setLogLevel(LogLevel.Debug) on the same logger
     And it logs "details" at debug level
     Then <destination> contains exactly "before", "failure", and "details" in that order
+
+    Examples:
+      | destination    |
+      | the console    |
+      | the local file |
+
+  @log03
+  Scenario Outline: Use the constructor threshold for the first message
+    Given <destination> is constructed with a minimum level of warn
+    When the application calls debug, info, warn, and error with only a message
+    Then <destination> contains exactly warn, error in that order
 
     Examples:
       | destination    |
@@ -134,8 +156,7 @@ Feature: Read a diagnostic and find the calling line
   @log07
   Scenario: Give each console level a different color
     Given standard error is a terminal with color enabled
-    And the console uses a minimum level of debug
-    When the application calls debug, info, warn, and error with only a message
+    When a console logger set to debug logs one message at each level
     Then only the level labels have the following foreground colors
       | label | color  |
       | DEBUG | cyan   |
@@ -164,3 +185,23 @@ Feature: Read a diagnostic and find the calling line
       | Info   | 3        |
       | Warn   | 4        |
       | Error  | 5        |
+
+  @log03
+  Scenario: Keep the current threshold after an invalid level
+    Given a logger for the local file with a minimum level of info
+    When the application calls setLogLevel with the JSON value "6"
+    And the application logs "still visible" at info level
+    Then the invalid input throws a TypeError
+    And the local file contains the single message "still visible"
+
+  @log04
+  Scenario Outline: Reject a non-string message
+    Given diagnostics go to <destination>
+    When the application calls info with the JSON value "{}"
+    Then the invalid input throws a TypeError
+    And the destination contains no log entries
+
+    Examples:
+      | destination    |
+      | the console    |
+      | the local file |
