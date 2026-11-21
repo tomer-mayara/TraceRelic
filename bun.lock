@@ -29,6 +29,7 @@
       "name": "@tracerelic/api",
       "dependencies": {
         "@tracerelic/collector": "workspace:*",
+        "@tracerelic/shared": "workspace:*",
         "fastify": "5.12.8",
         "pg": "8.23.1",
       },

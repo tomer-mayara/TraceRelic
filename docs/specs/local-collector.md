@@ -47,6 +47,17 @@ interpreting its recorded locations. [Session key](local-collector/session-key.t
 | Architecture | Each CLI invocation owns one `ConsoleLogger` and waits for it to close. The CLI receives scan diagnostics through the scanner's callbacks and errors. [Shared logger](shared-logging.md) · [Dependency checks](shared-logging/dependencies.json) |
 | Interface | The stderr prefix includes the UTC timestamp, level, calling file and line. The one-time command exits with 75 for pending work and 1 for a rejection or command error. If stderr fails, keep an existing failure code or return 1. Check the scan schema and CLI tests. [Scan types](local-collector/scan.tsp) · [CLI tests](../../apps/collector/test/integration/scan) |
 
+## API output and diagnostics
+
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | The API writes the listening event and each commit metric as one JSON object per line on stdout, including metrics for failed commits. A startup failure leaves stdout empty. [API process tests](../../apps/api/test/integration/collector/entrypoint.test.ts) |
+| Observability | Write one `ERROR` to stderr when the API cannot run. Give the configuration error message when available. Use `Collector API could not run` for other failures. Keep credentials and connection strings out of diagnostics. [API output scenario](../../apps/api/test/acceptance/collector/api-output.feature) |
+| Architecture | The API entry point uses `ConsoleLogger` from `@tracerelic/shared/logging` and waits for it to close after writing the error. [Shared logger](shared-logging.md) · [Dependency checks](shared-logging/dependencies.json) |
+| Interface | Each diagnostic includes the UTC timestamp, level, calling file and line, and message. The API exits with status 1 after a fatal error, even if the write to stderr fails. [Logging contract](shared-logging/logging.tsp) · [Commit metric](collector-api/main.tsp) |
+
+The `check:collector-api`, `check:logging-contract`, and `test` scripts verify these rules.
+
 ## Visible conversation
 
 Keep the original text, role, recorded time and position of each visible user or assistant block. Use
