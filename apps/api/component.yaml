@@ -1,6 +1,7 @@
 name: collector-api
 spec: ../../docs/specs/local-collector.md
 behavior:
+  - test/acceptance/collector/api-output.feature
   - test/acceptance/collector/workspace.feature
   - test/acceptance/collector/remote-sync.feature
   - test/acceptance/postgres/restart.feature

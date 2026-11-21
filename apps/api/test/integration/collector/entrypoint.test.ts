@@ -12,25 +12,26 @@ test("the collector API entry point rejects missing or malformed configuration w
   t.after(() => rm(dir, { recursive: true, force: true }));
   const file = join(dir, "credentials.json");
   const bad = "synthetic-token-outside-json";
-  const missing = CollectorApiProcess.invalidConfiguration();
+  const missing = CollectorApiProcess.runToExit();
   assert.equal(missing.status, 1);
   assert.match(missing.stderr, /TRACERELIC_COLLECTOR_CREDENTIALS_FILE/);
   assert.equal(missing.stdout, "");
   for (const contents of [bad, JSON.stringify([{ tokenSha256: bad }])]) {
     await writeFile(file, contents);
-    const result = CollectorApiProcess.invalidConfiguration(file);
+    const result = CollectorApiProcess.runToExit(file);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /credential/i);
+    assert.equal(result.stdout, "");
+    assert.match(result.stderr, /^\S+ ERROR \S+ Invalid collector credential file\n$/);
     assert(!result.stderr.includes(bad));
   }
   await writeFile(file, "[]");
   for (const port of ["65536", "1e3"]) {
-    const result = CollectorApiProcess.invalidConfiguration(file, port);
+    const result = CollectorApiProcess.runToExit(file, port);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /PORT/);
   }
   for (const databaseUrl of [undefined, "invalid-private-database-url", "postgresql://user:private-password@127.0.0.1:0/missing"]) {
-    const result = CollectorApiProcess.invalidConfiguration(file, "0", databaseUrl);
+    const result = CollectorApiProcess.runToExit(file, "0", databaseUrl);
     assert.equal(result.status, 1);
     assert.match(result.stderr, /DATABASE_URL/);
     assert.doesNotMatch(result.stderr, /private|postgresql:\/\//);
@@ -50,9 +51,13 @@ test("the compiled API serves its configured workspaces, emits a commit metric, 
     try { await server.stop("SIGTERM"); } finally { await database.close(); }
   });
   const started = await server.nextEvent();
-  assert.equal(started.event, "listening");
   const address = new URL(started.address);
+  assert.deepEqual(started, { event: "listening", address: address.origin });
   assert.equal(address.hostname, "127.0.0.1");
+  const portInUse = CollectorApiProcess.runToExit(file, address.port, database.url);
+  assert.equal(portInUse.status, 1);
+  assert.equal(portInUse.stdout, "");
+  assert.match(portInUse.stderr, /^\S+ ERROR \S+ Collector API could not run\n$/);
   const post = async (route: string, token: string, input: unknown) => {
     const response = await fetch(new URL("/v1/collector/" + route, address), {
       method: "POST", headers: { authorization: "Bearer " + token, "content-type": "application/json" },

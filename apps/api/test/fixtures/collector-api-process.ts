@@ -28,7 +28,7 @@ export class CollectorApiProcess {
     this.exit = once(this.child, "close");
   }
 
-  static invalidConfiguration(file?: string, port?: string, databaseUrl?: string) {
+  static runToExit(file?: string, port?: string, databaseUrl?: string) {
     return spawnSync("node", args, { ...options(file, port, databaseUrl), timeout: 5000, encoding: "utf8" });
   }
 

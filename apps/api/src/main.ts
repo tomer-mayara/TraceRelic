@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { CollectorWireContract } from "@tracerelic/collector/wire-contract";
+import { ConsoleLogger } from "@tracerelic/shared/logging";
 import { CollectorApi } from "./collector-api.ts";
 import { CollectorCredentials } from "./collector-credentials.ts";
 import { PostgresCollectorDatabase } from "./storage/collector-database.ts";
@@ -86,7 +87,13 @@ if (import.meta.main) {
   try {
     await start();
   } catch (error) {
-    console.error(error instanceof ConfigurationError ? error.message : "Collector API could not run");
     process.exitCode = 1;
+    const logger = new ConsoleLogger();
+    logger.error(error instanceof ConfigurationError ? error.message : "Collector API could not run");
+    try {
+      await logger.close();
+    } catch {
+      // The process already has the fatal exit status if stderr fails.
+    }
   }
 }
