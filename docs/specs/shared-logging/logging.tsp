@@ -16,7 +16,7 @@ union LogLevelName { "debug", "info", "warn", "error" }
 /** Options for ConsoleLogger. Resolve relative paths at construction.
  * An empty path option throws TypeError. */
 model LoggerOptions {
-  /** Initial minimum severity for this logger. */
+  /** Initial minimum severity. An unsupported rank or name throws TypeError. */
   minLevel?: LogLevel | LogLevelName = LogLevel.Info;
   /** Use the current working directory when this option is absent. */
   @minLength(1) sourceRoot?: string;
@@ -49,10 +49,12 @@ model LoggingFailure {
   filePath?: string;
 }
 
-/** Log methods and setLogLevel return void. Calling them after close starts
- * throws synchronously. Capture and output failures are reported by close(). */
+/** Log methods and setLogLevel return void. An invalid message or severity throws TypeError.
+ * Calling these methods after close starts throws synchronously.
+ * Close reports capture and destination failures, including failures to open the file. */
 interface Logger {
   /** Set this instance's minimum severity for subsequent calls.
+   * A rejected value leaves the current threshold in effect.
    * Accepted records keep their place in the output. */
   setLogLevel(level: LogLevel | LogLevelName): void | LoggingFailure;
   debug(message: string): void | LoggingFailure;

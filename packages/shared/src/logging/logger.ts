@@ -1,6 +1,16 @@
-import { basename, isAbsolute, relative, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Logger as TsLogger, LogLevel as TsLogLevel, type IStackFrame } from "tslog";
+import util from "node:util";
+import { Logger as TsLogger, LogLevel as TsLogLevel } from "tslog";
+
+// The pinned runtimes provide Error.isError. The workspace uses ES2022 type definitions.
+const { isError } = Error as ErrorConstructor & { isError(value: unknown): value is Error };
+
+// Source maps can identify this module by its TypeScript path while running the build.
+const loggerFiles = new Set([
+  fileURLToPath(import.meta.url),
+  fileURLToPath(new URL("../../src/logging/logger.ts", import.meta.url)),
+]);
 
 export enum LogLevel {
   Debug = TsLogLevel.DEBUG,
@@ -10,6 +20,11 @@ export enum LogLevel {
 }
 
 export type LogLevelName = Lowercase<keyof typeof LogLevel>;
+
+export interface LoggerOptions {
+  sourceRoot?: string;
+  minLevel?: LogLevel | LogLevelName;
+}
 
 const severityByName: Record<LogLevelName, LogLevel> = {
   debug: LogLevel.Debug,
@@ -27,10 +42,16 @@ export interface LogRecord {
 }
 
 export abstract class Logger {
-  private readonly backend = new TsLogger({ type: "hidden", minLevel: LogLevel.Info, stack: { capture: "off" } });
-  private readonly sourceRoot = process.cwd();
+  private readonly backend: TsLogger<unknown>;
+  private readonly sourceRoot: string;
   private closing?: Promise<void>;
   private failure?: Error;
+
+  constructor({ sourceRoot = process.cwd(), minLevel = LogLevel.Info }: LoggerOptions = {}) {
+    if (sourceRoot === "") throw new TypeError("sourceRoot must not be empty");
+    this.sourceRoot = resolve(sourceRoot);
+    this.backend = new TsLogger({ type: "hidden", minLevel: Logger.severity(minLevel), stack: { capture: "off" } });
+  }
 
   debug(message: string): void {
     this.log("debug", message);
@@ -50,15 +71,14 @@ export abstract class Logger {
 
   setLogLevel(level: LogLevel | LogLevelName): void {
     this.assertOpen();
-    const minimum = typeof level === "string" ? severityByName[level] : level;
-    this.backend.setMinLevel(minimum);
+    this.backend.setMinLevel(Logger.severity(level));
   }
 
   close(): Promise<void> {
-    this.closing ??= this.finishWrites().then(() => {
-      if (this.failure) throw this.failure;
-    });
-    return this.closing;
+    return this.closing ??= Promise.resolve()
+      .then(() => this.finishWrites())
+      .catch(error => this.recordFailure(error))
+      .then(() => { if (this.failure) throw this.failure; });
   }
 
   /** Delivers an entry to its destination after Logger fills in the metadata. */
@@ -68,47 +88,67 @@ export abstract class Logger {
     return Promise.resolve();
   }
 
-  protected recordFailure(error: Error): void {
-    this.failure ??= error;
+  protected recordFailure(error: unknown): void {
+    this.failure ??= isError(error) ? error :
+      new Error(typeof error === "string" ? error : "Log output failed", { cause: error });
   }
 
   private assertOpen(): void {
     if (this.closing) throw new Error("Logger is closed");
   }
 
+  private static severity(level: LogLevel | LogLevelName): LogLevel {
+    if (typeof level === "string" && Object.hasOwn(severityByName, level)) return severityByName[level];
+    if (typeof level === "number" && Object.hasOwn(LogLevel, level)) return level;
+    throw new TypeError("Unknown log level");
+  }
+
   private log(level: LogLevelName, message: string): void {
     this.assertOpen();
+    if (typeof message !== "string") throw new TypeError("Log message must be a string");
     if (!this.backend.isLevelEnabled(severityByName[level])) return;
 
     const timestamp = new Date().toISOString();
-    const caller = this.callerLocation(new Error());
-    if (caller) {
+    const caller = this.callerLocation();
+    if (!caller) return;
+    try {
       this.write({ level, timestamp, ...caller, message });
+    } catch (error) {
+      this.recordFailure(error);
     }
   }
 
-  private callerLocation(position: Error): Pick<LogRecord, "file" | "line"> | undefined {
-    const [ownFrame, ...frames] = this.backend.runtime.getErrorTrace(position);
-    // The first frame identifies this module in both source-mapped and compiled stacks.
-    const ownFile = this.absoluteFramePath(ownFrame);
-    if (!ownFile) return;
-    for (const frame of frames) {
-      const absolute = this.absoluteFramePath(frame);
-      if (absolute === ownFile) continue;
-      const line = Number(frame.fileLine);
-      if (!absolute || !Number.isSafeInteger(line) || line < 1) return;
-      const withinRoot = relative(this.sourceRoot, absolute);
-      const outside = withinRoot === ".." || withinRoot.startsWith(`..${sep}`) || isAbsolute(withinRoot);
-      return { file: outside ? basename(absolute) : withinRoot.split(sep).join("/"), line };
+  private callerLocation(): Pick<LogRecord, "file" | "line"> | undefined {
+    let cause: unknown;
+    try {
+      // getCallSites accepts 1–200 frames and does not apply Error.stackTraceLimit itself.
+      const limit = Math.min(200, Math.trunc(Error.stackTraceLimit));
+      const frames = limit > 0 ? util.getCallSites(limit) : [];
+      for (const { scriptName, lineNumber } of frames) {
+        const absolute = this.absoluteFramePath(scriptName);
+        if (!absolute) break;
+        if (loggerFiles.has(absolute)) continue;
+        if (!Number.isSafeInteger(lineNumber) || lineNumber < 1) break;
+        const withinRoot = relative(this.sourceRoot, absolute);
+        const outside = withinRoot === ".." || withinRoot.startsWith(`..${sep}`) || isAbsolute(withinRoot);
+        const file = withinRoot && !outside ? withinRoot.split(sep).join("/") : basename(absolute);
+        return { file, line: lineNumber };
+      }
+    } catch (error) {
+      cause = error;
     }
+    this.recordFailure(new Error("The calling file and line are unavailable", { cause }));
   }
 
-  private absoluteFramePath(frame?: IStackFrame): string | undefined {
-    if (!frame?.fullFilePath) return;
-    const location = frame.fullFilePath;
-    const suffix = `:${frame.fileLine}${frame.fileColumn ? `:${frame.fileColumn}` : ""}`;
-    const file = location.endsWith(suffix) ? location.slice(0, -suffix.length) : location;
-    const path = file.startsWith("file:") ? fileURLToPath(file) : file;
-    return isAbsolute(path) ? path : undefined;
+  private absoluteFramePath(scriptName: string): string | undefined {
+    let path = scriptName;
+    if (scriptName.startsWith("file:")) {
+      const url = new URL(scriptName);
+      // Bun's fileURLToPath accepts malformed percent escapes.
+      if (url.pathname.includes("%")) decodeURIComponent(url.pathname);
+      path = fileURLToPath(url);
+    }
+    if (!isAbsolute(path) || path.includes("\0") || path.endsWith(sep) || path.endsWith("/")) return;
+    return path;
   }
 }

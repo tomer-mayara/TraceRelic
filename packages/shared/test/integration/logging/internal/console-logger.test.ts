@@ -1,41 +1,40 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
-import { stripVTControlCharacters } from "node:util";
-import { ConsoleLogger, LocalFileLogger, LogLevel, type Logger } from "@tracerelic/shared/logging";
+import { ConsoleLogger, LocalFileLogger, type Logger } from "@tracerelic/shared/logging";
+import { logEachLevel } from "../../../fixtures/captured-logger.ts";
 import { LoggingCommand } from "../../../fixtures/logging-command.ts";
 
-async function logEachLevel(logger: Logger): Promise<void> {
-  logger.debug("message");
-  logger.info("message");
-  logger.warn("message");
+const program = "integration/logging/internal/console-logger.test";
+const [command, argument] = process.argv.slice(2);
+if (command === "--error") {
+  const logger: Logger = argument ? new LocalFileLogger({ filePath: argument }) : new ConsoleLogger();
   logger.error("message");
+  if (argument) await logger.close();
+} else if (command === "--log-levels") {
+  const logger = new ConsoleLogger();
+  logger.setLogLevel("debug");
+  logEachLevel(logger);
   await logger.close();
-}
-
-const [command, minimum, filePath] = process.argv.slice(2);
-if (command === "--log-levels") {
-  const logger: Logger = filePath ? new LocalFileLogger({ filePath }) : new ConsoleLogger();
-  if (minimum === "LogLevel.Warn") logger.setLogLevel(LogLevel.Warn);
-  if (minimum === "warn" || minimum === "debug") logger.setLogLevel(minimum);
-  await logEachLevel(logger);
 } else {
-  for (const runtime of ["bun", "node"] as const) {
-    test(`ConsoleLogger on ${runtime} writes the error with its caller and UTC time to stderr`, async () => {
-      const result = await LoggingCommand.run(runtime, "fixtures/console-error");
-      assert.ifError(result.error);
-      assert.equal(result.stdout, "");
-      const [timestamp] = result.stderr.split(" ");
-      assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-      assert.equal(result.stderr, `${timestamp} ERROR test/fixtures/console-error.ts:4 message\n`);
-    });
-  }
+  test("the default console writes an error with its caller and UTC time before close", async () => {
+    const { stdout, stderr } = await LoggingCommand.run(program, ["--error"]);
+    assert.equal(stdout, "");
+    const [timestamp] = stderr.split(" ");
+    assert.match(timestamp, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
 
-  test("the console prints all four enabled levels in order", async (t) => {
-    const writes = t.mock.method(process.stderr, "write");
-    const logger = new ConsoleLogger();
-    logger.setLogLevel(LogLevel.Debug);
-    await logEachLevel(logger);
-    const labels = writes.mock.calls.map(call => stripVTControlCharacters(String(call.arguments[0])).split(" ")[1]);
-    assert.deepEqual(labels, ["DEBUG", "INFO", "WARN", "ERROR"]);
+    const file = `test/${program}.ts`;
+    const source = await readFile(new URL(`../${file}`, import.meta.resolve("@tracerelic/shared")), "utf8");
+    const line = source.split("\n").findIndex(text => text.trim() === 'logger.error("message");') + 1;
+    assert(line > 0);
+    assert.equal(stderr, `${timestamp} ERROR ${file}:${line} message\n`);
+  });
+
+  test("the console prints all four enabled levels to stderr in order", async () => {
+    const { stdout, stderr } = await LoggingCommand.run(program, ["--log-levels"]);
+    assert.equal(stdout, "");
+    const lines = stderr.split("\n");
+    assert.equal(lines.pop(), "");
+    assert.deepEqual(lines.map(line => line.split(" ")[1]), ["DEBUG", "INFO", "WARN", "ERROR"]);
   });
 }
