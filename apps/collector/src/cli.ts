@@ -1,6 +1,7 @@
+import { ConsoleLogger } from "@tracerelic/shared/logging";
 import { CollectorCommand, type WatchRuntime } from "./commands/collector-command.ts";
 import { ScanPendingError, type PendingScan } from "./scan/scan-pending.ts";
-import { ScanRejectedError, type RejectedBatch } from "./scan/scan-rejected.ts";
+import { ScanRejectedError } from "./scan/scan-rejected.ts";
 import type { CollectorStorage, MissingSource } from "./storage/collector-storage.ts";
 import { InMemoryCollectorStorage } from "./storage/in-memory-collector-storage.ts";
 
@@ -17,27 +18,40 @@ async function configuredStorage(): Promise<CollectorStorage> {
 }
 
 export async function runCollectorCli(args: string[], storage?: CollectorStorage, options: CollectorCliOptions = {}): Promise<number> {
+  const logger = new ConsoleLogger();
+  const warn = (report: MissingSource | PendingScan) => { logger.warn(JSON.stringify(report)); };
+  let exitCode = 0;
   try {
-    const report = (event: RejectedBatch | MissingSource | PendingScan) => console.error(JSON.stringify(event));
-    const command = new CollectorCommand(storage ?? configuredStorage, report, report);
+    const command = new CollectorCommand(
+      storage ?? configuredStorage,
+      batch => { logger.error(JSON.stringify(batch)); },
+      warn,
+    );
     const result = await command.run(args, {
-      ...options, onReport: options.onReport ?? (pass => console.log(JSON.stringify(pass))),
-      onPending: report, onFailure: () => console.error(JSON.stringify({ status: "failed", reason: "scan-failed" })),
+      ...options,
+      onReport: options.onReport ?? (pass => console.log(JSON.stringify(pass))),
+      onPending: warn,
+      onFailure: () => { logger.error(JSON.stringify({ status: "failed", reason: "scan-failed" })); },
     });
     if (result !== undefined) console.log(JSON.stringify(result));
-    return 0;
   } catch (error) {
+    exitCode = 1;
     if (error instanceof ScanRejectedError) {
       console.log(JSON.stringify(error.sessions));
-      return 1;
+    } else if (error instanceof ScanPendingError) {
+      warn(error.pending);
+      exitCode = 75;
+    } else {
+      logger.error(error instanceof Error ? error.message : "Collector command failed");
     }
-    if (error instanceof ScanPendingError) {
-      console.error(JSON.stringify(error.pending));
-      return 75;
+  } finally {
+    try {
+      await logger.close();
+    } catch {
+      if (exitCode === 0) exitCode = 1;
     }
-    console.error(error instanceof Error ? error.message : "Collector command failed");
-    return 1;
   }
+  return exitCode;
 }
 
 if (import.meta.main) process.exitCode = await runCollectorCli(process.argv.slice(2));

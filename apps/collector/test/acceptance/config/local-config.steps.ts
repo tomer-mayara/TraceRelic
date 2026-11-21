@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { After, Before, Given, Then, When, setWorldConstructor } from "@cucumber/cucumber";
+import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { LocalCollectorCliFixture } from "../../fixtures/local-collector-cli-fixture.ts";
 
 class ConfigScenario {
@@ -54,11 +55,19 @@ Then("the collector returns only the chat {string}", function (this: ConfigScena
   assert.deepEqual(history.map(entry => entry.sessionId), [id]);
 });
 
-Then("the collector reports a configuration error for {string}", function (this: ConfigScenario, field: string) {
+Then("the collector writes no diagnostics to standard error", function (this: ConfigScenario) {
+  assert.equal(this.result.stderr, "");
+});
+
+Then("the collector writes one ERROR log for {string} to standard error", function (this: ConfigScenario, field: string) {
   assert.equal(this.result.status, 1);
+  const message = collectorLogMessage(this.result.stderr, "ERROR");
+  assert(message.includes(field), message);
+  assert(message.includes("local.json"), message);
+});
+
+Then("standard output is empty", function (this: ConfigScenario) {
   assert.equal(this.result.stdout, "");
-  assert(this.result.stderr.includes(field), this.result.stderr);
-  assert(this.result.stderr.includes("local.json"), this.result.stderr);
 });
 
 Then("the collector returns the chats {string} and {string}", function (this: ConfigScenario, one: string, two: string) {

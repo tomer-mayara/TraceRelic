@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { RemoteCollectorCliFixture } from "../../fixtures/remote-collector-cli-fixture.ts";
 
 test("a scan requires both remote settings when either is supplied", async t => {
@@ -8,7 +9,7 @@ test("a scan requires both remote settings when either is supplied", async t => 
     const result = await fixture.run(["scan", "--once"], url, token);
     assert.equal(result.code, 1);
     assert.equal(result.stdout, "");
-    assert.match(result.stderr, /TRACERELIC_COLLECTOR_API_URL.*TRACERELIC_COLLECTOR_TOKEN/);
+    assert.match(collectorLogMessage(result.stderr, "ERROR"), /TRACERELIC_COLLECTOR_API_URL.*TRACERELIC_COLLECTOR_TOKEN/);
     assert.doesNotMatch(result.stderr, /private-/);
   }
 });
@@ -18,6 +19,7 @@ test("history reads local files even when the remote settings are invalid or inc
   for (const token of [undefined, "private-token"]) {
     const result = await fixture.run(["history", "--from", "2026-02-01T00:00:00Z", "--to", "2026-02-02T00:00:00Z"], "invalid", token);
     assert.equal(result.code, 0, result.stderr);
+    assert.equal(result.stderr, "");
     assert.deepEqual(JSON.parse(result.stdout), []);
   }
 });
@@ -26,7 +28,8 @@ test("an invalid command shows usage even with incomplete remote settings", asyn
   const fixture = await RemoteCollectorCliFixture.create(t);
   const result = await fixture.run(["scan"], undefined, "private-token");
   assert.equal(result.code, 1);
-  assert.match(result.stderr, /Usage: collector/);
+  assert.equal(result.stdout, "");
+  assert.match(collectorLogMessage(result.stderr, "ERROR"), /Usage: collector/);
 });
 
 for (const [command, args, status, runtime] of [["scan", ["scan", "--once"], 401, "bun"], ["watch", ["watch"], 403, "node"]] as const) {
@@ -36,8 +39,7 @@ for (const [command, args, status, runtime] of [["scan", ["scan", "--once"], 401
     const result = await fixture.run([...args], api.url, "private-token", runtime);
     assert.equal(result.code, 1, result.stderr);
     assert.deepEqual(api.authorizations, ["Bearer private-token"]);
-    assert.match(result.stderr, /authenticat|credential/i);
-    assert.equal(result.stderr.trim().split("\n").length, 1);
+    assert.match(collectorLogMessage(result.stderr, "ERROR"), /authenticat|credential/i);
     if (command === "watch") {
       assert.deepEqual(JSON.parse(result.stdout), { status: "failed", newSessions: 0, oldestPendingAgeMs: null });
     } else {

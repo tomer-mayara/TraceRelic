@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { runCollectorCli } from "#src/cli";
-import { captureCollectorCli } from "../../fixtures/capture-collector-cli.ts";
+import { captureCollectorCli, captureCollectorStderr } from "../../fixtures/capture-collector-cli.ts";
+import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { LocalCollectorCliFixture } from "../../fixtures/local-collector-cli-fixture.ts";
 
@@ -46,17 +47,17 @@ test("watch validates its interval, selection and incompatible flags before open
     const result = await captureCollectorCli(t, ["watch", ...config, "--interval-ms=" + value], storage);
     assert.equal(result.code, 1);
     assert.deepEqual(result.stdout, []);
-    assert.match(result.stderr[0], /interval-ms.*1.*2147483647/);
+    assert.match(collectorLogMessage(result.stderr[0], "ERROR"), /interval-ms.*1.*2147483647/);
   }
   for (const [command, ...options] of [["watch", "--from", "today"], ["watch", "--to", "today"], ["watch", "--once"],
     ["scan", "--once", "--interval-ms", "1"], ["history", "--interval-ms", "1"]]) {
     const result = await captureCollectorCli(t, [command, ...config, ...options], storage);
     assert.equal(result.code, 1);
-    assert.match(result.stderr[0], /Usage:/);
+    assert.match(collectorLogMessage(result.stderr[0], "ERROR"), /Usage:/);
   }
   const result = await captureCollectorCli(t, ["watch", ...config, "--session", "  "], storage);
   assert.equal(result.code, 1);
-  assert.match(result.stderr[0], /nonblank session ID or project directory/);
+  assert.match(collectorLogMessage(result.stderr[0], "ERROR"), /nonblank session ID or project directory/);
 });
 
 test("watch releases its signal handlers when its configuration cannot be opened", async t => {
@@ -64,7 +65,7 @@ test("watch releases its signal handlers when its configuration cannot be opened
   const before = listeners();
   const result = await captureCollectorCli(t, ["watch", "--config", "missing-config.json"], new InMemoryCollectorStorage());
   assert.equal(result.code, 1);
-  assert.match(result.stderr[0], /Cannot read configuration file/);
+  assert.match(collectorLogMessage(result.stderr[0], "ERROR"), /Cannot read configuration file/);
   assert.deepEqual(listeners(), before);
 });
 
@@ -74,7 +75,7 @@ test("watch writes a sanitized diagnostic for an unexpected scan failure", async
   const config = await fixture.writeConfig("..");
   const storage = new InMemoryCollectorStorage();
   t.mock.method(storage, "listSources", async () => { throw new Error("private transcript detail"); });
-  const stderr = t.mock.method(console, "error", () => {});
+  const { lines } = captureCollectorStderr(t);
   const stop = new AbortController();
   const reports: unknown[] = [];
   const code = await runCollectorCli(["watch", "--config", config], storage, {
@@ -82,5 +83,5 @@ test("watch writes a sanitized diagnostic for an unexpected scan failure", async
   });
   assert.equal(code, 0);
   assert.deepEqual(reports, [{ status: "failed", newSessions: 0, oldestPendingAgeMs: null }]);
-  assert.deepEqual(stderr.mock.calls.map(call => JSON.parse(call.arguments[0])), [{ status: "failed", reason: "scan-failed" }]);
+  assert.deepEqual(lines.map(line => JSON.parse(collectorLogMessage(line, "ERROR"))), [{ status: "failed", reason: "scan-failed" }]);
 });

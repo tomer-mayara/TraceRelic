@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { runCollectorCli } from "#src/cli";
 import { captureCollectorCli } from "../../fixtures/capture-collector-cli.ts";
+import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { LocalCollectorCliFixture } from "../../fixtures/local-collector-cli-fixture.ts";
 import { DroppedConnection } from "../../fixtures/lost-connection-fixture.ts";
@@ -16,15 +16,12 @@ test("the one-time CLI reports pending bytes on standard error and exits with te
   const config = await fixture.writeConfig(fixture.configured.home);
   const connection = new DroppedConnection(new InMemoryCollectorStorage());
   connection.dropNextWrite("before storage writes");
-  const stdout = t.mock.method(console, "log", () => {});
-  const stderr = t.mock.method(console, "error", () => {});
-
-  assert.equal(await runCollectorCli(["scan", "--once", "--config", config], connection), 75);
-  assert.equal(stdout.mock.callCount(), 0);
-  assert.equal(stderr.mock.callCount(), 1);
-  const [line] = stderr.mock.calls[0].arguments;
-  assert.equal(typeof line, "string");
-  const report = JSON.parse(line);
+  const { code, stdout, stderr } = await captureCollectorCli(t, ["scan", "--once", "--config", config], connection);
+  assert.equal(code, 75);
+  assert.deepEqual(stdout, []);
+  assert.equal(stderr.length, 1);
+  const [line] = stderr;
+  const report = JSON.parse(collectorLogMessage(line, "WARN"));
   assert.partialDeepStrictEqual(report, {
     status: "pending", reason: "storage-unavailable", source: { harness: "codex", sessionId: "offline" },
     byteRange: { startOffset: 0, endOffset: (await stat(file)).size },
@@ -45,7 +42,7 @@ test("the CLI identifies the selected root when its source inventory is unavaila
   assert.equal(result.code, 75);
   assert.deepEqual(result.stdout, []);
   assert.equal(result.stderr.length, 1);
-  const pending = JSON.parse(result.stderr[0]);
+  const pending = JSON.parse(collectorLogMessage(result.stderr[0], "WARN"));
   assert.partialDeepStrictEqual(pending, { status: "pending", reason: "storage-unavailable",
     scope: { harness: "codex", root: fixture.configured.home, sessionIds: ["gone"] } });
   assert.equal(pending.source, undefined);
@@ -65,7 +62,7 @@ test("an empty Codex root does not hide the Claude transcript awaiting its first
   assert.equal(result.code, 75);
   assert.deepEqual(result.stdout, []);
   assert.equal(result.stderr.length, 1);
-  assert.partialDeepStrictEqual(JSON.parse(result.stderr[0]), {
+  assert.partialDeepStrictEqual(JSON.parse(collectorLogMessage(result.stderr[0], "WARN")), {
     status: "pending", reason: "storage-unavailable", source: { harness: "claude", sessionId: "claude-only" },
   });
 });

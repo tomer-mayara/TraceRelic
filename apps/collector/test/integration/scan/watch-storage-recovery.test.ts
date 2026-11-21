@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { captureCollectorStderr } from "../../fixtures/capture-collector-cli.ts";
 import { DroppedConnection } from "../../fixtures/lost-connection-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 import { ScheduledScanFixture } from "../../fixtures/scheduled-scan-fixture.ts";
@@ -18,7 +19,7 @@ test("a recovered source stops aging when a later source loses its checkpoint re
     if (source.sessionId === unavailable) throw Object.assign(new Error("Disconnected"), { code: "ECONNRESET" });
     return read(source);
   });
-  t.mock.method(console, "error", () => {});
+  captureCollectorStderr(t);
   const watch = new ScheduledScanFixture(storage, ["--config", files.configFile]);
   try {
     await watch.waitForPass();
@@ -42,7 +43,7 @@ for (const moment of ["before storage writes", "after storage writes"] as const)
     await fixture.writePlanningChat();
     const connection = new DroppedConnection(fixture.storage);
     connection.dropNextWrite(moment);
-    const diagnostics = t.mock.method(console, "error", () => {});
+    const { lines } = captureCollectorStderr(t);
     const watch = new ScheduledScanFixture(connection, ["--config", fixture.configFile], { intervalMs: 100, startMs: Date.UTC(2026, 0, 1) });
     const { clock, reports } = watch;
     let exitCode: number;
@@ -61,7 +62,7 @@ for (const moment of ["before storage writes", "after storage writes"] as const)
       assert.deepEqual(reports[3], { status: "complete", newSessions: 0, oldestPendingAgeMs: null });
       assert.equal(reports.length, 4);
       assert.equal(connection.writes, moment === "before storage writes" ? 2 : 1);
-      assert.equal(diagnostics.mock.callCount(), 2);
+      assert.equal(lines.length, 2);
     } finally {
       exitCode = await watch.stop();
     }

@@ -40,7 +40,7 @@ export class LocalCollectorCliFixture {
   }
 
   run(args: string[]) {
-    const result = spawnSync("bun", ["run", "collector", ...args], {
+    const result = spawnSync("bun", ["--silent", "run", "collector", ...args], {
       cwd: repoRoot, encoding: "utf8",
       env: { ...this.localEnv, CODEX_HOME: this.elsewhere.home, CODEX_PATH: this.elsewhere.home },
     });

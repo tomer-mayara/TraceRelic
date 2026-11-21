@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import { unlink, writeFile } from "node:fs/promises";
 import { After, Before, Given, Then, When } from "@cucumber/cucumber";
+import { collectorLogMessage } from "#collector-fixture/collector-log-message";
 import { RemoteSyncFixture } from "../../fixtures/remote-sync-fixture.ts";
 import type { DropMoment } from "../../fixtures/loopback-upload-relay.ts";
 
-interface RemoteSyncScenario { sync: RemoteSyncFixture; initialRequests: number }
+interface RemoteSyncScenario {
+  sync: RemoteSyncFixture;
+  initialRequests: number;
+  result: Awaited<ReturnType<RemoteSyncFixture["scan"]>>;
+  namedInstallation: boolean;
+}
 
 async function setInstallation({ sync }: RemoteSyncScenario, spelling: string) {
   const { transcript } = sync.upload;
@@ -26,15 +32,7 @@ When(/^the connection drops (before the API receives the upload|after the API ac
   async function (this: RemoteSyncScenario, moment: DropMoment) {
     const { relay, upload } = this.sync;
     relay.dropNextBatch(moment);
-    const interrupted = await this.sync.scan();
-    assert.equal(interrupted.code, 75, interrupted.stderr);
-    assert.equal(interrupted.stdout, "");
-    const pending: unknown = JSON.parse(interrupted.stderr);
-    assert(pending && typeof pending === "object" && "retryAt" in pending && typeof pending.retryAt === "string");
-    assert.deepEqual(pending, {
-      status: "pending", reason: "storage-unavailable", source: upload.transcript.source,
-      byteRange: { startOffset: upload.firstEnd, endOffset: upload.secondEnd }, retryAt: new Date(pending.retryAt).toISOString(),
-    });
+    this.result = await this.sync.scan();
     assert(relay.checkedWhileOffline, "the scanner must try to read the accepted checkpoint after losing the connection");
     const accepted = moment === "after the API accepts the upload";
     await upload.checkStored(accepted ? 2 : 1, accepted ? 150 : 120);
@@ -52,6 +50,18 @@ Then("an authenticated read returns two calls totaling {int} and a checkpoint co
   assert.deepEqual(await this.sync.scanAndRead(), stored);
   assert.deepEqual(await upload.checkStored(2, total), stored);
   assert.equal(relay.batches, writes);
+});
+
+Then("the interrupted scan logs its pending report as a warning on standard error", function (this: RemoteSyncScenario) {
+  const { result, sync: { upload } } = this;
+  assert.equal(result.code, 75, result.stderr);
+  assert.equal(result.stdout, "");
+  const pending: unknown = JSON.parse(collectorLogMessage(result.stderr, "WARN"));
+  assert(pending && typeof pending === "object" && "retryAt" in pending && typeof pending.retryAt === "string");
+  assert.deepEqual(pending, {
+    status: "pending", reason: "storage-unavailable", source: upload.transcript.source,
+    byteRange: { startOffset: upload.firstEnd, endOffset: upload.secondEnd }, retryAt: new Date(pending.retryAt).toISOString(),
+  });
 });
 
 Given("a transcript containing {int} distinct small Codex calls", async function (this: RemoteSyncScenario, count: number) {
@@ -85,18 +95,33 @@ Given(/^I uploaded one transcript with the installation (omitted|named)$/, async
 });
 
 When(/^I scan again with the installation (omitted|named) and then remove the transcript$/, async function (this: RemoteSyncScenario, spelling: string) {
+  this.namedInstallation = spelling === "named";
   await setInstallation(this, spelling);
   assert.equal((await this.sync.scan()).code, 0);
   await unlink(this.sync.upload.transcript.file);
+  this.result = await this.sync.scan();
 });
 
 Then("one checkpoint and one disappearance identify the transcript", async function (this: RemoteSyncScenario) {
   const { transcript, storage } = this.sync.upload;
-  const result = await this.sync.scan();
-  assert.equal(result.code, 0, result.stderr);
-  assert.equal(result.stderr.trim().split("\n").length, 1);
-  assert.equal((await storage.listSources({ harness: "codex", root: transcript.root.home })).length, 1);
-  assert.equal((await storage.readSession(transcript.source))?.missingSources?.length, 1);
+  const inventory = await storage.listSources({ harness: "codex", root: transcript.root.home });
+  assert.equal(inventory.length, 1);
+  assert.equal(inventory[0].presence, "missing");
+});
+
+Then("the scan logs the missing source as a warning and writes the sessions as JSON to standard output", async function (this: RemoteSyncScenario) {
+  const { transcript, storage } = this.sync.upload;
+  const { code, stdout, stderr } = this.result;
+  assert.equal(code, 0, stderr);
+  const session = await storage.readSession(transcript.source);
+  assert(session);
+  assert.deepEqual(JSON.parse(stdout), [session]);
+  assert.equal(session.missingSources?.length, 1);
+  const [missing] = session.missingSources;
+  const { installationId, ...source } = missing.source;
+  assert.deepEqual(JSON.parse(collectorLogMessage(stderr, "WARN")), {
+    ...missing, source: this.namedInstallation ? { ...source, installationId } : source,
+  });
 });
 
 Then("the one-call append needs one upload smaller than {int} KiB", function (this: RemoteSyncScenario, kibibytes: number) {
