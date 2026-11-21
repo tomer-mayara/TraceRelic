@@ -58,6 +58,15 @@ interpreting its recorded locations. [Session key](local-collector/session-key.t
 
 The `check:collector-api`, `check:logging-contract`, and `test` scripts verify these rules.
 
+### Database connection check
+
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | `db:check` runs a read-only query. Success writes one JSON line to stdout and exits with status 0. A failed check leaves stdout empty and exits with status 1. [Database check scenarios](../../apps/api/test/acceptance/collector/db-check.feature) |
+| Observability | A connection, query, or disconnect failure writes one `ERROR` to stderr. The message names the check and keeps credentials and connection details private. A successful check has no diagnostic. [Lost connection test](../../apps/api/test/integration/db-check.test.ts) |
+| Architecture | The command loads the shared `ConsoleLogger` from TypeScript source and waits for it to close after a failure. CI runs the command after installing dependencies and before building the workspace. [Shared logging](shared-logging.md) · [CI check](../../.github/workflows/collector.yml) |
+| Interface | The JSON result contains two strings, `database` and `version`, as returned by PostgreSQL. The `check:collector-api` script checks the schema and runs the command scenarios. [Result schema](collector-api/main.tsp) |
+
 ## Visible conversation
 
 Keep the original text, role, recorded time and position of each visible user or assistant block. Use
