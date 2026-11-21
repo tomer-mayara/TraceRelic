@@ -170,7 +170,7 @@ From a fresh checkout, copy `.env.example` to `.env`. If you already have a `.en
 
 ```sh
 docker compose up -d --wait db
-bun run db:check
+bun run --silent db:check
 ```
 
-Expect database `feature_tokens` and PostgreSQL version `18.7`. To stop the database and keep its data, run `docker compose stop db`.
+The check writes one JSON object to stdout with the database name and server version. The local Compose service reports database `feature_tokens` and PostgreSQL version `18.7`. If the check fails, it writes an error to stderr and exits with status 1. To stop the database and keep its data, run `docker compose stop db`.

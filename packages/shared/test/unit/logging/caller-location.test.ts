@@ -6,7 +6,7 @@ import { CallerStack, type CallerFrame } from "../../fixtures/caller-stack.ts";
 import { RecordingLogger } from "../../fixtures/recording-logger.ts";
 
 const logging = import.meta.resolve("@tracerelic/shared/logging");
-const own = { scriptName: new URL("./logger.js", logging).href, lineNumber: 8 };
+const own = { scriptName: new URL("../../dist/logging/logger.js", logging).href, lineNumber: 8 };
 const ownSource = { scriptName: new URL("../../src/logging/logger.ts", logging).href, lineNumber: 7 };
 const caller = { scriptName: new URL("./jobs/internal/logger.ts", import.meta.url).href, lineNumber: 42 };
 const outer = { scriptName: new URL("./outer.ts", import.meta.url).href, lineNumber: 91 };

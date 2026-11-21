@@ -20,7 +20,7 @@
     "typecheck": "tsrs --noEmit",
     "build": "bun run typecheck && bun run --cwd apps/api contract && mkdir -p apps/collector/dist/contracts && cp apps/api/dist/contracts/collector-api.schema.json apps/collector/dist/contracts/ && bun run --filter '@tracerelic/*' compile:source && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file .swcrc",
     "test": "bun run build && bun run test:compiled",
-    "db:check": "node --env-file=.env apps/api/scripts/check-db.mjs",
+    "db:check": "bun --conditions=source apps/api/scripts/check-db.ts",
     "schema:collector-history": "tsp compile docs/specs/local-collector/history.tsp --pretty false --output-dir dist/collector-history --option @typespec/json-schema.bundleId=history.schema.json",
     "schema:collector-storage": "tsp compile docs/specs/local-collector/storage.tsp --pretty false",
     "check:logging-contract": "tsp compile docs/specs/shared-logging/logging.tsp --pretty false && depcruise --config docs/specs/shared-logging/dependencies.json \"{apps,packages}/*/{src,scripts,test}\"",

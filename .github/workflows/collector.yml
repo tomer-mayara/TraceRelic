@@ -30,8 +30,11 @@ jobs:
       - name: Install dependencies
         id: install
         run: bun install --frozen-lockfile
+      - name: Check the database connection before building
+        run: DATABASE_URL="$TRACERELIC_TEST_DATABASE_URL" bun run --silent db:check
       - name: Build workspace
         id: build
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run build
       - name: Compile history contract
         run: bun run schema:collector-history

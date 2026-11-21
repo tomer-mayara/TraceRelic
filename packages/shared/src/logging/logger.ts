@@ -6,10 +6,11 @@ import { Logger as TsLogger, LogLevel as TsLogLevel } from "tslog";
 // The pinned runtimes provide Error.isError. The workspace uses ES2022 type definitions.
 const { isError } = Error as ErrorConstructor & { isError(value: unknown): value is Error };
 
-// Source maps can identify this module by its TypeScript path while running the build.
+// Source and compiled callers can report either path for the base logger.
 const loggerFiles = new Set([
   fileURLToPath(import.meta.url),
   fileURLToPath(new URL("../../src/logging/logger.ts", import.meta.url)),
+  fileURLToPath(new URL("../../dist/logging/logger.js", import.meta.url)),
 ]);
 
 export enum LogLevel {

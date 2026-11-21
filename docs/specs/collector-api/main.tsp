@@ -29,6 +29,14 @@ model CollectorDatabaseConfig {
   @secret @format("uri") @pattern("^postgres(ql)?://") DATABASE_URL: string;
 }
 
+/** One line on stdout after a successful db:check. */
+@TypeSpec.JsonSchema.jsonSchema
+@TypeSpec.JsonSchema.extension("additionalProperties", false)
+model DatabaseCheckResult {
+  database: string;
+  version: string;
+}
+
 @TypeSpec.JsonSchema.jsonSchema
 model SessionResult {
   session: SessionView | null;
