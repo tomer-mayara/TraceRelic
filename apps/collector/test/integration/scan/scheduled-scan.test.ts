@@ -4,6 +4,8 @@ import { test } from "node:test";
 import { ScanActivity } from "#src/scan/scan-activity";
 import { ScanRejectedError, rejectedBatch } from "#src/scan/scan-rejected";
 import { ScheduledScanner } from "#src/scan/scheduled-scanner";
+import { captureCollectorStderr } from "../../fixtures/capture-collector-cli.ts";
+import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { batch, planning, source } from "../../fixtures/collector-storage-fixture.ts";
 import { RejectedBatchFixture } from "../../fixtures/rejected-batch-fixture.ts";
 import { RejectingBatchStorage } from "../../fixtures/rejecting-batch-storage.ts";
@@ -51,8 +53,7 @@ test("watch counts an accepted Claude session and ages the rejected Codex range 
   const files = await RejectedBatchFixture.create();
   t.after(() => files.close());
   const { original, byteRange } = await files.prepare("Original", 12);
-  const diagnostics: string[] = [];
-  t.mock.method(console, "error", (line: string) => diagnostics.push(line));
+  const { lines } = captureCollectorStderr(t);
   const [, , ...options] = files.args;
   const watch = new ScheduledScanFixture(files.storage, options);
   try {
@@ -64,7 +65,7 @@ test("watch counts an accepted Claude session and ages the rejected Codex range 
 
     await watch.advance();
     assert.deepEqual(watch.reports[1], { status: "rejected", newSessions: 0, oldestPendingAgeMs: watch.intervalMs });
-    assert.deepEqual(diagnostics.map(line => JSON.parse(line)), Array(2).fill({ status: "rejected", source: files.a, byteRange }));
+    assert.deepEqual(lines.map(line => JSON.parse(collectorLogMessage(line, "ERROR"))), Array(2).fill({ status: "rejected", source: files.a, byteRange }));
 
     const repairedEnd = await files.repair(byteRange.startOffset, "b");
     assert(repairedEnd < byteRange.endOffset);

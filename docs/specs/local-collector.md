@@ -38,6 +38,15 @@ matching ID in the config must address the same remote file. Use the source mach
 interpreting its recorded locations. [Session key](local-collector/session-key.tsp) ·
 [Source and storage contract](local-collector/storage.tsp)
 
+## CLI output and diagnostics
+
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | `history` and `scan --once` write their JSON results to stdout. `watch` writes one JSON report per pass. A successful command with no diagnostics leaves stderr empty. Check both streams. [Configuration scenarios](../../apps/collector/test/acceptance/config/local-config.feature) · [Remote scan scenarios](../../apps/api/test/acceptance/collector/remote-sync.feature) |
+| Observability | Log pending scans and missing sources at `WARN`. Log rejected batches, unexpected watch failures, and command errors at `ERROR`. Each structured diagnostic keeps its JSON payload as the message. Keep transport details and credentials out of these reports. |
+| Architecture | Each CLI invocation owns one `ConsoleLogger` and waits for it to close. The CLI receives scan diagnostics through the scanner's callbacks and errors. [Shared logger](shared-logging.md) · [Dependency checks](shared-logging/dependencies.json) |
+| Interface | The stderr prefix includes the UTC timestamp, level, calling file and line. The one-time command exits with 75 for pending work and 1 for a rejection or command error. If stderr fails, keep an existing failure code or return 1. Check the scan schema and CLI tests. [Scan types](local-collector/scan.tsp) · [CLI tests](../../apps/collector/test/integration/scan) |
+
 ## Visible conversation
 
 Keep the original text, role, recorded time and position of each visible user or assistant block. Use

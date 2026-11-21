@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
+import { collectorLogMessage } from "#collector-fixture/collector-log-message";
 import { RemoteSyncFixture } from "../../fixtures/remote-sync-fixture.ts";
 
 test("a scanner without a configured installation recognizes its credential's acknowledged source after restart", async t => {
@@ -26,7 +27,7 @@ test("a scanner without a configured installation recognizes its credential's ac
   await unlink(transcript.file);
   const result = await sync.scan(config);
   assert.equal(result.code, 0, result.stderr);
-  const missing: unknown = JSON.parse(result.stderr);
+  const missing: unknown = JSON.parse(collectorLogMessage(result.stderr, "WARN"));
   const range = { acceptedOffset: row.acceptedOffset, observedEnd: row.observedEnd };
   assert.partialDeepStrictEqual(missing, { status: "missing", source: { streamId: row.source.streamId }, ...range });
   const accepted = await storage.readSession(session.key);

@@ -4,6 +4,7 @@ Feature: Resume a remote upload
     Given the collector API holds a 120-token call and my transcript has another call of 30
     When the connection drops <moment> and I restart the scanner against the same API
     Then an authenticated read returns two calls totaling 150 and a checkpoint covering both
+    And the interrupted scan logs its pending report as a warning on standard error
 
     Examples:
       | moment                             |
@@ -20,6 +21,7 @@ Feature: Resume a remote upload
     Given I uploaded one transcript with the installation <first>
     When I scan again with the installation <second> and then remove the transcript
     Then one checkpoint and one disappearance identify the transcript
+    And the scan logs the missing source as a warning and writes the sessions as JSON to standard output
 
     Examples:
       | first   | second  |

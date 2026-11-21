@@ -156,7 +156,8 @@ model ClaudeRecoveryCandidate {
   sources: TranscriptSourceInfo[];
 }
 
-/** A one-time scan could not confirm its work. An explicit new scan can retry immediately. */
+/** A scan could not confirm its work. The CLI writes this JSON as a WARN message on stderr.
+ * An explicit new scan can retry immediately. */
 @TypeSpec.JsonSchema.extension("oneOf", #[#{ required: #["source"] }, #{ required: #["scope"] }])
 @TypeSpec.JsonSchema.extension("dependentSchemas", #{
   scope: #{ `not`: #{ required: #["byteRange"] }, properties: #{ reason: #{ `enum`: #["storage-unavailable", "source-changed"] } } }
@@ -175,7 +176,8 @@ model PendingScan {
   retryAt: utcDateTime;
 }
 
-/** Storage rejected this batch as invalid. The range describes the attempted bytes. */
+/** Storage rejected this batch as invalid. The CLI writes this JSON as an ERROR message on stderr.
+ * The range describes the attempted bytes. */
 model RejectedBatch {
   status: "rejected";
   source: StreamKey;
@@ -198,7 +200,7 @@ model ScheduledScanOptions extends ScanSelection {
   intervalMs?: ScanIntervalMs;
 }
 
-/** Emit one JSON object per pass, including startup and retries. */
+/** The CLI writes one JSON object to stdout per pass, including startup and retries. */
 @TypeSpec.JsonSchema.extension("if", #{ properties: #{ status: #{ `const`: "pending" } } })
 @TypeSpec.JsonSchema.extension("then", #{ required: #["retryAt"] })
 @TypeSpec.JsonSchema.extension("else", #{ `not`: #{ required: #["retryAt"] } })
@@ -211,7 +213,7 @@ model ScheduledScanReport {
   retryAt?: utcDateTime;
 }
 
-/** Standard error diagnostic for an unexpected failure during a scheduled pass. */
+/** The CLI writes this JSON as an ERROR message on stderr for an unexpected scheduled failure. */
 model FailedScan {
   status: "failed";
   reason: "scan-failed";
@@ -222,6 +224,7 @@ interface LocalCollector {
    * An unconfirmed write or unresolved version conflict raises a scan error carrying PendingScan.
    * Emit a RejectedBatch for each invalid commit. Stop that file and continue other files.
    * Emit one MissingSource for each newly confirmed disappearance in the selection.
+   * The CLI writes that JSON as a WARN message on stderr.
    * After scanning, raise a scan error carrying RejectedScan if any batch was rejected. */
   scanOnce(selection?: ScanSelection): SessionView[];
   /** Run the same import and presence checks for watch without fetching the final conversation views. */

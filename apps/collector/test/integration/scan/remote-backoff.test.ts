@@ -5,6 +5,8 @@ import { GlobalConfig } from "@tracerelic/collector/config";
 import { setImmediate } from "node:timers/promises";
 import { LocalCollector, ScanPendingError } from "@tracerelic/collector/scan";
 import { StorageBackoffError, type MissingSource, type StreamKey } from "@tracerelic/collector/storage";
+import { captureCollectorStderr } from "../../fixtures/capture-collector-cli.ts";
+import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
 import { PresenceConnection } from "../../fixtures/presence-connection.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
@@ -24,7 +26,7 @@ test("staggered checkpoint replies keep the latest absolute retry deadline", asy
     watch.clock.advance(10_000);
     throw new StorageBackoffError(1000);
   });
-  t.mock.method(console, "error", () => {});
+  captureCollectorStderr(t);
   const watch = new ScheduledScanFixture(storage, args.slice(2), { startMs: 0 });
   try {
     await watch.waitForPass();
@@ -41,12 +43,12 @@ test("watch defers an inventory read until its server deadline even across regul
   await files.configure();
   const list = t.mock.method(files.storage, "listSources");
   list.mock.mockImplementationOnce(() => { throw new StorageBackoffError(4000); });
-  const diagnostic = t.mock.method(console, "error", () => {});
+  const { lines } = captureCollectorStderr(t);
   const watch = new ScheduledScanFixture(files.storage, ["--config", files.configFile], { startMs: 0, intervalMs: 100 });
   try {
     await watch.waitForPass();
     assert.deepEqual(watch.reports, [{ status: "pending", retryAt: "1970-01-01T00:00:04.000Z", newSessions: 0, oldestPendingAgeMs: 0 }]);
-    const pending = JSON.parse(diagnostic.mock.calls[0].arguments[0]);
+    const pending = JSON.parse(collectorLogMessage(lines[0], "WARN"));
     assert.equal(pending.scope.harness, "codex");
     assert.equal(pending.retryAt, watch.reports[0].retryAt);
     await watch.advance(3999);

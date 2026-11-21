@@ -4,6 +4,7 @@ import { basename, join } from "node:path";
 import { test } from "node:test";
 import { ScanRejectedError } from "@tracerelic/collector/scan";
 import { captureCollectorCli } from "../../fixtures/capture-collector-cli.ts";
+import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { ClaudeProjectFixture } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture } from "../../fixtures/codex-rollout-fixture.ts";
 import { MissingSourceFixture, RejectSecondBatch } from "../../fixtures/missing-source-fixture.ts";
@@ -18,7 +19,7 @@ test("the CLI reports a disappearance once, preserves the accepted call, and res
   const result = await captureCollectorCli(t, f.args, storage);
   const report = f.missing(420, 420);
   assert.equal(result.code, 0);
-  assert.deepEqual(result.stderr.map(line => JSON.parse(line)), [report]);
+  assert.deepEqual(result.stderr.map(line => JSON.parse(collectorLogMessage(line, "WARN"))), [report]);
   const missing = await storage.readSession(source);
   assert.deepEqual(result.stdout.map(line => JSON.parse(line)), [[missing]]);
   assert.equal(missing?.observedTotalTokens, 70);
