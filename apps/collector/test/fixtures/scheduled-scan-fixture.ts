@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { runCollectorCli } from "#src/cli";
-import type { ScheduledScanReport } from "../../src/scan/scan-activity.ts";
+import type { ScheduledScanReport } from "../../src/watch/scan-activity.ts";
 import type { CollectorStorage } from "../../src/storage/collector-storage.ts";
 import { ManualScanClock } from "./manual-scan-clock.ts";
 

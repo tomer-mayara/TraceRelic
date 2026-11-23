@@ -1,11 +1,11 @@
 import { isDeepStrictEqual } from "node:util";
 import { TranscriptChangedError, type DamagedLine, type ReadPosition, type RecordBatch, type TranscriptSource, type VerifiedPrefix } from "../transcript/index.ts";
 import type { Batch, Checkpoint, CodexForkCheckpoint, Message } from "../storage/collector-storage.ts";
-import { stateRecord } from "./chat-parser-state.ts";
+import { stateRecord } from "./parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
 import {
   countReplayMessages, planReplayOccurrences, readReplayOccurrences, reconcileReplayMessages, type ReplayOccurrences,
-} from "./transcript-replay.ts";
+} from "./replay-occurrences.ts";
 
 export interface ParserFormat<Entry> {
   version: number;

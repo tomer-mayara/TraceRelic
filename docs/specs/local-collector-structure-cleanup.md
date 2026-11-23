@@ -13,29 +13,62 @@ imports of the storage helpers that change name).
 
 ## Status
 
-Steps 0 and 1 are complete on 2026-11-22. The owner accepted the five recommendations in
-[Decisions for the owner](#decisions-for-the-owner). The sections after this one describe the code
-before step 1, at commit `21ab8a9`.
+Steps 0 and 1 are complete on 2026-11-22. Step 2 is complete on 2026-11-23. The owner accepted the
+five recommendations in [Decisions for the owner](#decisions-for-the-owner). The sections after this
+one describe the code before step 1, at commit `21ab8a9`. They name each file by its path at that
+commit. The table in [Where the current files go](#where-the-current-files-go) gives the path of each
+file after step 2.
 
-| Measure | Before | After step 1 |
-| --- | ---: | ---: |
-| Top-level functions in `history/` and `providers/` | 7 | 0 |
-| Top-level functions in all of `src/` | 265 | 262 |
-| Classes | 57 | 67 |
-| Node tests | 687 | 778 |
-| Collector scenarios | 47 | 49 |
+| Measure | Before | After step 1 | After step 2 |
+| --- | ---: | ---: | ---: |
+| Top-level functions in `history/` and `providers/` | 7 | 0 | 67 |
+| Top-level functions in all of `src/` | 265 | 262 | 258 |
+| Classes | 57 | 67 | 67 |
+| Node tests | 687 | 778 | 778 |
+| Collector scenarios | 47 | 49 | 49 |
+
+Step 2 changed no function. The 67 functions came into `providers/` with the parser files, and all of
+them are in the ten files of the `pending` list. Four functions left `src/` with the two shared leaf
+modules.
+
+Results of step 1:
 
 - **Output comparison.** `scan --once` and `history` give the same bytes as before step 1 on the frozen
   sample. The comparison ran five commands: a full scan, a full history window, a scan with `--session`,
   a scan with `--project` and a history window with fractional seconds.
 - **Checks.** The Node tests, lint, the dependency rules, `check:collector-structure`, the three
   schemas, the collector scenarios and the API and PostgreSQL scenarios pass on Node.js 26.13.1.
-- **Parser tests.** Seven `*-parser-*golden.test.ts` files in
-  [test/unit/scan](../../apps/collector/test/unit/scan) pin the saved state and the output of each
-  parser as exact text. They cover one continuous scan, a restore from each saved state, a Codex fork,
-  Codex paginated history, the Codex lookahead, the version upgrade of both parsers, a Claude Code
-  subagent and an earlier Claude Code copy. A swap of two keys in one `snapshot()` fails 16 of these
-  tests and no other test.
+- **Parser tests.** Seven `*-parser-*golden.test.ts` files pin the saved state and the output of each
+  parser as exact text. After step 2 they are in
+  [test/unit/providers/codex](../../apps/collector/test/unit/providers/codex) and
+  [test/unit/providers/claude](../../apps/collector/test/unit/providers/claude). They cover one
+  continuous scan, a restore from each saved state, a Codex fork, Codex paginated history, the Codex
+  lookahead, the version upgrade of both parsers, a Claude Code subagent and an earlier Claude Code
+  copy. A swap of two keys in one `snapshot()` fails 16 of these tests and no other test.
+
+Results of step 2:
+
+- **Moves.** 37 source files and 33 test files have a new path or a new name. A moved file changed
+  only in its import lines, with two exceptions. Each of the seven golden tests names its new compiled
+  path in one comment line. `storage/http/collector-wire-contract.ts` reads the schema bundle by a
+  path relative to its own file, and that path has one more `../`.
+- **Review check.** A script compared each TypeScript file of the collector, the API and the shared
+  package with its content before the step. The text outside the import statements is identical,
+  except for the eight lines above. Each import names the same module and the same names as before.
+- **Output comparison.** `scan --once` and `history` give the same bytes as before step 2 on a new
+  frozen sample. The sample has plain and compressed Codex rollouts, archived rollouts, and Claude Code
+  transcripts with subagents. The comparison ran seven commands. Five ran the source on Bun: a full
+  scan, a full history window, a scan with `--session`, a scan with `--project` and a history window
+  with fractional seconds. Two ran the compiled files on Node.js: a full scan and a history window.
+  For each command the standard output, the standard error and the exit code are the same.
+- **Checks.** From a clean build on Node.js 26.13.1, these pass: the Node tests, lint, the dependency
+  rules, `check:collector-structure`, the three schemas, the collector scenarios, the API and
+  PostgreSQL scenarios, the shared logging checks, Knip and Habit Hooks.
+- **Rules.** `storage-is-self-contained` is on. A test added one forbidden line to a file for each
+  changed dependency rule and for the structure rule. Each of the eleven lines made its check fail. A
+  function in a `pending` file did not.
+- **Files with no change.** `knip.json` and `apps/api/component.yaml` name no moved path. No API
+  source file changed.
 
 The later steps must know these points:
 
@@ -49,8 +82,30 @@ The later steps must know these points:
 - **Empty `claudePath`.** `LocalProviders.fromConfig` adds the Claude Code provider when `claudePath` is
   defined. The scanner adds it when `claudePath` is not empty. `GlobalConfig` rejects an empty path, so
   the two rules agree today. Step 3 must keep one rule.
-- **Two direct imports.** `scan/local-collector.ts` and `scan/source-sightings.ts` import
-  `providers/codex/codex-rollout-files.ts`. Step 3 removes these imports.
+- **Eight imports from `scan/` to `providers/`.** `scan/local-collector.ts` imports the provider index,
+  `claude-session-parser.ts`, `claude-source-copy.ts`, `codex-fork-sources.ts` and
+  `codex-rollout-files.ts`. `scan/source-presence.ts` imports `claude-source-copy.ts` and
+  `codex-identity-repair.ts`. `scan/source-sightings.ts` imports `codex-rollout-files.ts`. Step 3
+  removes these imports.
+- **Imports from `providers/` to `scan/`.** Twelve parser files import six `scan/` files:
+  `parser-state.ts`, `decoded-chat.ts`, `transcript-cursor.ts`, `scan-recovery.ts`, `scan-pending.ts`
+  and `source-sightings.ts`. No rule forbids this direction.
+- **`scan/` and `watch/` import each other.** `scan/local-collector.ts` imports the type `ScanProgress`
+  from `watch/scan-activity.ts`. The two `watch/` files import five `scan/` files. Step 3 gives
+  `LocalCollector` a `progress` option and can move this type to `scan/`.
+- **Shared leaf modules.** `recorded-instant.ts` and `claude-transcript-copy.ts` are in
+  `packages/shared/src`, and `@tracerelic/shared` exports their six names. The structure rule applies
+  only to `apps/collector/src`, so it does not see their four functions. Step 4 makes
+  `RecordedInstant` and `ClaudeTranscriptCopy` and must extend the rule to these two files. Bun and
+  Node.js load `@tracerelic/shared` from `packages/shared/dist`. Run `bun run build` after a change to
+  the shared package and before `bun run collector`.
+- **Stale test names.** `local-llm-history-codex.test.ts`, `local-llm-history-claude.test.ts` and
+  `transcript-replay.test.ts` keep the names of files that no longer exist. Step 5 can give them new
+  names.
+- **Bun and Node.js give a different order.** For the same sample at the same commit, the Bun run of
+  the source and the Node.js run of the compiled files do not give the same bytes. The content is the
+  same, but the order of the sessions and of some messages is different. Compare the output of one
+  runtime with the output of the same runtime.
 - **`ClaudeSubagent`** stays in `transcript/transcript-source.ts` until step 3 moves the provider fields.
 - **`JsonlRecords.isRecord`** is the plain-object check of the transcript layer. The `JsonRecord` class
   of step 4 takes it over.
@@ -125,12 +180,12 @@ A third provider would require edits in each of these places.
 ### 4. Functions outnumber classes by more than four to one
 
 - **Function-only modules (13 files, 105 functions).** For example
-  [codex-usage-report.ts](../../apps/collector/src/scan/codex-usage-report.ts) has 15 functions and
-  [checkpoint-validation.ts](../../apps/collector/src/storage/checkpoint-validation.ts) has 18.
+  [codex-usage-report.ts](../../apps/collector/src/providers/codex/codex-usage-report.ts) has 15 functions and
+  [checkpoint-validation.ts](../../apps/collector/src/storage/checkpoint-transition.ts) has 18.
 - **Exported helpers beside a class (26 functions).** For example `readStorage`, `captureProof` and
   three more in [scan-recovery.ts](../../apps/collector/src/scan/scan-recovery.ts).
 - **Private helpers beside a class (134 functions).** For example 15 below `CodexChat` and 25 in
-  [usage-windows.ts](../../apps/collector/src/storage/usage-windows.ts).
+  [usage-windows.ts](../../apps/collector/src/storage/codex/usage-windows.ts).
 
 The same small rule is written several times:
 
@@ -468,8 +523,8 @@ Size: small risk, large diff. About 35 source files move or change name.
 4. Turn on `scan-engine-is-provider-neutral`.
 
 Size: large. This step has the most risk. It changes `local-collector.ts`, `source-presence.ts` and
-`source-sightings.ts`, about 700 lines. The 31 scan scenarios and the 36 test files in
-`test/integration/scan` cover it.
+`source-sightings.ts`, about 700 lines. The 31 scan scenarios, the 34 test files in
+`test/integration/scan` and the two in `test/integration/watch` cover it.
 
 ### Step 4. Functions to classes
 

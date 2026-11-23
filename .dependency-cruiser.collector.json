@@ -15,8 +15,8 @@
     {
       "name": "http-client-uses-the-wire-contract-and-storage-port",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/storage/http-collector-storage\\.ts$" },
-      "to": { "path": "^apps/(?!collector/src/storage/(collector-storage|collector-wire-contract|collector-batch-wire)\\.ts$)", "reachable": true }
+      "from": { "path": "^apps/collector/src/storage/http/http-collector-storage\\.ts$" },
+      "to": { "path": "^apps/(?!collector/src/storage/(collector-storage|http/collector-wire-contract|http/packed-batch)\\.ts$)", "reachable": true }
     },
     {
       "name": "collector-api-depends-on-storage",
@@ -28,18 +28,18 @@
       "name": "http-handlers-use-the-storage-port",
       "severity": "error",
       "from": { "path": "^apps/api/src/collector-api\\.ts$" },
-      "to": { "path": "^apps/collector/src/storage/(?!(collector-storage|collector-wire-contract|collector-batch-wire)\\.ts$)", "reachable": true }
+      "to": { "path": "^apps/collector/src/storage/(?!(collector-storage|http/collector-wire-contract|http/packed-batch)\\.ts$)", "reachable": true }
     },
     {
       "name": "schedule-runs-the-scan-through-its-handler",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/scan/scheduled-scanner\\.ts$" },
+      "from": { "path": "^apps/collector/src/watch/scheduled-scanner\\.ts$" },
       "to": { "path": "^apps/collector/src/(history/|storage/(?!collector-storage\\.ts$)|scan/local-collector\\.ts$)" }
     },
     {
       "name": "only-the-transcript-layer-reads-files",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/(history|providers|scan)/" },
+      "from": { "path": "^apps/collector/src/(history|providers|scan|watch)/" },
       "to": { "path": "^(node:)?fs(/promises)?$" }
     },
     {
@@ -69,7 +69,7 @@
     {
       "name": "scanner-uses-only-the-storage-port",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/scan/" },
+      "from": { "path": "^apps/collector/src/(scan|watch|providers)/" },
       "to": { "path": "^apps/collector/src/storage/(?!collector-storage\\.ts$)", "reachable": true }
     },
     {
@@ -98,6 +98,12 @@
       "severity": "error",
       "from": { "path": "^apps/collector/src/(history|transcript)/" },
       "to": { "path": "^apps/collector/src/storage/|(^|/)(better-sqlite3|node:sqlite)(/|$)" }
+    },
+    {
+      "name": "storage-is-self-contained",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/storage/" },
+      "to": { "path": "^apps/collector/src/(?!storage/)" }
     },
     {
       "name": "storage-port-is-independent",

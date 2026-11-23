@@ -31,8 +31,8 @@ interface:
 dependencyRules: ../../.dependency-cruiser.collector.json
 storagePort: src/storage/collector-storage.ts
 memoryStorage: src/storage/in-memory-collector-storage.ts
-httpStorage: src/storage/http-collector-storage.ts
-wireContract: src/storage/collector-wire-contract.ts
+httpStorage: src/storage/http/http-collector-storage.ts
+wireContract: src/storage/http/collector-wire-contract.ts
 storageFixture: test/fixtures/in-memory-collector-storage.ts
 historyReader: src/history/index.ts
 historyProviders: src/providers/index.ts
@@ -42,4 +42,4 @@ configSchema: src/config/global-config-schema.ts
 configLoader: src/config/global-config-loader.ts
 cli: src/cli.ts
 scanner: src/scan/local-collector.ts
-scheduler: src/scan/scheduled-scanner.ts
+scheduler: src/watch/scheduled-scanner.ts

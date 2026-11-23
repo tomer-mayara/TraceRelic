@@ -1,4 +1,4 @@
-import type { ClaudeSessionParser } from "#src/scan/claude-session-parser";
+import type { ClaudeSessionParser } from "#src/providers/claude/claude-session-parser";
 import { type GoldenBatch, type GoldenDamage, type GoldenLine, GoldenTranscript } from "./parser-golden-fixture.ts";
 
 type Fields = Readonly<Record<string, unknown>>;

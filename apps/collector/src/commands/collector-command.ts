@@ -1,14 +1,13 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { recordedPathDialect } from "@tracerelic/shared";
+import { isHistoryTimestamp, recordedPathDialect } from "@tracerelic/shared";
 import { GlobalConfigLoader } from "../config/global-config-loader.ts";
 import { LocalLLMHistory, type LocalHistoryEntry } from "../history/index.ts";
 import { LocalProviders } from "../providers/index.ts";
-import { isHistoryTimestamp } from "../recorded-timestamp.ts";
 import { LocalCollector, type RejectedBatch } from "../scan/local-collector.ts";
-import { ScanActivity, type ScheduledScanReport } from "../scan/scan-activity.ts";
+import { ScanActivity, type ScheduledScanReport } from "../watch/scan-activity.ts";
 import type { PendingScan } from "../scan/scan-pending.ts";
-import { checkedScanIntervalMs, ScheduledScanner, type ScanClock } from "../scan/scheduled-scanner.ts";
+import { checkedScanIntervalMs, ScheduledScanner, type ScanClock } from "../watch/scheduled-scanner.ts";
 import type { CollectorStorage, MissingSource, SessionView } from "../storage/collector-storage.ts";
 import type { ScanSelection } from "../transcript/index.ts";
 

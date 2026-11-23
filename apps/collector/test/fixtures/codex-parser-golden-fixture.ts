@@ -1,4 +1,4 @@
-import type { CodexSessionParser } from "#src/scan/codex-session-parser";
+import type { CodexSessionParser } from "#src/providers/codex/codex-session-parser";
 import { type GoldenBatch, GoldenTranscript } from "./parser-golden-fixture.ts";
 
 type Fields = Readonly<Record<string, unknown>>;

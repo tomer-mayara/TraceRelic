@@ -1,5 +1,5 @@
 import type { LocalHistoryEntry } from "../history/history-provider.ts";
-import { isHistoryTimestamp } from "../recorded-timestamp.ts";
+import { isHistoryTimestamp } from "@tracerelic/shared";
 import { JsonlRecords } from "./jsonl-records.ts";
 import type {
   BatchRecords, ReadPosition, RecordBatch, SelectedFile, Transcript, TranscriptEntry, TranscriptSource,

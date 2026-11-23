@@ -4,7 +4,7 @@ import {
   legacyScannerLocation, matchesSourceScope, needsHistoryVerification, type AcknowledgedSource, type Batch, type Checkpoint, type CodexIdentityStatus, type MissingSource, type PresenceWrite,
   type ObservedExtent, type SourceLocation, type SourceObservation, type SourcePresence, type SourceScope, type StreamKey,
 } from "./collector-storage.ts";
-import { definedFields, isCount, isIdentifier, isRecord } from "./usage-validation.ts";
+import { definedFields, isCount, isIdentifier, isRecord } from "./batch-values.ts";
 
 interface PresenceState {
   location?: SourceLocation;

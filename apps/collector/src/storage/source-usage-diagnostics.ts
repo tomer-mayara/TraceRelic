@@ -1,5 +1,5 @@
 import type { Batch, Harness, SourceUsageDiagnostic, UsageDiagnosticCode } from "./collector-storage.ts";
-import { isByteRange, isCount, isRecord } from "./usage-validation.ts";
+import { isByteRange, isCount, isRecord } from "./batch-values.ts";
 
 const rules: Record<UsageDiagnosticCode, { provider?: Harness; reportsGap?: true }> = {
   "invalid-claude-usage": { provider: "claude" },

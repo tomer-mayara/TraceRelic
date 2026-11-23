@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   countReplayMessages, planReplayOccurrences, readReplayOccurrences, reconcileReplayMessages,
-} from "#src/scan/transcript-replay";
+} from "#src/scan/replay-occurrences";
 import { TranscriptReplayFixture as F } from "../../fixtures/transcript-replay-fixture.ts";
 
 test("counts occurrences across batches and keeps native IDs and separate blocks intact", () => {

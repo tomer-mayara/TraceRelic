@@ -1,6 +1,6 @@
-import { isRecordedTimestamp } from "../recorded-timestamp.ts";
+import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { Batch, Message } from "./collector-storage.ts";
-import { definedFields, isCount, isIdentifier, isRecord } from "./usage-validation.ts";
+import { definedFields, isCount, isIdentifier, isRecord } from "./batch-values.ts";
 import { hasValidMetadata } from "./session-metadata.ts";
 
 function hasValidMessage(message: Message): boolean {

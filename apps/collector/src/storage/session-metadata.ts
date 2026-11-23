@@ -1,8 +1,6 @@
-import { recordedPathDialect } from "@tracerelic/shared";
-import { claudeCopyFallbackFields, claudeCopyStem } from "../claude-transcript-copy.ts";
-import { recordedInstant } from "../recorded-timestamp.ts";
+import { claudeCopyFallbackFields, claudeCopyStem, recordedInstant, recordedPathDialect } from "@tracerelic/shared";
 import type { Batch, BranchObservation, Metadata, SourceLocation } from "./collector-storage.ts";
-import { isCount, isIdentifier, isRecord } from "./usage-validation.ts";
+import { isCount, isIdentifier, isRecord } from "./batch-values.ts";
 
 const fields = ["cwd", "repository", "branch", "parentSessionId"] as const;
 type Field = typeof fields[number];

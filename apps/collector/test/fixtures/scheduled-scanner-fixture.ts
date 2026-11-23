@@ -1,6 +1,6 @@
-import type { ScheduledScanOutcome, ScheduledScanReport } from "../../src/scan/scan-activity.ts";
+import type { ScheduledScanOutcome, ScheduledScanReport } from "../../src/watch/scan-activity.ts";
 import type { PendingScan } from "../../src/scan/scan-pending.ts";
-import { ScheduledScanner } from "#src/scan/scheduled-scanner";
+import { ScheduledScanner } from "#src/watch/scheduled-scanner";
 import { ManualScanClock } from "./manual-scan-clock.ts";
 
 export class ScheduledScannerFixture {

@@ -1,4 +1,4 @@
-import type { CodexSessionParser } from "#src/scan/codex-session-parser";
+import type { CodexSessionParser } from "#src/providers/codex/codex-session-parser";
 import { CodexRecord as R } from "./codex-parser-golden-fixture.ts";
 import { type GoldenLine, GoldenTranscript } from "./parser-golden-fixture.ts";
 
