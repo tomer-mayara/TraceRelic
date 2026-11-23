@@ -387,9 +387,20 @@ Dependency rules:
 | `storage-is-self-contained` | `storage/` to any other collector directory | Step 2 |
 | Existing rules for the HTTP client, the schedule and the storage port | Same meaning, new paths | Step 2 |
 
+`scanner-uses-only-the-storage-port` is the existing rule for the storage port. Before step 2 it starts
+from `scan/`. Step 2 moves some of these files to `watch/` and `providers/`, so the rule then starts
+from `scan/`, `watch/` and `providers/`.
+
 The structure rule is in [collector-structure.eslint.mjs](../../.habit-hooks/collector-structure.eslint.mjs).
 Its `cleaned` list names the directories that have no top-level function. Habit Hooks applies the same
 rule through its own configuration.
+
+Step 2 moves 14 parser files into `providers/` before their cleanup. Ten of them have top-level
+functions. A second list, `pending`, names these ten files, and the rule does not apply to them. The
+rule continues to apply to `history/`, to the nine files that step 1 made in `providers/`, to the four
+moved files that have no top-level function and to each new file in `providers/`. Step 4a removes the
+six Codex names from `pending`. Step 4b removes the four Claude Code names. The list is then empty, and
+the rule applies to all of `providers/` again.
 
 ## Steps
 
@@ -441,6 +452,10 @@ storage files to their subdirectories. Move the two shared leaf modules (decisio
 file with its subject. Update the package exports,
 [component.yaml](../../apps/collector/component.yaml), the Knip entries and the dependency rule paths.
 
+A test file moves when the class or module that it tests has moved. A test of `LocalCollector`,
+`CollectorCommand`, the CLI or `InMemoryCollectorStorage` stays, because its subject stays. A test file
+keeps its name. The step definitions stay with their feature files.
+
 Size: small risk, large diff. About 35 source files move or change name.
 
 ### Step 3. The scanner receives its providers
@@ -462,8 +477,8 @@ Four bounded tasks. Each worker owns a set of files and each caller of what it r
 
 | Task | Files | Functions | Extra checks |
 | --- | --- | ---: | --- |
-| 4a | `providers/codex/` | 51 | |
-| 4b | `providers/claude/` | 17 | |
+| 4a | `providers/codex/` | 51 | `bun run check:collector-structure`, after the Codex names leave `pending` |
+| 4b | `providers/claude/` | 17 | `bun run check:collector-structure`, after the Claude Code names leave `pending` |
 | 4c | `scan/`, `watch/`, `transcript/`, `commands/`, `cli.ts`, shared classes | 44 | |
 | 4d | `storage/`, and three API files that import the renamed helpers | 150 | `bun run check:collector-api`, `bun run check:collector-postgres` |
 
