@@ -1,45 +1,36 @@
 import type { TokenCounts } from "../../storage/collector-storage.ts";
-import { invalidState, stateRecord } from "../../scan/parser-state.ts";
+import { JsonRecord } from "../../transcript/json-record.ts";
+import { ParserState } from "../../scan/parser-state.ts";
 
 export const breakdowns = ["cacheReadTokens", "cacheWriteTokens", "reasoningTokens"] as const;
 export type Breakdown = typeof breakdowns[number];
 export const zero: TokenCounts = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, reasoningTokens: 0 };
 
-type Fields = Readonly<Record<string, unknown>>;
-
-export function object(value: unknown): Fields | undefined {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Fields;
-}
-
-function count(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
 // Input includes cache reads and writes. Output includes reasoning.
 function counts(input: unknown, output: unknown, read: unknown, write: unknown, reasoning: unknown): TokenCounts | undefined {
-  if (!count(input) || !count(output) || !count(input + output)) return;
+  if (!JsonRecord.isCount(input) || !JsonRecord.isCount(output) || !JsonRecord.isCount(input + output)) return;
   const tokens: TokenCounts = { inputTokens: input, outputTokens: output };
-  if (count(read) && read <= input) tokens.cacheReadTokens = read;
-  if (count(write) && write <= input) tokens.cacheWriteTokens = write;
+  if (JsonRecord.isCount(read) && read <= input) tokens.cacheReadTokens = read;
+  if (JsonRecord.isCount(write) && write <= input) tokens.cacheWriteTokens = write;
   if ((tokens.cacheReadTokens ?? 0) + (tokens.cacheWriteTokens ?? 0) > input) {
     delete tokens.cacheReadTokens;
     delete tokens.cacheWriteTokens;
   }
-  if (count(reasoning) && reasoning <= output) tokens.reasoningTokens = reasoning;
+  if (JsonRecord.isCount(reasoning) && reasoning <= output) tokens.reasoningTokens = reasoning;
   return tokens;
 }
 
 export function providerCounts(value: unknown): TokenCounts | undefined {
-  const raw = object(value);
+  const raw = JsonRecord.object(value);
   if (!raw) return;
   const parsed = counts(raw.input_tokens, raw.output_tokens, raw.cached_input_tokens, raw.cache_write_input_tokens, raw.reasoning_output_tokens);
   if (parsed && (raw.total_tokens === undefined || raw.total_tokens === parsed.inputTokens + parsed.outputTokens)) return parsed;
 }
 
 export function restoredCounts(value: unknown): TokenCounts {
-  const raw = stateRecord(value, ["inputTokens", "outputTokens", ...breakdowns]);
+  const raw = ParserState.record(value, ["inputTokens", "outputTokens", ...breakdowns]);
   const parsed = counts(raw.inputTokens, raw.outputTokens, raw.cacheReadTokens, raw.cacheWriteTokens, raw.reasoningTokens);
-  if (!parsed || breakdowns.some(key => raw[key] !== parsed[key])) invalidState();
+  if (!parsed || breakdowns.some(key => raw[key] !== parsed[key])) ParserState.invalid();
   return parsed;
 }
 

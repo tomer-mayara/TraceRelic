@@ -1,15 +1,16 @@
 import { TranscriptChangedError, type ScanSelection, type TranscriptSource } from "../transcript/index.ts";
 import {
-  StorageAuthenticationError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
+  StorageAuthenticationError, StreamKeys, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
   type MissingSource, type SessionView, type StreamKey,
 } from "../storage/collector-storage.ts";
-import { ScanRecovery, checkpointPrefixes, readStorage, verifiedCheckpoint, type ScanRestart } from "./scan-recovery.ts";
+import { CheckpointProof } from "./checkpoint-proof.ts";
+import { ScanRecovery, type ScanRestart } from "./scan-recovery.ts";
 import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 import { ScanPendingError } from "./scan-pending.ts";
 import type { ScanProgress } from "./scan-progress.ts";
 import type { EarlierCopies, ProviderScan, ScanProvider } from "./scan-provider.ts";
 import { SourcePresenceScan, type RestoreCopy, type RestoredSource } from "./source-presence.ts";
-import { sourceId, SourceSighting, SourceSightings } from "./source-sightings.ts";
+import { SourceSighting, SourceSightings } from "./source-sightings.ts";
 import { TranscriptCursor, type ParserFormat, type SourceLine } from "./transcript-cursor.ts";
 
 export { ScanPendingError, type PendingScan } from "./scan-pending.ts";
@@ -40,7 +41,7 @@ type SelectParser<Entry> = (source: TranscriptSource<Entry>, checkpoint: Checkpo
 type SelectedSessions = Map<string, { source: StreamKey; required: boolean }>;
 
 async function readCheckpoints(sightings: SourceSighting[], now: () => number): Promise<CheckpointSnapshot[]> {
-  const results = await Promise.allSettled(sightings.map(s => readStorage(s.source, () => s.readCheckpoint()).catch(error => {
+  const results = await Promise.allSettled(sightings.map(s => ScanRecovery.read(s.source, () => s.readCheckpoint()).catch(error => {
     if (error instanceof ScanPendingError) error.useClock(now());
     throw error;
   })));
@@ -164,11 +165,11 @@ export class LocalCollector {
       const sources = [];
       for (const transcript of group) {
         const sighting = await presence.capture(transcript, end);
-        if (!rejectedStreams.has(sourceId(sighting.source))) sources.push({ transcript, sighting });
+        if (!rejectedStreams.has(StreamKeys.sourceId(sighting.source))) sources.push({ transcript, sighting });
       }
       if (!sources.length) return;
       const snapshots = await readCheckpoints(sources.map(s => s.sighting), () => this.progress?.now() ?? Date.now());
-      const prefixes = snapshots.flatMap(({ checkpoint }) => checkpointPrefixes(checkpoint));
+      const prefixes = snapshots.flatMap(({ checkpoint }) => CheckpointProof.prefixes(checkpoint));
       const offsets = new Set(prefixes.map(prefix => prefix.offset).filter(offset => offset <= file.fileSize));
       offsets.add(end);
       for (const { observedThrough } of snapshots) if (observedThrough && observedThrough.offset <= end) offsets.add(observedThrough.offset);
@@ -187,7 +188,7 @@ export class LocalCollector {
         if (stopped) sighting.rejected = true;
         if (result.rejection) {
           stopped = true;
-          rejectedStreams.add(sourceId(source));
+          rejectedStreams.add(StreamKeys.sourceId(source));
           rejections.push(result.rejection);
           this.onRejection?.(result.rejection);
         }
@@ -205,7 +206,7 @@ export class LocalCollector {
     if (!returnViews) return [];
     const views: SessionView[] = [];
     for (const { source, required } of sessions.values()) {
-      const view = await readStorage(source, () => this.storage.readSession({ harness: source.harness, sessionId: source.sessionId }));
+      const view = await ScanRecovery.read(source, () => this.storage.readSession({ harness: source.harness, sessionId: source.sessionId }));
       if (view) views.push(view);
       else if (required) throw new Error(`Storage has no session for ${source.harness}/${source.sessionId} after scan`);
     }
@@ -216,7 +217,7 @@ export class LocalCollector {
     copy: TranscriptSource<Entry>, rejections: RejectedBatch[]): Promise<RestoredSource | "unknown" | undefined> {
     const recovery = copies.open(copy);
     const sighting = new SourceSighting(known.source, { location: known.location, observedEnd: await copy.completeEnd() }, this.storage);
-    const checkpoint = () => readStorage(known.source, () => sighting.readCheckpoint());
+    const checkpoint = () => ScanRecovery.read(known.source, () => sighting.readCheckpoint());
     const start = await checkpoint();
     if (!start.checkpoint?.prefixDigest) return "unknown";
     const digests = await recovery.verify(start.checkpoint);
@@ -247,7 +248,7 @@ export class LocalCollector {
   ): Promise<TranscriptResult> {
     const { source } = sighting;
     const recovery = new ScanRecovery(sighting, transcript);
-    let position: ScanRestart = start.checkpoint && !verifiedCheckpoint(start.checkpoint, digests) ? { ...start, reset: true } : start;
+    let position: ScanRestart = start.checkpoint && !CheckpointProof.verifiedBy(start.checkpoint, digests) ? { ...start, reset: true } : start;
     if (!position.reset && start.checkpoint) sighting.verifyAt(start.version);
     for (;;) {
       const accepted = position.reset ? null : position.checkpoint;
@@ -278,12 +279,12 @@ export class LocalCollector {
     let previous = checkpoint;
     let expectedVersion = version;
     let resetFrom = reset ? checkpoint : null;
-    let known = reset ? await readStorage(source, () => this.storage.readSession(source)) : undefined;
+    let known = reset ? await ScanRecovery.read(source, () => this.storage.readSession(source)) : undefined;
     const cursor = await TranscriptCursor.restore(transcript, checkpoint, format, reset ? known?.messages ?? [] : undefined);
     for await (const { chat, checkpoint: next, startOffset, upgrade } of cursor.read(transcript)) {
       const expectedOffset = previous?.offset ?? 0;
       if (format.prepareBatch) {
-        if (known === undefined) known = await readStorage(source, () => this.storage.readSession(source));
+        if (known === undefined) known = await ScanRecovery.read(source, () => this.storage.readSession(source));
         if (!format.prepareBatch(chat, known, expectedOffset)) continue;
       }
       const { claudeUsageReports, usageDiagnostics, ...records } = chat;

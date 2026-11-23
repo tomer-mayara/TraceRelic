@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { legacyScannerLine, needsHistoryVerification, type Checkpoint, type CodexIdentityProof, type CodexIdentityStatus, type PresenceWrite, type SourceLocation, type StreamKey } from "../collector-storage.ts";
+import { LegacyScannerSource, type Checkpoint, type CodexIdentityProof, type CodexIdentityStatus, type PresenceWrite, type SourceLocation, type StreamKey } from "../collector-storage.ts";
 import type { SessionMessages } from "../session-messages.ts";
 import type { StoredSource } from "../source-inventory.ts";
 import { isCount, isIdentifier, isRecord } from "../batch-values.ts";
@@ -25,7 +25,7 @@ function validHeader(proof: Verified, update: PresenceWrite, old: Checkpoint): b
 
 function originalIdentityStatus(update: PresenceWrite, origin: Location & { file: StoredSource }) {
   const original = origin.file.selected(undefined, origin.version);
-  if (update.source.harness !== "codex" || !original || !needsHistoryVerification(update.source, origin.file.checkpoint, original.location) || original.presence !== update.presence
+  if (update.source.harness !== "codex" || !original || !LegacyScannerSource.needsHistoryVerification(update.source, origin.file.checkpoint, original.location) || original.presence !== update.presence
     || !isDeepStrictEqual(update.location, original.location) || update.observedEnd !== original.observedEnd
     || update.observedPrefixDigest !== original.observedPrefixDigest || update.checkedPrefix !== undefined) return;
   return original.codexIdentityStatus ?? "unverified";
@@ -47,7 +47,7 @@ export function codexSourceIdentity(update: PresenceWrite, origin: Location & { 
   if (!status || !isRecord(proof)) return "invalid";
   const uncertain = { status };
   if (proof.status === "unverified") return uncertain;
-  const through = legacyScannerLine(origin.file.checkpoint);
+  const through = LegacyScannerSource.line(origin.file.checkpoint);
   if (through === undefined || proof.status !== "verified" || !validHeader(proof, update, origin.file.checkpoint)) return "invalid";
   const peer = lookup({ ...update.source, sessionId: proof.peerSessionId, streamId: proof.peerStreamId });
   if (!peer || peer.version !== proof.expectedPeerVersion) return "conflict";

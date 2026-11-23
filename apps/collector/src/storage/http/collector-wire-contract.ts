@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
-export { legacyScannerLocation, legacyScannerStream } from "../collector-storage.ts";
+export { LegacyScannerSource } from "../collector-storage.ts";
 import type { BatchPart, PackedBatch } from "./packed-batch.ts";
-export { batchPartBytes, collectorRequestBytes, decodeBase64, fitsWireRecords, packBatch, stateBytes, unpackBatch, wireDigest } from "./packed-batch.ts";
+export { batchPartBytes, collectorRequestBytes, PackedBatches } from "./packed-batch.ts";
 export type { BatchPart, PackedBatch } from "./packed-batch.ts";
 import type { AcknowledgedSource, Batch, CheckpointSnapshot, CommitResult,
   PresenceWrite, SessionKey, SessionView, SourceScope, StreamKey } from "../collector-storage.ts";

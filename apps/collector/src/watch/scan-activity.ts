@@ -1,12 +1,12 @@
 import {
-  StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
+  StorageUnavailableError, StreamKeys, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
   type PresenceWrite, type SessionKey, type SourceLocation, type SourceScope, type StreamKey,
 } from "../storage/collector-storage.ts";
-import { jsonDigest } from "../scan/parser-state.ts";
+import { CheckpointProof } from "../scan/checkpoint-proof.ts";
+import { ParserState } from "../scan/parser-state.ts";
 import type { PendingScan } from "../scan/scan-pending.ts";
 import type { PrefixReader, ScanProgress } from "../scan/scan-progress.ts";
-import { readStorage, sameCheckpoint } from "../scan/scan-recovery.ts";
-import { sourceId } from "../scan/source-sightings.ts";
+import { ScanRecovery } from "../scan/scan-recovery.ts";
 
 export type ScheduledScanOutcome = { status: "complete" | "rejected" | "failed"; retryAt?: never }
   | { status: "pending"; retryAt: string };
@@ -28,13 +28,9 @@ function scopeId(scope: SourceScope): string {
     [...new Set(scope.sessionIds)].sort(), [...new Set(scope.projectPaths)].sort()]);
 }
 
-function sessionId(key: SessionKey): string {
-  return JSON.stringify([key.harness, key.sessionId]);
-}
-
 /** Retain a fingerprint of a failed write instead of keeping its decoder or conversation in memory. */
 function checkpointStamp(checkpoint: Checkpoint): Checkpoint {
-  return { ...checkpoint, parserState: jsonDigest(checkpoint.parserState) };
+  return { ...checkpoint, parserState: ParserState.digest(checkpoint.parserState) };
 }
 
 /** Count accepted sessions and retain only work whose storage outcome is still outstanding. */
@@ -98,12 +94,12 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
     }
     this.inventories.delete(id);
     for (const row of rows) {
-      const stream = sourceId(row.source);
+      const stream = StreamKeys.sourceId(row.source);
       const write = this.sources.get(stream)?.write;
       // A file can vanish before a lost reply is confirmed. Its inventory has the byte,
       // but only the stored checkpoint can identify the attempted write at that byte.
       if (write?.lostReply && !this.rechecked.has(stream) && row.version > write.version && row.acceptedOffset === write.checkpoint.offset) {
-        await readStorage(row.source, () => this.readCheckpoint(row.source));
+        await ScanRecovery.read(row.source, () => this.readCheckpoint(row.source));
       }
       this.checked(row.source);
     }
@@ -155,14 +151,14 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
   /** The scanner has matched the durable checkpoint to this capture. For a later winner,
    * also check the captured prefix through the outstanding write's own end. */
   async verified(source: StreamKey, { version, checkpoint }: CheckpointSnapshot, transcript?: PrefixReader): Promise<void> {
-    const id = sourceId(source);
+    const id = StreamKeys.sourceId(source);
     const work = this.sources.get(id);
     if (!checkpoint || work?.through === undefined || checkpoint.offset < work.through) return;
     const { write } = work;
     if (write) {
       if (version <= write.version) return;
       if (checkpoint.offset === write.checkpoint.offset) {
-        if (!sameCheckpoint(write.checkpoint, checkpointStamp(checkpoint))) return;
+        if (!CheckpointProof.same(write.checkpoint, checkpointStamp(checkpoint))) return;
       } else {
         const { offset, prefixDigest } = write.checkpoint;
         if (!transcript || offset <= write.previousOffset || !prefixDigest) return;
@@ -170,20 +166,20 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
         if (!prefixes.some(prefix => prefix.offset === offset && prefix.prefixDigest === prefixDigest)) return;
       }
     }
-    const first = this.unknownFirstWrites.get(sessionId(source));
-    if (first?.id === id && write && sameCheckpoint(first.checkpoint, write.checkpoint)) this.countCreation(source);
+    const first = this.unknownFirstWrites.get(StreamKeys.session(source));
+    if (first?.id === id && write && CheckpointProof.same(first.checkpoint, write.checkpoint)) this.countCreation(source);
     this.accepted(source, checkpoint.offset);
   }
 
   finishedSource(source: StreamKey): void {
-    const id = sourceId(source);
+    const id = StreamKeys.sourceId(source);
     const work = this.sources.get(id);
     if (work?.awaitingCheckpoint && work.through === undefined) this.sources.delete(id);
   }
 
   private confirmStored(source: StreamKey, { version, checkpoint }: CheckpointSnapshot): void {
-    const id = sourceId(source);
-    const key = sessionId(source);
+    const id = StreamKeys.sourceId(source);
+    const key = StreamKeys.session(source);
     const first = this.unknownFirstWrites.get(key);
     const write = this.sources.get(id)?.write;
     if (version === 0 || (!write?.lostReply && first?.id !== id)) return;
@@ -193,14 +189,14 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
       return;
     }
     const stamp = checkpointStamp(checkpoint);
-    if (first?.id === id && sameCheckpoint(first.checkpoint, stamp)) this.countCreation(source);
-    if (write?.lostReply && version > write.version && sameCheckpoint(write.checkpoint, stamp)) this.accepted(source, checkpoint.offset);
+    if (first?.id === id && CheckpointProof.same(first.checkpoint, stamp)) this.countCreation(source);
+    if (write?.lostReply && version > write.version && CheckpointProof.same(write.checkpoint, stamp)) this.accepted(source, checkpoint.offset);
   }
 
   private hold(
     source: StreamKey, since: number, { through, awaitingCheckpoint }: Pick<OutstandingSource, "through" | "awaitingCheckpoint">,
   ): OutstandingSource {
-    const id = sourceId(source);
+    const id = StreamKeys.sourceId(source);
     this.rechecked.delete(id);
     const work = this.sources.get(id) ?? { since, awaitingCheckpoint };
     if (through !== undefined) work.through = Math.max(through, work.through ?? 0);
@@ -216,28 +212,28 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
       work.write = { checkpoint: stamp, version: batch.expectedVersion, previousOffset: batch.expectedOffset, lostReply };
     }
     if (lostReply && batch.expectedVersion === 0) {
-      this.unknownFirstWrites.set(sessionId(batch.source), { id: sourceId(batch.source), checkpoint: stamp });
+      this.unknownFirstWrites.set(StreamKeys.session(batch.source), { id: StreamKeys.sourceId(batch.source), checkpoint: stamp });
     }
   }
 
   private checked(source: StreamKey): void {
-    const id = sourceId(source);
+    const id = StreamKeys.sourceId(source);
     if (this.sources.has(id)) this.rechecked.add(id);
   }
 
   private countCreation(source: StreamKey): void {
-    const key = sessionId(source);
+    const key = StreamKeys.session(source);
     this.unknownFirstWrites.delete(key);
     this.created.add(key);
   }
 
   private accepted(source: StreamKey, offset: number, completeEnd?: number): void {
-    const id = sourceId(source);
+    const id = StreamKeys.sourceId(source);
     const pending = this.sources.get(id);
     // A repaired or replaced file can be shorter than the previously rejected batch.
     if (!pending || (offset < (pending.through ?? 0) && offset !== completeEnd)) return;
     this.sources.delete(id);
-    const key = sessionId(source);
+    const key = StreamKeys.session(source);
     if (this.unknownFirstWrites.get(key)?.id === id) this.unknownFirstWrites.delete(key);
   }
 }

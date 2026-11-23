@@ -1,6 +1,6 @@
 import { join } from "node:path";
-import { claudeCopyStem } from "@tracerelic/shared";
-import { listDirectory } from "../../transcript/transcript-directories.ts";
+import { ClaudeTranscriptCopy } from "@tracerelic/shared";
+import { type DirectoryListing, TranscriptDirectories } from "../../transcript/transcript-directories.ts";
 import type { ClaudeSubagent } from "./claude-session-identity.ts";
 
 export interface TranscriptFile {
@@ -14,7 +14,7 @@ export interface TranscriptFile {
 export class ClaudeTranscriptFiles {
   constructor(private readonly root: string) {}
 
-  async *transcriptFiles(scan: boolean, list = listDirectory): AsyncGenerator<TranscriptFile> {
+  async *transcriptFiles(scan: boolean, list: DirectoryListing = TranscriptDirectories.listDirectory): AsyncGenerator<TranscriptFile> {
     const projects = join(this.root, "projects");
     for (const project of await list(projects, true)) {
       if (!project.isDirectory()) continue;
@@ -44,7 +44,7 @@ export class ClaudeTranscriptFiles {
   transcriptName(name: string, scan: boolean): { stem: string; previousCopy: boolean } | undefined {
     // Date queries keep their original .jsonl file set. A scan also recognizes earlier copies.
     if (scan) {
-      const stem = claudeCopyStem(name);
+      const stem = ClaudeTranscriptCopy.stem(name);
       if (stem) return { stem, previousCopy: true };
     }
     const current = /^(.+)\.jsonl$/.exec(name);

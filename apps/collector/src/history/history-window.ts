@@ -1,4 +1,4 @@
-import { compareRecordedInstants, isHistoryTimestamp, recordedInstant } from "@tracerelic/shared";
+import { RecordedInstant } from "@tracerelic/shared";
 
 interface WindowInstant {
   readonly second: number;
@@ -19,14 +19,14 @@ export class HistoryWindow {
   }
 
   static betweenInstants(from: string, to: string): HistoryWindow {
-    const start = isHistoryTimestamp(from) && recordedInstant(from);
-    const end = isHistoryTimestamp(to) && recordedInstant(to);
-    if (!start || !end || compareRecordedInstants(start, end) > 0) throw new RangeError("Expected valid instants with from at or before to");
+    const start = RecordedInstant.isTimestamp(from) && RecordedInstant.parse(from);
+    const end = RecordedInstant.isTimestamp(to) && RecordedInstant.parse(to);
+    if (!start || !end || RecordedInstant.compare(start, end) > 0) throw new RangeError("Expected valid instants with from at or before to");
     return new HistoryWindow(start, end);
   }
 
   contains(timestamp: string): boolean {
-    const at = isHistoryTimestamp(timestamp) && recordedInstant(timestamp);
-    return !!at && compareRecordedInstants(this.start, at) <= 0 && compareRecordedInstants(at, this.end) < 0;
+    const at = RecordedInstant.isTimestamp(timestamp) && RecordedInstant.parse(timestamp);
+    return !!at && RecordedInstant.compare(this.start, at) <= 0 && RecordedInstant.compare(at, this.end) < 0;
   }
 }

@@ -2,7 +2,7 @@ import { join } from "node:path";
 import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "../index.ts";
 import { TranscriptChangedError, type TranscriptSource } from "../../transcript/index.ts";
 import type { AcknowledgedSource, Checkpoint, ObservedExtent, SourceLocation } from "../../storage/collector-storage.ts";
-import { captureProof, checkpointPrefixes, verifiedCheckpoint } from "../../scan/scan-recovery.ts";
+import { CheckpointProof } from "../../scan/checkpoint-proof.ts";
 import type { CopyAssessment, EarlierCopies, EarlierCopy, SourceCopy } from "../../scan/scan-provider.ts";
 import type { ParserFormat } from "../../scan/transcript-cursor.ts";
 import { ClaudeSessionParser } from "./claude-session-parser.ts";
@@ -22,12 +22,12 @@ async function compareCopy<Source extends TranscriptSource<unknown>>(copy: Earli
   if (!transcript) return false;
   if (!checkpoint?.prefixDigest) return;
   const end = await transcript.completeEnd();
-  const offsets = new Set(checkpointPrefixes(checkpoint).map(prefix => prefix.offset));
+  const offsets = new Set(CheckpointProof.prefixes(checkpoint).map(prefix => prefix.offset));
   if ([...offsets].some(offset => offset > end)) return false;
   if (wanted.prefixDigest && wanted.offset <= end) offsets.add(wanted.offset);
   const prefixes = await transcript.prefixDigests([...offsets]);
   const digests = new Map(prefixes.map(prefix => [prefix.offset, prefix.prefixDigest]));
-  if (!verifiedCheckpoint(checkpoint, digests)) return false;
+  if (!CheckpointProof.verifiedBy(checkpoint, digests)) return false;
   const digest = digests.get(wanted.offset);
   const suffix = digest && wanted.prefixDigest ? digest === wanted.prefixDigest ? "matches" : "differs" : "unknown";
   return { transcript, path: copy.path, end, suffix };
@@ -57,7 +57,7 @@ async function assessClaudeCopies<Source extends TranscriptSource<unknown>>(row:
   const best = candidates[0];
   if (!best || !checkpoint) return { excluded, candidates };
   const choices = candidates.filter(candidate => candidate.suffix === best.suffix);
-  const accepted = Math.max(...checkpointPrefixes(checkpoint).map(prefix => prefix.offset));
+  const accepted = Math.max(...CheckpointProof.prefixes(checkpoint).map(prefix => prefix.offset));
   let limit = best.suffix === "differs" ? accepted : undefined;
   for (const alternative of choices.slice(1)) {
     const offset = Math.min(best.end, alternative.end);
@@ -80,7 +80,7 @@ export class ClaudeSourceCopy implements SourceCopy<ClaudeTranscriptEntry, Claud
 
   async verify(checkpoint: Checkpoint | null): Promise<Map<number, string> | undefined> {
     if (!checkpoint?.offset || !checkpoint.prefixDigest) return;
-    return captureProof(this.copy, checkpoint);
+    return CheckpointProof.capture(this.copy, checkpoint);
   }
 
   current(location: SourceLocation): ClaudeSource {

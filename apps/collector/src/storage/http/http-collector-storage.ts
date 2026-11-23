@@ -1,8 +1,8 @@
 import { isIPv4 } from "node:net";
-import { matchesSourceScope, StorageAuthenticationError, StorageBackoffError, StorageUnavailableError,
+import { SourceScopes, StorageAuthenticationError, StorageBackoffError, StorageUnavailableError,
   type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
   type PresenceWrite, type SessionKey, type SessionView, type SourceLocation, type SourceScope, type StreamKey } from "../collector-storage.ts";
-import { batchPartBytes, collectorRequestBytes, CollectorWireContract, fitsWireRecords, legacyScannerStream, packBatch } from "./collector-wire-contract.ts";
+import { batchPartBytes, collectorRequestBytes, CollectorWireContract, LegacyScannerSource, PackedBatches } from "./collector-wire-contract.ts";
 
 type Route = "session" | "checkpoint" | "sources" | "batches" | "presence";
 type Transport = (url: URL, init: RequestInit) => Promise<Response>;
@@ -94,14 +94,14 @@ export class HttpCollectorStorage implements CollectorStorage {
       if (!this.contract.is("AcknowledgedSource", row)) throw new Error(invalidResponse);
       // Local discovery omits the installation field when the credential supplies it.
       if (scope.installationId === undefined) delete row.source.installationId;
-      if (!matchesSourceScope(scope, row.source, row.location)) throw new Error(invalidResponse);
+      if (!SourceScopes.matches(scope, row.source, row.location)) throw new Error(invalidResponse);
       return row;
     });
   }
 
   async resolveSource(source: StreamKey, location: SourceLocation, verify: (checkpoint: Checkpoint) => Promise<boolean>): Promise<StreamKey> {
     const { harness, sessionId, installationId } = source;
-    const legacy = legacyScannerStream(harness, location);
+    const legacy = LegacyScannerSource.stream(harness, location);
     if (!legacy) return source;
     const alternate = source.streamId === location.path ? legacy : source.streamId === legacy ? location.path : undefined;
     if (!alternate) return source;
@@ -117,10 +117,10 @@ export class HttpCollectorStorage implements CollectorStorage {
   async commit(batch: Batch): Promise<CommitResult> {
     const body = JSON.stringify(batch);
     if (Buffer.byteLength(body) <= collectorRequestBytes) return this.write("batches", body);
-    if (!fitsWireRecords(batch) || Buffer.byteLength(JSON.stringify(batch.source)) > collectorRequestBytes) return "invalid";
+    if (!PackedBatches.fitsWireRecords(batch) || Buffer.byteLength(JSON.stringify(batch.source)) > collectorRequestBytes) return "invalid";
     const snapshot = await this.readCheckpoint(batch.source);
     if (snapshot.version !== batch.expectedVersion || (snapshot.checkpoint?.offset ?? 0) !== batch.expectedOffset) return "conflict";
-    const { header, bytes } = packBatch(batch, body, snapshot.checkpoint?.parserState);
+    const { header, bytes } = PackedBatches.pack(batch, body, snapshot.checkpoint?.parserState);
     const final = JSON.stringify(header);
     if (Buffer.byteLength(final) > collectorRequestBytes) return "invalid";
     for (let index = 0; index < (header.parts ?? 0); index++) {

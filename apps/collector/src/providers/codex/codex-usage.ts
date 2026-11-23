@@ -1,8 +1,9 @@
 import type { DamagedLine } from "../../transcript/index.ts";
+import { JsonRecord } from "../../transcript/json-record.ts";
 import type { TokenCounts, Usage, UsageDiagnostic, UsageWindow } from "../../storage/collector-storage.ts";
-import { invalidState, jsonDigest, stateRecord, stateString } from "../../scan/parser-state.ts";
+import { ParserState } from "../../scan/parser-state.ts";
 import type { CodexForkUsage } from "./codex-fork-usage.ts";
-import { type Breakdown, breakdowns, difference, mergeRepeated, object, partition, restoredCounts, sameTotals, zero } from "./codex-token-counts.ts";
+import { type Breakdown, breakdowns, difference, mergeRepeated, partition, restoredCounts, sameTotals, zero } from "./codex-token-counts.ts";
 import { type Call, type CallContext, type Fields, initialHistory, readReport, recorded,
   type Report, reportContext, type UsageEntry } from "./codex-usage-report.ts";
 import type { DecodedUsage } from "../../scan/decoded-chat.ts";
@@ -25,13 +26,13 @@ function couldBeSameCall(pending: Call, last: Call): boolean {
 }
 
 function restoreCall(value: unknown): Call {
-  const fields = stateRecord(value, ["id", "kind", "revision", "at", "turnId", "requestId", "responseId", "model",
+  const fields = ParserState.record(value, ["id", "kind", "revision", "at", "turnId", "requestId", "responseId", "model",
     "inputTokens", "outputTokens", ...breakdowns]);
   const { id, kind, revision, at, turnId, requestId, responseId, model, ...amount } = fields;
-  if (!validCallId(id) || kind !== "call" || revision !== 1 || !recorded(at)) invalidState();
+  if (!validCallId(id) || kind !== "call" || revision !== 1 || !recorded(at)) ParserState.invalid();
   const call: Call = { id, kind, revision, at, ...restoredCounts(amount) };
   for (const [key, value] of [["turnId", turnId], ["requestId", requestId], ["responseId", responseId], ["model", model]] as const) {
-    const text = stateString(value);
+    const text = ParserState.string(value);
     if (text) call[key] = text;
   }
   return call;
@@ -67,67 +68,67 @@ export class CodexUsage {
   static resume(state?: unknown, fork?: CodexForkUsage): CodexUsage {
     const usage = new CodexUsage(fork);
     if (state === undefined) return usage;
-    const saved = stateRecord(state, ["historyId", "baseline", "turnId", "model", "requestId", "seen", "pending",
+    const saved = ParserState.record(state, ["historyId", "baseline", "turnId", "model", "requestId", "seen", "pending",
       "disputed", "observations", "awaitingBaseline", "fork", "aliases", "previousChange"]);
     if (fork) fork.restore(saved.fork);
-    else if (saved.fork !== undefined) invalidState();
-    if (saved.awaitingBaseline !== undefined && saved.awaitingBaseline !== true) invalidState();
+    else if (saved.fork !== undefined) ParserState.invalid();
+    if (saved.awaitingBaseline !== undefined && saved.awaitingBaseline !== true) ParserState.invalid();
     usage.needsBaseline = saved.awaitingBaseline === true;
-    if (saved.historyId !== undefined && !validHistory(saved.historyId)) invalidState();
+    if (saved.historyId !== undefined && !validHistory(saved.historyId)) ParserState.invalid();
     usage.historyId = saved.historyId ?? "";
     usage.restoreObservations(saved.observations);
-    if (usage.observations.size > 0 && !usage.historyId) invalidState();
+    if (usage.observations.size > 0 && !usage.historyId) ParserState.invalid();
     if (saved.baseline !== undefined) {
-      if (!usage.historyId) invalidState();
+      if (!usage.historyId) ParserState.invalid();
       usage.baseline = restoredCounts(saved.baseline);
     }
-    if (Boolean(usage.baseline) !== (usage.observations.size > 0)) invalidState();
-    usage.context = { turnId: stateString(saved.turnId), model: stateString(saved.model), requestId: stateString(saved.requestId) };
-    if (!usage.historyId && Object.values(usage.context).some(Boolean)) invalidState();
-    if (!Array.isArray(saved.disputed)) invalidState();
+    if (Boolean(usage.baseline) !== (usage.observations.size > 0)) ParserState.invalid();
+    usage.context = { turnId: ParserState.string(saved.turnId), model: ParserState.string(saved.model), requestId: ParserState.string(saved.requestId) };
+    if (!usage.historyId && Object.values(usage.context).some(Boolean)) ParserState.invalid();
+    if (!Array.isArray(saved.disputed)) ParserState.invalid();
     for (const value of saved.disputed) {
       const key = breakdowns.find(k => k === value);
-      if (!key || !usage.baseline || usage.baseline[key] !== undefined || usage.disputed.has(key)) invalidState();
+      if (!key || !usage.baseline || usage.baseline[key] !== undefined || usage.disputed.has(key)) ParserState.invalid();
       usage.disputed.add(key);
     }
     usage.restoreCalls(saved.seen, saved.pending);
     usage.restoreAliases(saved);
-    if (usage.needsBaseline && usage.pending.size) invalidState();
+    if (usage.needsBaseline && usage.pending.size) ParserState.invalid();
     return usage;
   }
 
   private restoreAliases(saved: Record<string, unknown>): void {
-    if (saved.aliases !== undefined) for (const [alias, ids] of Object.entries(stateRecord(saved.aliases))) {
-      if (!validCallId(alias) || !Array.isArray(ids) || !ids.length || !ids.every(validCallId)) invalidState();
+    if (saved.aliases !== undefined) for (const [alias, ids] of Object.entries(ParserState.record(saved.aliases))) {
+      if (!validCallId(alias) || !Array.isArray(ids) || !ids.length || !ids.every(validCallId)) ParserState.invalid();
       this.aliases.set(alias, new Set(ids));
     }
     if (saved.previousChange !== undefined) {
-      const { start, calls, closingId } = stateRecord(saved.previousChange, ["start", "calls", "closingId"]);
-      if (!this.baseline || !Array.isArray(calls) || (closingId !== undefined && !validCallId(closingId))) invalidState();
+      const { start, calls, closingId } = ParserState.record(saved.previousChange, ["start", "calls", "closingId"]);
+      if (!this.baseline || !Array.isArray(calls) || (closingId !== undefined && !validCallId(closingId))) ParserState.invalid();
       this.previousChange = { start: restoredCounts(start), calls: calls.map(restoreCall), closingId };
     }
   }
 
   private restoreObservations(value: unknown): void {
-    if (!Array.isArray(value)) invalidState();
+    if (!Array.isArray(value)) ParserState.invalid();
     for (const id of value) {
-      if (typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id) || this.observations.has(id)) invalidState();
+      if (typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id) || this.observations.has(id)) ParserState.invalid();
       this.observations.add(id);
       this.lastObservation = id;
     }
   }
 
   private restoreCalls(known: unknown, pending: unknown): void {
-    for (const [id, value] of Object.entries(stateRecord(known))) {
-      const { historyId, ...amount } = stateRecord(value, ["historyId", "inputTokens", "outputTokens"]);
-      if (!validCallId(id) || !validHistory(historyId) || historyId.split(":reset:")[0] !== this.historyId.split(":reset:")[0]) invalidState();
+    for (const [id, value] of Object.entries(ParserState.record(known))) {
+      const { historyId, ...amount } = ParserState.record(value, ["historyId", "inputTokens", "outputTokens"]);
+      if (!validCallId(id) || !validHistory(historyId) || historyId.split(":reset:")[0] !== this.historyId.split(":reset:")[0]) ParserState.invalid();
       this.seen.set(id, { historyId, ...restoredCounts(amount) });
     }
-    if (!Array.isArray(pending)) invalidState();
+    if (!Array.isArray(pending)) ParserState.invalid();
     for (const item of pending) {
       const call = restoreCall(item);
       const seen = this.seen.get(call.id);
-      if (!seen || seen.historyId !== this.historyId || !sameTotals(call, seen) || this.pending.has(call.id)) invalidState();
+      if (!seen || seen.historyId !== this.historyId || !sameTotals(call, seen) || this.pending.has(call.id)) ParserState.invalid();
       this.pending.set(call.id, call);
     }
   }
@@ -179,13 +180,13 @@ export class CodexUsage {
     const seed = this.fork?.plan.baseline;
     if (seed) {
       this.baseline = { ...seed };
-      this.lastObservation = jsonDigest([this.historyId, "fork-boundary", seed.inputTokens, seed.outputTokens]);
+      this.lastObservation = ParserState.digest([this.historyId, "fork-boundary", seed.inputTokens, seed.outputTokens]);
       this.observations.add(this.lastObservation);
     } else if (this.fork?.plan.inheritedThrough) this.needsBaseline = true;
   }
 
   private read(entry: UsageEntry, result: Result): void {
-    const payload = object(entry.record.payload);
+    const payload = JsonRecord.object(entry.record.payload);
     if (!this.historyId) this.startHistory(entry, payload);
     if (this.fork?.plan.firstUncertain?.lineNumber === entry.lineNumber) diagnose(result, "unresolved-codex-fork", entry.lineNumber);
     if (!payload) return;
@@ -274,7 +275,7 @@ export class CodexUsage {
     }
     if (report.end) {
       // An exact earlier observation is a replay even when its counters now look like a reset.
-      const observation = jsonDigest([entry.record, report.at, report.independent && report.last?.id]);
+      const observation = ParserState.digest([entry.record, report.at, report.independent && report.last?.id]);
       if (this.observations.has(observation)) return;
       this.observations.add(observation);
       if (this.fork?.startsFresh(report, this.pending, known)) {
@@ -297,7 +298,7 @@ export class CodexUsage {
     const change = difference(end, start);
     if (!change) {
       diagnose(result, "codex-counter-reset", report.sourceOrder);
-      const reset = jsonDigest([this.historyId, observation]);
+      const reset = ParserState.digest([this.historyId, observation]);
       this.historyId = `${this.historyId.split(":reset:")[0]}:reset:${reset}`;
       this.baseline = undefined;
       this.rebase(end, independent, result);
@@ -387,7 +388,7 @@ export class CodexUsage {
     const { start, end } = window;
     const parts: Usage[] = [...calls];
     if (remaining.inputTokens || remaining.outputTokens || !parts.length) {
-      const id = jsonDigest([this.historyId, start.inputTokens, start.outputTokens, end.inputTokens, end.outputTokens,
+      const id = ParserState.digest([this.historyId, start.inputTokens, start.outputTokens, end.inputTokens, end.outputTokens,
         calls.map(call => call.id).sort()]);
       parts.push({ kind: "interval", id: `interval:${id}`, revision: 1, at, ...remaining });
     }

@@ -1,11 +1,11 @@
-import { claudeCopyFallbackFields, claudeCopyStem, recordedInstant, recordedPathDialect } from "@tracerelic/shared";
+import { ClaudeTranscriptCopy, RecordedInstant, recordedPathDialect } from "@tracerelic/shared";
 import type { Batch, BranchObservation, Metadata, SourceLocation } from "./collector-storage.ts";
 import { isCount, isIdentifier, isRecord } from "./batch-values.ts";
 
 const fields = ["cwd", "repository", "branch", "parentSessionId"] as const;
 type Field = typeof fields[number];
 type Observations = Partial<Record<Field, { value: string; version: number }>>;
-type Branch = { name: string; line: number; instant?: ReturnType<typeof recordedInstant> };
+type Branch = { name: string; line: number; instant?: ReturnType<typeof RecordedInstant.parse> };
 
 export function hasValidMetadata(metadata: Metadata | undefined): boolean {
   if (metadata === undefined) return true;
@@ -30,10 +30,10 @@ export class SessionMetadata {
   restoreBackupFields(batch: Batch, source: string, location?: SourceLocation): void {
     if (!location || batch.source.harness !== "claude" || !hasValidMetadata(batch.metadata)) return;
     const filename = recordedPathDialect(location.root)?.basename(location.path);
-    if (!filename || !claudeCopyStem(filename)) return;
+    if (!filename || !ClaudeTranscriptCopy.stem(filename)) return;
     const metadata: Metadata = { ...batch.metadata };
     const prior = this.sources.get(source);
-    for (const field of claudeCopyFallbackFields) {
+    for (const field of ClaudeTranscriptCopy.fallbackFields) {
       const accepted = prior?.[field];
       if (accepted) metadata[field] = accepted.value;
       else delete metadata[field];
@@ -75,7 +75,7 @@ export class SessionMetadata {
 
   private recordBranch(source: string, name: string | undefined, observation: BranchObservation): boolean {
     if (!isRecord(observation) || !isCount(observation.sourceOrder) || !observation.sourceOrder || !name) return false;
-    const instant = observation.at === undefined ? undefined : recordedInstant(observation.at);
+    const instant = observation.at === undefined ? undefined : RecordedInstant.parse(observation.at);
     if (observation.at !== undefined && !instant) return false;
     if (observation.sourceOrder > (this.branches.get(source)?.line ?? 0)) {
       this.branches.set(source, { name: name, line: observation.sourceOrder, instant });

@@ -1,5 +1,5 @@
 import type { Message } from "../storage/collector-storage.ts";
-import { invalidState, stateRecord } from "./parser-state.ts";
+import { ParserState } from "./parser-state.ts";
 import type { DecodedChat } from "./decoded-chat.ts";
 
 export type ReplayOccurrences = Record<string, { accepted: number; replayed: number }>;
@@ -43,7 +43,7 @@ export function reconcileReplayMessages(chat: DecodedChat, rules: ReplayOccurren
     }
     // The replacement's occurrences were counted from zero. Subsequent appends start after the retained IDs.
     const occurrence = bounds.accepted + (id.occurrence - bounds.replayed);
-    if (!Number.isSafeInteger(occurrence)) invalidState();
+    if (!Number.isSafeInteger(occurrence)) ParserState.invalid();
     return [{ ...message, id: `text:${id.digest}:${occurrence}:${id.block}` }];
   });
   if (disputed.size) {
@@ -57,10 +57,10 @@ export function reconcileReplayMessages(chat: DecodedChat, rules: ReplayOccurren
 export function readReplayOccurrences(value: unknown): ReplayOccurrences | undefined {
   if (value === undefined) return;
   const rules: ReplayOccurrences = {};
-  for (const [digest, bounds] of Object.entries(stateRecord(value))) {
-    const { accepted, replayed } = stateRecord(bounds, ["accepted", "replayed"]);
+  for (const [digest, bounds] of Object.entries(ParserState.record(value))) {
+    const { accepted, replayed } = ParserState.record(bounds, ["accepted", "replayed"]);
     if (!/^[a-f0-9]{64}$/.test(digest) || typeof accepted !== "number" || !Number.isSafeInteger(accepted) || accepted < 1
-      || typeof replayed !== "number" || !Number.isSafeInteger(replayed) || replayed < 0) invalidState();
+      || typeof replayed !== "number" || !Number.isSafeInteger(replayed) || replayed < 0) ParserState.invalid();
     rules[digest] = { accepted, replayed };
   }
   return rules;

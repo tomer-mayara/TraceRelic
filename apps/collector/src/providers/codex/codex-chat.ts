@@ -1,8 +1,9 @@
 import type { CodexRolloutEntry } from "../index.ts";
 import type { DamagedLine } from "../../transcript/index.ts";
+import { JsonRecord } from "../../transcript/json-record.ts";
 import type { Metadata, Role } from "../../storage/collector-storage.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
-import { invalidState, jsonDigest, stateRecord, stateString, TextOccurrences } from "../../scan/parser-state.ts";
+import { ParserState, TextOccurrences } from "../../scan/parser-state.ts";
 import type { ChatParser, DecodedChat } from "../../scan/decoded-chat.ts";
 
 type ChatEntry = Pick<CodexRolloutEntry, "sessionId" | "lineNumber" | "timestamp" | "record" | "recordPrefixDigest">;
@@ -24,33 +25,33 @@ export class CodexChat implements ChatParser<ChatEntry> {
 
   static resume(state?: unknown): CodexChat {
     if (state === undefined) return new CodexChat(new TextOccurrences());
-    const saved = stateRecord(state, ["context", "turnId", "requestId", "previous", "mirrors", "occurrences", "paginated"]);
+    const saved = ParserState.record(state, ["context", "turnId", "requestId", "previous", "mirrors", "occurrences", "paginated"]);
     const chat = new CodexChat(TextOccurrences.restore(saved.occurrences));
-    const context = stateRecord(saved.context, ["cwd", "repository", "branch"]);
+    const context = ParserState.record(saved.context, ["cwd", "repository", "branch"]);
     for (const key of ["cwd", "repository", "branch"] as const) {
-      const value = stateString(context[key]);
+      const value = ParserState.string(context[key]);
       if (value) chat.context[key] = value;
     }
-    chat.turnId = stateString(saved.turnId);
-    chat.requestId = stateString(saved.requestId);
-    if (saved.paginated !== undefined && saved.paginated !== true) invalidState();
+    chat.turnId = ParserState.string(saved.turnId);
+    chat.requestId = ParserState.string(saved.requestId);
+    if (saved.paginated !== undefined && saved.paginated !== true) ParserState.invalid();
     chat.paginated = saved.paginated === true;
     if (saved.previous !== undefined) {
-      const { position, role, turnId } = stateRecord(saved.previous, ["position", "role", "turnId"]);
-      if (role !== "user" && role !== "assistant") invalidState();
-      chat.previous = { position: statePosition(position), role, turnId: stateString(turnId) };
+      const { position, role, turnId } = ParserState.record(saved.previous, ["position", "role", "turnId"]);
+      if (role !== "user" && role !== "assistant") ParserState.invalid();
+      chat.previous = { position: statePosition(position), role, turnId: ParserState.string(turnId) };
       chat.restoredThrough = Number(chat.previous.position.split(":")[0]);
     }
-    for (const [key, rows] of Object.entries(stateRecord(saved.mirrors))) {
+    for (const [key, rows] of Object.entries(ParserState.record(saved.mirrors))) {
       if (!chat.previous || !/^(event|response|joined):[a-f0-9]{64}$/.test(key) || !Array.isArray(rows) || !rows.length) {
-        invalidState();
+        ParserState.invalid();
       }
       chat.mirrors.set(key, rows.map(value => {
-        const { position, turnId, requestId, messageId, parts, receipt } = stateRecord(value, ["position", "turnId", "requestId", "messageId", "parts", "receipt"]);
-        if (parts !== undefined && (!Array.isArray(parts) || !parts.length)) invalidState();
+        const { position, turnId, requestId, messageId, parts, receipt } = ParserState.record(value, ["position", "turnId", "requestId", "messageId", "parts", "receipt"]);
+        if (parts !== undefined && (!Array.isArray(parts) || !parts.length)) ParserState.invalid();
         return {
-          position: statePosition(position), turnId: stateString(turnId),
-          requestId: stateString(requestId), messageId: stateString(messageId), ...(parts && { parts: parts.map(statePosition) }),
+          position: statePosition(position), turnId: ParserState.string(turnId),
+          requestId: ParserState.string(requestId), messageId: ParserState.string(messageId), ...(parts && { parts: parts.map(statePosition) }),
           ...(receipt !== undefined && { receipt: mirrorReceipt(receipt) }),
         };
       }));
@@ -166,13 +167,13 @@ export class CodexChat implements ChatParser<ChatEntry> {
 
   private read(entry: ChatEntry, batch: ChatBatch): void {
     const { record, timestamp } = entry;
-    const payload = object(record.payload);
+    const payload = JsonRecord.object(record.payload);
     if (!payload) return;
-    const passthrough = object(payload.internal_chat_message_metadata_passthrough);
-    const turnId = identifier(payload.turn_id, passthrough?.turn_id, record.turn_id);
-    const requestId = identifier(payload.request_id, record.request_id);
+    const passthrough = JsonRecord.object(payload.internal_chat_message_metadata_passthrough);
+    const turnId = JsonRecord.identifier(payload.turn_id, passthrough?.turn_id, record.turn_id);
+    const requestId = JsonRecord.identifier(payload.request_id, record.request_id);
     if (record.type === "session_meta") {
-      if (identifier(payload.id, payload.session_id) === entry.sessionId) {
+      if (JsonRecord.identifier(payload.id, payload.session_id) === entry.sessionId) {
         this.paginated = payload.history_mode === "paginated";
         this.observeContext(payload, entry, batch.result);
       }
@@ -202,28 +203,28 @@ export class CodexChat implements ChatParser<ChatEntry> {
     const { timestamp, turnId, requestId } = identity;
     const { record } = entry;
     const event = record.type === "event_msg";
-    const item = event && payload.type === "item_completed" ? object(payload.item) : undefined;
+    const item = event && payload.type === "item_completed" ? JsonRecord.object(payload.item) : undefined;
     if (this.paginated && !item) return;
     const role = item ? completedRole(item.type) : chatRole(record.type, payload);
     if (!role) return;
     const blocks = item ? completedBlocks(role, item) : visibleBlocks(role, event, payload);
     if (blocks.length === 0) return;
     this.observeContext(payload, entry, batch.result);
-    const messageId = identifier(item?.id, object(payload.moderation)?.item_id, payload.message_id, payload.item_id, payload.id, record.message_id);
+    const messageId = JsonRecord.identifier(item?.id, JsonRecord.object(payload.moderation)?.item_id, payload.message_id, payload.item_id, payload.id, record.message_id);
     const details = {
       role, at: timestamp, sourceOrder: entry.lineNumber,
       prefixDigest: entry.recordPrefixDigest,
       turnId: turnId ?? this.turnId,
       requestId: requestId ?? (!turnId || turnId === this.turnId ? this.requestId : undefined),
       context: Object.keys(this.context).length ? { ...this.context } : undefined,
-      messageId, nativeId: messageId ?? identifier(payload.client_id, record.id, record.record_id, payload.record_id, record.uuid),
+      messageId, nativeId: messageId ?? JsonRecord.identifier(payload.client_id, record.id, record.record_id, payload.record_id, record.uuid),
     };
     // Each assistant block has its own event. One user event joins all the text inputs.
     if (item && this.paginated) {
       batch.record?.(`${entry.lineNumber}:${blocks[0].blockIndex}`, { ...details, blocks });
       return;
     }
-    if (role === "assistant" && this.joinedMirror({ ...details, blocks }, event, batch, object(payload.moderation) !== undefined)) return;
+    if (role === "assistant" && this.joinedMirror({ ...details, blocks }, event, batch, JsonRecord.object(payload.moderation) !== undefined)) return;
     const groups = role === "assistant" ? blocks.map(block => [block]) : [blocks];
     for (const group of groups) this.addItem({ ...details, blocks: group }, event, batch);
   }
@@ -231,7 +232,7 @@ export class CodexChat implements ChatParser<ChatEntry> {
   /** A legacy moderated event joins every text part from the same assistant item. */
   private joinedMirror(item: ChatItem, event: boolean, batch: ChatBatch, joinedEvent: boolean): boolean {
     if (event && !joinedEvent || !event && item.blocks.length < 2) return false;
-    const digest = jsonDigest(item.blocks.map(block => block.text).join(""));
+    const digest = ParserState.digest(item.blocks.map(block => block.text).join(""));
     const key = `joined:${digest}`;
     if (this.previous?.role !== item.role || disagree(this.previous.turnId, item.turnId)) this.clearMirrors();
     const joined = this.mirrors.get(key) ?? [];
@@ -261,10 +262,10 @@ export class CodexChat implements ChatParser<ChatEntry> {
   }
 
   private observeContext(payload: Fields, entry: ChatEntry, result: DecodedChat): void {
-    const git = object(payload.git);
-    const cwd = identifier(payload.cwd);
-    const repository = identifier(git?.repository_url, payload.repository_url, payload.repository);
-    const branch = identifier(git?.branch, payload.branch);
+    const git = JsonRecord.object(payload.git);
+    const cwd = JsonRecord.identifier(payload.cwd);
+    const repository = JsonRecord.identifier(git?.repository_url, payload.repository_url, payload.repository);
+    const branch = JsonRecord.identifier(git?.branch, payload.branch);
     if (cwd) this.context.cwd = result.metadata.cwd = cwd;
     if (disagree(repository, this.context.repository) || git?.branch === null) delete this.context.branch;
     if (repository) this.context.repository = result.metadata.repository = repository;
@@ -282,7 +283,7 @@ export class CodexChat implements ChatParser<ChatEntry> {
   private addItem(item: ChatItem, event: boolean, batch: ChatBatch): void {
     const previous = this.previous;
     if (previous && (previous.role !== item.role || disagree(previous.turnId, item.turnId))) this.clearMirrors();
-    const digest = jsonDigest(item.blocks.map(block => block.text).join(""));
+    const digest = ParserState.digest(item.blocks.map(block => block.text).join(""));
     const opposite = `${event ? "response" : "event"}:${digest}`;
     const candidates = this.mirrors.get(opposite);
     const match = candidates?.findIndex(other => !disagree(other.turnId, item.turnId)
@@ -342,8 +343,8 @@ interface ChatBatch {
 }
 
 function mirrorReceipt(value: unknown): MirrorReceipt {
-  const { at, digest } = stateRecord(value, ["at", "digest"]);
-  if (typeof at !== "string" || !isRecordedTimestamp(at) || typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) return invalidState();
+  const { at, digest } = ParserState.record(value, ["at", "digest"]);
+  if (typeof at !== "string" || !isRecordedTimestamp(at) || typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) return ParserState.invalid();
   return { at, digest };
 }
 
@@ -380,16 +381,8 @@ function applyRefinement(first: RecordedItem, refinement: MirrorRefinement): voi
 }
 
 function statePosition(value: unknown): string {
-  if (typeof value !== "string" || !/^[1-9][0-9]*:[0-9]+$/.test(value)) invalidState();
+  if (typeof value !== "string" || !/^[1-9][0-9]*:[0-9]+$/.test(value)) ParserState.invalid();
   return value;
-}
-
-function object(value: unknown): Fields | undefined {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Fields;
-}
-
-function identifier(...values: unknown[]): string | undefined {
-  return values.find((value): value is string => typeof value === "string" && value.length > 0);
 }
 
 function disagree(first?: string, second?: string): boolean {
@@ -414,7 +407,7 @@ function completedBlocks(role: Role, item: Fields): TextBlock[] {
   if (!Array.isArray(item.content)) return [];
   if (role === "assistant" && !displaysAnswer(item.moderation)) return [];
   return item.content.flatMap((value, blockIndex) => {
-    const part = object(value);
+    const part = JsonRecord.object(value);
     if (part?.type !== (role === "user" ? "text" : "Text") || typeof part.text !== "string" || !part.text.length) return [];
     return [{ blockIndex, text: part.text }];
   });
@@ -422,13 +415,13 @@ function completedBlocks(role: Role, item: Fields): TextBlock[] {
 
 function displaysAnswer(value: unknown): boolean {
   if (value === undefined || value === null) return true;
-  const moderation = object(value);
+  const moderation = JsonRecord.object(value);
   if (!moderation || typeof moderation.moderated !== "boolean") return false;
   if (moderation.display === undefined || moderation.display === null) return !moderation.moderated;
-  const display = object(moderation.display);
+  const display = JsonRecord.object(moderation.display);
   if (display?.version !== 1 || display.mode !== "show" || (display.trustedContacts !== "check" && display.trustedContacts !== "skip")) return false;
   if (display.annotation === undefined || display.annotation === null) return true;
-  const annotation = object(display.annotation);
+  const annotation = JsonRecord.object(display.annotation);
   return annotation?.kind === "wellbeingHelpline" && (annotation.subject === "prompt" || annotation.subject === "answer");
 }
 
@@ -440,10 +433,10 @@ function visibleBlocks(role: Role, event: boolean, payload: Fields): TextBlock[]
   }
   const content = payload.content;
   if (!Array.isArray(content)) return [];
-  const kinds = object(payload.internal_chat_message_metadata_passthrough)?.content_item_kinds;
+  const kinds = JsonRecord.object(payload.internal_chat_message_metadata_passthrough)?.content_item_kinds;
   const blocks: TextBlock[] = [];
   for (const [blockIndex, part] of content.entries()) {
-    const block = object(part);
+    const block = JsonRecord.object(part);
     if (block?.type !== (role === "user" ? "input_text" : "output_text")) continue;
     const text = block.text;
     if (typeof text !== "string" || !text.length) continue;
@@ -463,8 +456,8 @@ function injectedUserText(text: string, kind?: unknown): boolean {
 }
 
 function mediaLabel(text: string, content: readonly unknown[], index: number): boolean {
-  const next = object(content[index + 1])?.type;
-  const previous = object(content[index - 1])?.type;
+  const next = JsonRecord.object(content[index + 1])?.type;
+  const previous = JsonRecord.object(content[index - 1])?.type;
   return (next === "input_image" && /^<image(?: name=[^>]+)?>$/.test(text))
     || (previous === "input_image" && text === "</image>")
     || (next === "input_audio" && /^<audio(?: name=[^>]+)?>$/.test(text))

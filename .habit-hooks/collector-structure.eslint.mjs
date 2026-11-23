@@ -11,15 +11,6 @@ const files = [
 // The files that step 4 of the cleanup has not cleaned. The rule does not apply to them.
 // Each task of step 4 removes its names. The list goes away at the end of step 4.
 const pending = [
-  // The border task
-  "packages/shared/src/claude-transcript-copy.ts",
-  "packages/shared/src/recorded-instant.ts",
-  "apps/collector/src/scan/parser-state.ts",
-  "apps/collector/src/scan/scan-recovery.ts",
-  "apps/collector/src/scan/source-sightings.ts",
-  "apps/collector/src/storage/collector-storage.ts",
-  "apps/collector/src/storage/http/packed-batch.ts",
-  "apps/collector/src/transcript/transcript-directories.ts",
   // Task 4a
   "apps/collector/src/providers/codex/codex-chat.ts",
   "apps/collector/src/providers/codex/codex-fork-evidence.ts",

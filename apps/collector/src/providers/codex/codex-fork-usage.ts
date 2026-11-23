@@ -1,6 +1,6 @@
-import { recordedInstant } from "@tracerelic/shared";
+import { RecordedInstant } from "@tracerelic/shared";
 import type { CodexForkCheckpoint } from "../../storage/collector-storage.ts";
-import { invalidState, jsonDigest, stateRecord, stateString } from "../../scan/parser-state.ts";
+import { ParserState } from "../../scan/parser-state.ts";
 import { sameTotals, zero } from "./codex-token-counts.ts";
 import type { Fields, Report, UsageEntry } from "./codex-usage-report.ts";
 
@@ -10,11 +10,11 @@ export class CodexForkTurn {
   private readonly forkSecond: number;
 
   constructor(forkedAt?: string) {
-    this.forkSecond = recordedInstant(forkedAt)?.second ?? NaN;
+    this.forkSecond = RecordedInstant.parse(forkedAt)?.second ?? NaN;
   }
 
   restore(turn: unknown): void {
-    this.ownTurn = stateString(turn);
+    this.ownTurn = ParserState.string(turn);
   }
 
   snapshot(): string | undefined {
@@ -66,8 +66,8 @@ export class CodexForkUsage {
   }
 
   restore(state: unknown): void {
-    const saved = stateRecord(state, ["firstCounter", "ownTurn"]);
-    if (typeof saved.firstCounter !== "boolean") invalidState();
+    const saved = ParserState.record(state, ["firstCounter", "ownTurn"]);
+    if (typeof saved.firstCounter !== "boolean") ParserState.invalid();
     this.firstCounter = saved.firstCounter;
     this.turn.restore(saved.ownTurn);
   }
@@ -78,7 +78,7 @@ export class CodexForkUsage {
 
   historyId(sessionId: string): string {
     const proof = this.plan.inheritedThrough ? "verified" : "unverified";
-    return `${proof}:${jsonDigest(["codex-fork", sessionId, this.plan.parentSessionId, this.forkedAt])}`;
+    return `${proof}:${ParserState.digest(["codex-fork", sessionId, this.plan.parentSessionId, this.forkedAt])}`;
   }
 
   inherited(lineNumber: number): boolean {

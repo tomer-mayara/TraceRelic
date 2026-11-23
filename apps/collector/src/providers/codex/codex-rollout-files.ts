@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import { type DirectoryListing, listDirectory } from "../../transcript/transcript-directories.ts";
+import { type DirectoryListing, TranscriptDirectories } from "../../transcript/transcript-directories.ts";
 
 /** Codex rollouts in sessions/ and archived_sessions/, as plain files and as .zst files. */
 export class CodexRolloutFiles {
@@ -14,7 +14,7 @@ export class CodexRolloutFiles {
     for await (const path of this.rolloutFiles(list)) yield CodexRolloutFiles.logicalName(path);
   }
 
-  async *rolloutFiles(list = listDirectory): AsyncGenerator<string> {
+  async *rolloutFiles(list: DirectoryListing = TranscriptDirectories.listDirectory): AsyncGenerator<string> {
     for (const name of ["sessions", "archived_sessions"]) {
       yield* this.rolloutsIn(join(this.root, name), list, true);
     }

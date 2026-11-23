@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { CodexRolloutEntry } from "../index.ts";
 import type { DamagedLine, RecordBatch } from "../../transcript/index.ts";
 import type { CodexForkCheckpoint } from "../../storage/collector-storage.ts";
-import { invalidState, stateRecord } from "../../scan/parser-state.ts";
+import { ParserState } from "../../scan/parser-state.ts";
 import { CodexChat } from "./codex-chat.ts";
 import { CodexForkUsage } from "./codex-fork-usage.ts";
 import { CodexUsage } from "./codex-usage.ts";
@@ -38,8 +38,8 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
 
   static resume(state?: unknown, fork?: CodexForkUsage): CodexSessionParser {
     if (state === undefined) return new CodexSessionParser(CodexChat.resume(), CodexUsage.resume(undefined, fork), fork?.plan.parentSessionId);
-    const saved = stateRecord(state, ["chat", "usage"]);
-    if (saved.chat === undefined || saved.usage === undefined) invalidState();
+    const saved = ParserState.record(state, ["chat", "usage"]);
+    if (saved.chat === undefined || saved.usage === undefined) ParserState.invalid();
     return new CodexSessionParser(CodexChat.resume(saved.chat), CodexUsage.resume(saved.usage, fork), fork?.plan.parentSessionId);
   }
 

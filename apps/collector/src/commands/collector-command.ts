@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { isHistoryTimestamp, recordedPathDialect } from "@tracerelic/shared";
+import { RecordedInstant, recordedPathDialect } from "@tracerelic/shared";
 import { GlobalConfigLoader } from "../config/global-config-loader.ts";
 import { LocalLLMHistory, type LocalHistoryEntry } from "../history/index.ts";
 import { LocalProviders } from "../providers/index.ts";
@@ -26,7 +26,7 @@ export interface WatchRuntime {
 }
 
 function instant(option: "--from" | "--to", value: string | undefined): string {
-  if (!isHistoryTimestamp(value)) {
+  if (!RecordedInstant.isTimestamp(value)) {
     throw new Error(`Expected an ISO date and time with a timezone for ${option}`);
   }
   return value;

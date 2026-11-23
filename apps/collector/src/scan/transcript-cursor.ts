@@ -1,6 +1,6 @@
 import { TranscriptChangedError, type DamagedLine, type ReadPosition, type RecordBatch, type TranscriptSource, type VerifiedPrefix } from "../transcript/index.ts";
 import type { Batch, Checkpoint, Message, SessionView } from "../storage/collector-storage.ts";
-import { stateRecord } from "./parser-state.ts";
+import { ParserState } from "./parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
 import {
   countReplayMessages, planReplayOccurrences, readReplayOccurrences, reconcileReplayMessages, type ReplayOccurrences,
@@ -288,7 +288,7 @@ function readState<Entry>(checkpoint: Checkpoint, format: ParserFormat<Entry>, s
   const invalid = `Cannot restore parser state for ${sourceFile} at byte ${checkpoint.offset}`;
   let saved: Record<string, unknown>;
   try {
-    saved = stateRecord(JSON.parse(checkpoint.parserState || "{}"));
+    saved = ParserState.record(JSON.parse(checkpoint.parserState || "{}"));
   } catch {
     throw new Error(invalid);
   }
@@ -303,7 +303,7 @@ function readState<Entry>(checkpoint: Checkpoint, format: ParserFormat<Entry>, s
     throw new Error(invalid);
   }
   try {
-    return { version, lineNumber, decoder: stateRecord(saved.decoder), replay: readReplayPlan(saved, checkpoint, format.gapVersion) };
+    return { version, lineNumber, decoder: ParserState.record(saved.decoder), replay: readReplayPlan(saved, checkpoint, format.gapVersion) };
   } catch {
     throw new Error(invalid);
   }

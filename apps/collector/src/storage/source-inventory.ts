@@ -1,7 +1,7 @@
 import { matchesRecordedPath, recordedPathDialect } from "@tracerelic/shared";
 import { isDeepStrictEqual } from "node:util";
 import {
-  legacyScannerLocation, matchesSourceScope, needsHistoryVerification, type AcknowledgedSource, type Batch, type Checkpoint, type CodexIdentityStatus, type MissingSource, type PresenceWrite,
+  LegacyScannerSource, SourceScopes, type AcknowledgedSource, type Batch, type Checkpoint, type CodexIdentityStatus, type MissingSource, type PresenceWrite,
   type ObservedExtent, type SourceLocation, type SourceObservation, type SourcePresence, type SourceScope, type StreamKey,
 } from "./collector-storage.ts";
 import { definedFields, isCount, isIdentifier, isRecord } from "./batch-values.ts";
@@ -124,7 +124,7 @@ function legacyCodexEvidence(batch: Batch, current?: PresenceState): Pick<Presen
 function earlierHistory(prior: PresenceState | undefined, batch: Batch, location?: SourceLocation) {
   const earlierGap = prior?.earlierGap === true || (!!batch.resetFrom && !!prior?.unrecovered && !prior.unrecovered.prefixDigest);
   const unverified = prior?.unverifiedEarlierHistory || (batch.resetFrom && prior?.codexIdentityStatus !== "repaired"
-    && needsHistoryVerification(batch.source, batch.resetFrom, prior?.location ?? location));
+    && LegacyScannerSource.needsHistoryVerification(batch.source, batch.resetFrom, prior?.location ?? location));
   return { earlierGap, ...(unverified && { unverifiedEarlierHistory: true as const }) };
 }
 
@@ -136,7 +136,7 @@ export class StoredSource {
   static accept(previous: StoredSource | undefined, batch: Batch, generation: number, lc17Journal = false): StoredSource | null {
     const { source, checkpoint, sourceObservation } = batch;
     const prior = previous?.state;
-    const known = prior?.location ?? (source.installationId === undefined ? legacyScannerLocation(source.harness, source.streamId) : undefined);
+    const known = prior?.location ?? (source.installationId === undefined ? LegacyScannerSource.location(source.harness, source.streamId) : undefined);
     if (sourceObservation !== undefined && (!validObservation(sourceObservation, source, knownCompleteEnd(checkpoint), known)
       || !consistentProof(checkpoint, sourceObservation))) return null;
     const reset = batch.resetFrom !== undefined;
@@ -178,7 +178,7 @@ export class StoredSource {
 
   get unverifiedHistory(): boolean {
     return this.state.unverifiedEarlierHistory === true ||
-      (this.state.presence === "missing" && !this.repairedIdentity && needsHistoryVerification(this.source, this.checkpoint, this.state.location));
+      (this.state.presence === "missing" && !this.repairedIdentity && LegacyScannerSource.needsHistoryVerification(this.source, this.checkpoint, this.state.location));
   }
 
   get observedThrough(): ObservedExtent | undefined {
@@ -208,7 +208,7 @@ export class StoredSource {
 
   selected(scope: SourceScope | undefined, version: number): AcknowledgedSource | undefined {
     const { location, observedEnd, presence } = this.state;
-    if (!location || (scope && !matchesSourceScope(scope, this.source, location))) return;
+    if (!location || (scope && !SourceScopes.matches(scope, this.source, location))) return;
     const { observedPrefixDigest, unrecovered } = this.state;
     return { source: this.source, location, observedEnd, presence, version, acceptedOffset: this.checkpoint.offset,
       ...(this.state.codexIdentityStatus && { codexIdentityStatus: this.state.codexIdentityStatus }),

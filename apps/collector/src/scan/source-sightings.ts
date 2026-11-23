@@ -1,12 +1,9 @@
 import type { TranscriptSource } from "../transcript/index.ts";
-import { matchesSourceScope, type Batch, type CheckpointSnapshot, type CollectorStorage, type MissingSource,
+import { SourceScopes, StreamKeys, type Batch, type CheckpointSnapshot, type CollectorStorage, type MissingSource,
   type ObservedExtent, type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
-import { captureProof, readStorage } from "./scan-recovery.ts";
+import { CheckpointProof } from "./checkpoint-proof.ts";
+import { ScanRecovery } from "./scan-recovery.ts";
 import type { LocatedSource } from "./scan-provider.ts";
-
-export function sourceId(source: StreamKey): string {
-  return JSON.stringify([source.harness, source.sessionId, source.streamId, source.installationId]);
-}
 
 /** Keep the last confirmed byte separate from an upload whose reply is unknown. */
 export class SourceSighting {
@@ -63,15 +60,15 @@ export class SourceSightings {
     const local = this.remember(key, observation);
     const resolve = this.storage.resolveSource?.bind(this.storage);
     if (!resolve) return local;
-    const source = await readStorage(key, () => resolve(key, location, async checkpoint => !!await captureProof(transcript, checkpoint)));
-    if (sourceId(source) === sourceId(key)) return local;
+    const source = await ScanRecovery.read(key, () => resolve(key, location, async checkpoint => !!await CheckpointProof.capture(transcript, checkpoint)));
+    if (StreamKeys.sourceId(source) === StreamKeys.sourceId(key)) return local;
     this.forget(local);
     return this.remember(source, observation);
   }
 
   private remember(source: StreamKey, observation: SourceObservation) {
     const sighting = new SourceSighting(source, observation, this.storage);
-    const id = sourceId(source), previous = this.pending.get(id);
+    const id = StreamKeys.sourceId(source), previous = this.pending.get(id);
     sighting.confirmed = previous?.confirmed;
     sighting.verified = previous?.verified;
     this.pending.set(id, sighting);
@@ -79,26 +76,26 @@ export class SourceSightings {
   }
 
   forScope(scope: SourceScope): SourceSighting[] {
-    return [...this.pending.values()].filter(({ source, observation }) => matchesSourceScope(scope, source, observation.location));
+    return [...this.pending.values()].filter(({ source, observation }) => SourceScopes.matches(scope, source, observation.location));
   }
 
   forget(sighting: SourceSighting): void {
-    const id = sourceId(sighting.source);
+    const id = StreamKeys.sourceId(sighting.source);
     if (this.pending.get(id) === sighting) this.pending.delete(id);
   }
 
   rememberReply(report: MissingSource): void {
-    this.unconfirmedReports.set(sourceId(report.source), report);
+    this.unconfirmedReports.set(StreamKeys.sourceId(report.source), report);
   }
 
   confirmReply(report: MissingSource): void {
-    const id = sourceId(report.source);
+    const id = StreamKeys.sourceId(report.source);
     const attempted = this.unconfirmedReports.get(id);
     this.unconfirmedReports.delete(id);
     if (attempted?.acceptedOffset === report.acceptedOffset && attempted.observedEnd === report.observedEnd) this.onMissing?.(report);
   }
 
   discardReply(source: StreamKey): void {
-    this.unconfirmedReports.delete(sourceId(source));
+    this.unconfirmedReports.delete(StreamKeys.sourceId(source));
   }
 }

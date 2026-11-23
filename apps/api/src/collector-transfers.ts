@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { batchPartBytes, decodeBase64, fitsWireRecords, legacyScannerLocation, legacyScannerStream, stateBytes, unpackBatch, wireDigest,
+import { batchPartBytes, LegacyScannerSource, PackedBatches,
   type BatchPart, type CollectorWireContract, type PackedBatch } from "@tracerelic/collector/wire-contract";
 import type { AcknowledgedSource, Batch, CollectorStorage, SessionKey, SourceLocation, StreamKey } from "@tracerelic/collector/storage";
 import type { CollectorScope } from "./collector-credentials.ts";
@@ -42,7 +42,7 @@ export class CollectorTransfers {
 
   async stage(scope: CollectorScope, part: BatchPart): Promise<boolean> {
     let data: Buffer;
-    try { data = decodeBase64(part.data); } catch { return false; }
+    try { data = PackedBatches.decodeBase64(part.data); } catch { return false; }
     return data.length > 0 && data.length <= batchPartBytes && this.state.putPart(scope, part.upload, part.index, data);
   }
 
@@ -51,8 +51,8 @@ export class CollectorTransfers {
     const source = { ...header.source, installationId: scope.installationId };
     const snapshot = await storage.readCheckpoint(source);
     if (header.expectedVersion !== snapshot.version) return "conflict";
-    const base = header.base && stateBytes(snapshot.checkpoint?.parserState);
-    if (base && wireDigest(base) !== header.base) return "conflict";
+    const base = header.base && PackedBatches.stateBytes(snapshot.checkpoint?.parserState);
+    if (base && PackedBatches.digest(base) !== header.base) return "conflict";
     let fragments: Buffer[] | undefined;
     if (header.parts !== undefined) {
       fragments = await this.state.parts(scope, header.upload, header.parts);
@@ -61,10 +61,10 @@ export class CollectorTransfers {
       if (fragments.some((part, i) => !part.length || (i < last && part.length !== batchPartBytes))) return "invalid";
     }
     try {
-      const bytes = fragments ? Buffer.concat(fragments) : decodeBase64(header.inline ?? "");
-      if (wireDigest(bytes) !== header.upload) return "invalid";
-      const batch = unpackBatch(bytes, header, base || undefined);
-      if (!this.contract.is("Batch", batch) || !fitsWireRecords(batch) || batch.expectedVersion !== header.expectedVersion
+      const bytes = fragments ? Buffer.concat(fragments) : PackedBatches.decodeBase64(header.inline ?? "");
+      if (PackedBatches.digest(bytes) !== header.upload) return "invalid";
+      const batch = PackedBatches.unpack(bytes, header, base || undefined);
+      if (!this.contract.is("Batch", batch) || !PackedBatches.fitsWireRecords(batch) || batch.expectedVersion !== header.expectedVersion
           || !isDeepStrictEqual(batch.source, header.source)) return "invalid";
       return batch;
     } catch { return "invalid"; }
@@ -72,7 +72,7 @@ export class CollectorTransfers {
 
   async resolve(scope: CollectorScope, source: StreamKey, storage: CollectorStorage, location?: SourceLocation): Promise<StreamKey> {
     const key = { ...source, installationId: scope.installationId };
-    const legacy = location && legacyScannerStream(source.harness, location);
+    const legacy = location && LegacyScannerSource.stream(source.harness, location);
     if (legacy && (source.streamId === legacy || source.streamId === location.path)) {
       const rows = await storage.listSources({ harness: key.harness, installationId: scope.installationId, root: location.root, sessionIds: [key.sessionId] });
       if (rows.length > 1) await this.sources(storage, rows);
@@ -88,7 +88,7 @@ export class CollectorTransfers {
     const roots = new Set<string>();
     for (const row of rows) {
       if (row.source.installationId !== scope.installationId) continue;
-      const where = legacyScannerLocation(key.harness, row.source.streamId);
+      const where = LegacyScannerSource.location(key.harness, row.source.streamId);
       if (!where || !rows.some(peer => peer.source.installationId === scope.installationId && peer.source.streamId === where.path)) continue;
       roots.add(where.root);
     }
@@ -105,7 +105,7 @@ export class CollectorTransfers {
     const byId = new Map(rows.map(row => [JSON.stringify([row.source.sessionId, row.source.streamId]), row]));
     const selected: AcknowledgedSource[] = [];
     for (const row of rows) {
-      const legacy = legacyScannerStream(row.source.harness, row.location);
+      const legacy = LegacyScannerSource.stream(row.source.harness, row.location);
       const peer = byId.get(JSON.stringify([row.source.sessionId, row.location.path]));
       if (row.source.streamId === legacy && peer && peer !== row && row.presence === peer.presence
           && await storage.mergeSourceAlias?.(row.source, peer.source.streamId, row.version)) continue;

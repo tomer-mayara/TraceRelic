@@ -1,8 +1,9 @@
 import type { ClaudeTranscriptEntry } from "../index.ts";
+import { JsonRecord } from "../../transcript/json-record.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { ClaudeCallOrigin, ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../../storage/collector-storage.ts";
 import type { ClaudeSubagent } from "./claude-session-identity.ts";
-import { ClaudeUsageCounts, isObject, type ReportIssue } from "./claude-usage-counts.ts";
+import { ClaudeUsageCounts, type ReportIssue } from "./claude-usage-counts.ts";
 
 type Fields = Readonly<Record<string, unknown>>;
 type Request = Pick<ClaudeUsageReport, "at" | "status" | "messageId" | "requestId" | "turnId" | "origin">;
@@ -15,14 +16,14 @@ function text(value: unknown): value is string {
 
 function assistant(record: Fields): Fields | undefined {
   const message = record.message;
-  if (record.type !== "assistant" || !isObject(message) || (message.role !== undefined && message.role !== "assistant")) return;
+  if (record.type !== "assistant" || !JsonRecord.is(message) || (message.role !== undefined && message.role !== "assistant")) return;
   if (record.isMeta === true || record.isCompactSummary === true || message.model === "<synthetic>") return;
   return message;
 }
 
 function forkOrigin(value: unknown): Fork | undefined {
   if (value === undefined || value === null) return;
-  if (!isObject(value) || !text(value.sessionId)) return {};
+  if (!JsonRecord.is(value) || !text(value.sessionId)) return {};
   return { parentSessionId: value.sessionId, ...(text(value.messageUuid) && { parentMessageUuid: value.messageUuid }) };
 }
 
@@ -72,13 +73,13 @@ export class ClaudeUsage {
     const { record, timestamp, lineNumber } = entry;
     const message = assistant(record);
     const usage = message?.usage;
-    if (!message || usage === undefined || usage === null || (isObject(usage) && !Object.keys(usage).length)) return;
+    if (!message || usage === undefined || usage === null || (JsonRecord.is(usage) && !Object.keys(usage).length)) return;
     const issue = this.reportIssues(lineNumber);
     if (!text(message.id) && !text(record.requestId)) {
       issue("unidentified-claude-call", true);
       return;
     }
-    if (!isObject(usage) || !isRecordedTimestamp(timestamp)) {
+    if (!JsonRecord.is(usage) || !isRecordedTimestamp(timestamp)) {
       issue("invalid-claude-usage", true);
       return;
     }
@@ -100,8 +101,8 @@ export class ClaudeUsage {
     }
     for (const [index, item] of iterations.entries()) {
       // The top-level usage already includes all executor iterations.
-      if (isObject(item) && item.type === "message") continue;
-      if (!isObject(item) || item.type !== "advisor_message") {
+      if (JsonRecord.is(item) && item.type === "message") continue;
+      if (!JsonRecord.is(item) || item.type !== "advisor_message") {
         issue("unsupported-claude-iteration", true);
         continue;
       }
