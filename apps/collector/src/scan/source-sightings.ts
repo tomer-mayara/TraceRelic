@@ -1,9 +1,8 @@
-import { relative } from "node:path";
-import { CodexRolloutFiles } from "../providers/codex/codex-rollout-files.ts";
 import type { TranscriptSource } from "../transcript/index.ts";
 import { matchesSourceScope, type Batch, type CheckpointSnapshot, type CollectorStorage, type MissingSource,
   type ObservedExtent, type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { captureProof, readStorage } from "./scan-recovery.ts";
+import type { LocatedSource } from "./scan-provider.ts";
 
 export function sourceId(source: StreamKey): string {
   return JSON.stringify([source.harness, source.sessionId, source.streamId, source.installationId]);
@@ -54,13 +53,12 @@ export class SourceSightings {
 
   constructor(readonly storage: CollectorStorage, readonly onMissing?: (report: MissingSource) => void) {}
 
-  async capture(scope: SourceScope, transcript: TranscriptSource<unknown>, observedEnd: number): Promise<SourceSighting> {
-    const { root, harness, installationId } = scope;
-    const { sourceFile, sessionId, selectionCwd: cwd, projectDir, currentFileCwd } = transcript;
-    const path = harness === "codex" ? CodexRolloutFiles.logicalName(sourceFile) : relative(root, sourceFile);
-    const streamId = installationId ? path : harness === "codex" ? JSON.stringify([root, path]) : sourceFile;
+  async capture(scope: SourceScope, transcript: TranscriptSource<unknown>, located: LocatedSource, observedEnd: number): Promise<SourceSighting> {
+    const { harness, installationId } = scope;
+    const { sessionId } = transcript;
+    const { location, rootStreamId } = located;
+    const streamId = installationId ? location.path : rootStreamId;
     const key = { harness, sessionId, streamId, ...(installationId && { installationId }) };
-    const location = { root, path, ...(cwd && { cwd }), ...(projectDir && { projectDir }), ...(currentFileCwd && { currentFileCwd }) };
     const observation = { location, observedEnd };
     const local = this.remember(key, observation);
     const resolve = this.storage.resolveSource?.bind(this.storage);

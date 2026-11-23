@@ -8,6 +8,8 @@ import { JsonlRecords } from "../../transcript/jsonl-records.ts";
 import { SourceDiscovery } from "../../transcript/source-discovery.ts";
 import { TranscriptBatches } from "../../transcript/transcript-batches.ts";
 import { type DirectoryListing, TranscriptDirectories } from "../../transcript/transcript-directories.ts";
+import type { ScanProvider } from "../../scan/scan-provider.ts";
+import { ClaudeScan } from "./claude-scan.ts";
 import { ClaudeSessionIdentity } from "./claude-session-identity.ts";
 import { ClaudeTranscriptFiles, type TranscriptFile } from "./claude-transcript-files.ts";
 
@@ -24,14 +26,18 @@ interface SelectedSession {
 }
 
 /** The Claude Code provider. It receives the Claude Code root directory. */
-export class ClaudeHistory implements HistoryProvider {
+export class ClaudeHistory implements HistoryProvider, ScanProvider<ClaudeTranscriptEntry> {
   readonly harness = "claude";
   private readonly jsonl = new JsonlRecords();
   private readonly batches = new TranscriptBatches(this.jsonl);
   private readonly files: ClaudeTranscriptFiles;
 
-  constructor(private readonly root: string) {
+  constructor(readonly root: string) {
     this.files = new ClaudeTranscriptFiles(root);
+  }
+
+  openScan(selection: ScanSelection): ClaudeScan {
+    return new ClaudeScan(this, selection);
   }
 
   async readHistory(window: HistoryWindow): Promise<readonly LocalHistoryEntry[]> {

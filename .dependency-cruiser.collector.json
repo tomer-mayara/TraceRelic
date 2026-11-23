@@ -68,22 +68,19 @@
     },
     {
       "name": "scan-engine-is-provider-neutral",
-      "comment": "The scanner and the schedule know a provider only through the ScanProvider port. pathNot names the files that step 3 has not yet changed. The rule applies to each other file now. Step 3 removes pathNot.",
+      "comment": "The scanner and the schedule know a provider only through the ScanProvider port. pathNot names local-collector.ts, which builds the two providers until step 3 gives them to it. Step 3 removes pathNot.",
       "severity": "error",
       "from": {
         "path": "^apps/collector/src/(scan|watch)/",
-        "pathNot": "^apps/collector/src/scan/(local-collector|source-presence|source-sightings)\\.ts$"
+        "pathNot": "^apps/collector/src/scan/local-collector\\.ts$"
       },
       "to": { "path": "^apps/collector/src/providers/" }
     },
     {
       "name": "only-local-providers-names-both-providers",
-      "comment": "Outside providers/, a file gets the providers from providers/index.ts. pathNot names the files that step 3 has not yet changed. Step 3 removes pathNot.",
+      "comment": "Outside providers/, a file gets the providers from providers/index.ts.",
       "severity": "error",
-      "from": {
-        "path": "^apps/collector/src/(?!providers/)",
-        "pathNot": "^apps/collector/src/scan/(local-collector|source-presence|source-sightings)\\.ts$"
-      },
+      "from": { "path": "^apps/collector/src/(?!providers/)" },
       "to": { "path": "^apps/collector/src/providers/(codex|claude)/" }
     },
     {

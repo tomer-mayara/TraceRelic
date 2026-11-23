@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { TranscriptChangedError, type DamagedLine, type ReadPosition, type RecordBatch, type TranscriptSource, type VerifiedPrefix } from "../transcript/index.ts";
-import type { Batch, Checkpoint, CodexForkCheckpoint, Message } from "../storage/collector-storage.ts";
+import type { Batch, Checkpoint, CodexForkCheckpoint, Message, SessionView } from "../storage/collector-storage.ts";
 import { stateRecord } from "./parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
 import {
@@ -12,6 +12,9 @@ export interface ParserFormat<Entry> {
   gapVersion?: number;
   codexFork?: CodexForkCheckpoint;
   claudeCallOrigins?: true;
+  /** Only the format of a source that adds to the session of another file has this. Remove from the batch
+   * the fields that storage has. Return false to skip the batch. */
+  prepareBatch?(chat: DecodedChat, known: SessionView | null, expectedOffset: number): boolean;
   resume(state?: unknown): ChatParser<Entry>;
   upgrade?(oldDecoder?: object): {
     parser: ChatParser<Entry>;
