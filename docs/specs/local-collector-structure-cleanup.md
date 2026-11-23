@@ -533,6 +533,9 @@ names it.
 | Stream key and session key text (4 copies) | — | `StreamKeys` in the port file |
 | The other private helpers | about 90 | Private methods of the class in the same file |
 
+This table is the first version. The tables in [step 4](#step-4-functions-to-classes) give the class
+of each function, and they name the seven places where the result is different from this table.
+
 ## Constraint decisions
 
 | Constraint | Decision and check |
@@ -591,6 +594,11 @@ rule continues to apply to `history/`, to the nine files that step 1 made in `pr
 moved files that have no top-level function and to each new file in `providers/`. Step 4a removes the
 six Codex names from `pending`. Step 4b removes the four Claude Code names. The list is then empty, and
 the rule applies to all of `providers/` again.
+
+Step 4 changes the form of the rule in its first commit. The rule has no `cleaned` list. It applies to
+all of `apps/collector/src` and to the two shared leaf modules, and the `pending` list names each
+file that step 4 has not cleaned. `bun run check:collector-structure` reads `apps/collector/src` and
+`packages/shared/src`.
 
 ## Steps
 
@@ -732,23 +740,165 @@ files in `test/integration/scan` and the two in `test/integration/watch` cover i
 
 ### Step 4. Functions to classes
 
-Four bounded tasks. Each worker owns a set of files and each caller of what it renames.
+At the start of this step, 260 top-level functions remain: 256 in `apps/collector/src` and 4 in the two
+shared leaf modules. Each function becomes a member of the class that owns its rule.
+
+The four constraint decisions for this step:
+
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | No change. No scenario is new, because a caller can do nothing new. The scenarios, the tests and the golden texts are the specification. Check with `bun run test`, `bun run check:collector-history`, `check:collector-scan`, `check:collector-storage`, `check:collector-api` and `check:collector-postgres`. After each code commit, compare the CLI output and the trace of the file operations and the storage calls with those of step 3. |
+| Observability | Out of scope. No signal is added or changed. Each logger call stays in `cli.ts`, on the same line as before. |
+| Architecture | From the first commit, the structure rule applies to all of `apps/collector/src` and to the two shared leaf modules. A `pending` list names each file that still has a top-level function, and the rule does not apply to these files. Each task removes the names that it cleans. At the end of the step the list is gone. The dependency rules do not change, and each new class obeys them. `storage/` imports no other collector directory, so `BatchValues` stays in `storage/` and `JsonRecord` stays in `transcript/`. Check with `bun run check:collector-structure` and `bun run check:collector-deps`. |
+| Interface | No TypeSpec change. No `.tsp` file declares one of the 260 functions as an operation. The contract models `PackedBatch` and `ReplayOccurrences` keep their names. The TypeScript names that a caller imports change, and the results of this step list them. Check with the three `schema:collector-*` scripts. |
+
+**A correction to the first task table.** The first version of this plan said that tasks 4a, 4b and
+4d touch separate files. That is not correct. Twenty-six functions have a caller in another task area
+or in the API. Twelve functions are copies of a rule that one shared class takes over. Five functions
+are helpers in the same files. Thus the step starts with one task for these 43 functions, the border
+task. After the border task, no remaining function has a caller in another task area, and tasks 4a to
+4d can run at the same time.
 
 | Task | Files | Functions | Extra checks |
 | --- | --- | ---: | --- |
-| 4a | `providers/codex/` | 51 | `bun run check:collector-structure`, after the Codex names leave `pending` |
-| 4b | `providers/claude/` | 17 | `bun run check:collector-structure`, after the Claude Code names leave `pending` |
-| 4c | `scan/`, `watch/`, `transcript/`, `commands/`, `cli.ts`, shared classes | 44 | |
-| 4d | `storage/`, and three API files that import the renamed helpers | 150 | `bun run check:collector-api`, `bun run check:collector-postgres` |
+| Border | The shared classes, each function with a caller in another task area, and the API files that import a changed name | 43 | `bun run build`, `check:collector-api`, `check:collector-postgres` |
+| 4a | `providers/codex/` | 46 | The seven golden tests |
+| 4b | `providers/claude/` | 12 | The seven golden tests |
+| 4c | `cli.ts`, `commands/`, `scan/`, `transcript/`, `watch/` | 26 | The trace comparison |
+| 4d | `storage/` | 133 | `check:collector-api`, `check:collector-postgres`, the trace comparison |
 
-These counts are the 262 functions that remain after step 1. Step 3 removed two functions of `scan/`, so
-task 4c has 42.
-
-Tasks 4a, 4b and 4d touch separate files and can run at the same time. Task 4c follows 4a and 4b,
-because it renames helpers that they call. Task 4d is the largest. The API replays each stored write
-through `InMemoryCollectorStorage`
+Task 4d is the largest. The API replays each stored write through `InMemoryCollectorStorage`
 ([postgres-collector-storage.ts:1](../../apps/api/src/storage/postgres-collector-storage.ts#L1)), so
 the PostgreSQL suites must pass.
+
+The commits, each with all checks green and both comparisons identical:
+
+1. The constraints: this section, the structure rule with its `pending` list, and the check script.
+2. The border task.
+3. Tasks 4a, 4b, 4c and 4d, one commit for each task. A worker has its own checkout, and no two
+   workers change the same file.
+4. The results: the `pending` list goes away, and the README and this plan record the step.
+
+The rules for each conversion:
+
+- **No logic change.** The statements, the conditions and their order stay. A conversion changes only
+  where a helper is and how a caller names it.
+- **Stored and hashed data keeps its bytes.** A parser state, an ID that `ParserState.digest` makes, a
+  batch, a checkpoint and a wire record stay plain objects with the same key order. No stored record
+  becomes an instance of a class. The two Codex text block builders stay apart, and `CodexVisibleText`
+  and `ClaudeVisibleText` stay separate.
+- **The golden tests are the judge.** If a golden test fails, the code is wrong. No golden text
+  changes. The five known restore differences stay as they are.
+- **Two copies of a rule merge only if they give the same result for each input.** If they differ in
+  one case, both stay.
+- **A helper that needs no instance is a static method.** A caller names it through its class, not
+  through `this`. Thus a static method that goes to `map`, `filter` or `sort` as a value needs no
+  receiver.
+- **A type predicate stays a type predicate**, and a function that returns `never` keeps that type.
+- **A test changes only the name through which it gets a helper.** No assertion goes away. The four
+  test-only methods stay until step 5.
+
+The border task:
+
+| Now | Functions | Becomes |
+| --- | ---: | --- |
+| `packages/shared/src/recorded-instant.ts` | 3 | `RecordedInstant`: `isTimestamp`, `parse`, `compare` |
+| `packages/shared/src/claude-transcript-copy.ts` | 1 | `ClaudeTranscriptCopy`: `stem`, and the list `fallbackFields` |
+| The plain-object, string and count checks of the parsers: `object` (3 copies), `identifier` (3 copies), `isObject`, `isCount` and `count` | 9 | `JsonRecord` in `transcript/json-record.ts`: `is`, `object`, `identifier`, `isCount`. It also takes over `JsonlRecords.isRecord`. |
+| `scan/parser-state.ts` | 4 | `ParserState`: `digest`, `record`, `string`, `invalid` |
+| `scan/scan-recovery.ts` | 5 | `CheckpointProof` in `scan/checkpoint-proof.ts`: `prefixes`, `verifiedBy`, `capture`, `same`. `readStorage` becomes `ScanRecovery.read`. |
+| `sourceId` in `scan/source-sightings.ts`, `sessionId` in `watch/scan-activity.ts`, `encodeSessionKey` and `encodeStreamKey` in `storage/in-memory-collector-storage.ts` | 4 | `StreamKeys` in the port file: `session`, `stream`, `sourceId` |
+| `transcript/transcript-directories.ts` | 2 | `TranscriptDirectories`: `listDirectory`, and the private `missing` |
+| `storage/collector-storage.ts` | 7 | `LegacyScannerSource`: `location`, `stream`, `line`, `needsHistoryVerification`, `historyDiagnostic`, and the private `position`. `SourceScopes`: `matches`. |
+| `storage/http/packed-batch.ts` | 8 | `PackedBatches`: `pack`, `unpack`, `digest`, `stateBytes`, `fitsWireRecords`, `decodeBase64`, and two private methods |
+
+`StreamKeys.stream` and `StreamKeys.sourceId` are two rules. For a source that has no installation ID,
+`stream` gives three values and `sourceId` gives four values, with `null` in the last place. Both stay.
+
+Task 4a, `providers/codex/`:
+
+| Now | Functions | Becomes |
+| --- | ---: | --- |
+| `codex-chat.ts` | 13 | `CodexVisibleText` in `codex-visible-text.ts`: `role`, `completedRole`, `completedBlocks`, `blocks`, and three private methods. The other six become private static methods of `CodexChat`. |
+| `codex-token-counts.ts` | 7 | `CodexTokenCounts`: `fromProvider`, `restore`, `sameTotals`, `mergeRepeated`, `minus`, `partition`, and the private `counts` |
+| `codex-usage-report.ts` | 14 | `CodexCallContext`: `after`, and the private `advance`. `CodexUsageReport`: `read`, `initialHistory`, `recorded`, and nine private methods. |
+| `codex-usage.ts` | 6 | Private static methods of `CodexUsage` |
+| `codex-fork-evidence.ts` | 5 | Static methods of `ForkCapture`: `later`, `reportAt`, `countsDisagree`, `disagree`. `decision` becomes a private static method of `CodexForkEvidence`. |
+| `codex-fork-sources.ts` | 1 | A private static method of `CodexForkSources` |
+
+Task 4b, `providers/claude/`:
+
+| Now | Functions | Becomes |
+| --- | ---: | --- |
+| `claude-chat.ts` | 2 | `ClaudeVisibleText` in `claude-visible-text.ts`: `blocks`, and the private `injected` |
+| `claude-usage.ts` | 4 | `ClaudeAssistantRecord` in `claude-assistant-record.ts`: `message`. The other three become private static methods of `ClaudeUsage`. |
+| `claude-usage-counts.ts` | 2 | Private static methods of `ClaudeUsageCounts` |
+| `claude-source-copy.ts` | 4 | Members of `ClaudeEarlierCopies`: `assess` and `unreadable` get the bodies, and `compareCopy` and `through` become private static methods |
+
+Task 4c, the engine:
+
+| Now | Functions | Becomes |
+| --- | ---: | --- |
+| `cli.ts` | 2 | `CollectorCli`: `run`, and the private `configuredStorage` |
+| `commands/collector-command.ts` | 4 | `CommandArguments` in `commands/command-arguments.ts`: `instant`, `projectPath`, `watchInterval`. `untilShutdown` becomes a private static method of `CollectorCommand`. |
+| `scan/local-collector.ts` | 2 | Private static methods of `LocalCollector` |
+| `scan/replay-occurrences.ts` | 5 | `ReplayOccurrences`: `restore`, `plan`, `count`, `reconcile`, and the private `fallbackId` |
+| `scan/scan-pending.ts`, `scan/scan-rejected.ts` | 2 | `ScanPendingError.target`, private. `ScanRejectedError.batch`. |
+| `scan/source-presence.ts`, `scan/transcript-cursor.ts` | 6 | Private static methods of `SourcePresenceScan` and `TranscriptCursor` |
+| `transcript/captured-transcript-file.ts` | 2 | Private static methods of `CapturedTranscriptFile` |
+| `watch/scan-activity.ts`, `watch/scheduled-scanner.ts` | 3 | Private static methods of `ScanActivity`. `ScheduledScanner.checkedIntervalMs`. |
+
+Task 4d, `storage/`:
+
+| Now | Functions | Becomes |
+| --- | ---: | --- |
+| `batch-values.ts` | 14 | `BatchValues` |
+| `checkpoint-transition.ts` | 18 | `CheckpointTransition`: `new CheckpointTransition(batch, current).failure()` |
+| `session-usage.ts` | 13 | `SessionUsage`: `apply`, and twelve private static methods |
+| `session-messages.ts`, `session-metadata.ts` | 6 | Private static methods of `SessionMessages`. `SessionMetadata.isValid`. |
+| `source-inventory.ts` | 12 | Private static methods of `StoredSource` |
+| `in-memory-collector-storage.ts` | 4 | Private static methods of `InMemoryCollectorStorage` |
+| `http/http-collector-storage.ts` | 3 | Private static methods of `HttpCollectorStorage` |
+| `codex/usage-windows.ts` | 26 | `UsageIntervals` in `codex/usage-intervals.ts` for the fifteen interval rules. `UsageWindows.isWindow`. The other ten become private static methods of `UsageWindows`. |
+| `codex/observed-counter-spans.ts` | 11 | `ObservedCounterSpans`: `epochsWithSharedObservations`, `shared`, and nine private methods |
+| `codex/codex-source-identity.ts` | 5 | `CodexSourceIdentity`: `correction`, and four private methods |
+| `codex/codex-call-aliases.ts`, `codex/codex-call-owners.ts` | 2 | `CodexCallAliases.valid`. A private static method of `CodexCallOwners`. |
+| The six files of `claude/` | 19 | Private static methods of the class in the same file |
+
+Seven names are different from the table in [Functions to classes](#functions-to-classes):
+
+- **`PackedBatches`, not `PackedBatch`.** `PackedBatch` is the wire record of the contract, and it
+  keeps its name. A class and an interface with one name are an unsafe declaration merge, and the
+  lint check reports it.
+- **The type `ReplayBounds`.** The class gets the name `ReplayOccurrences`. The record that it reads
+  and writes was a type with the same name, and that type is now `ReplayBounds`. The parser state
+  keeps the key `replayOccurrences`.
+- **`RecordedInstant.compare`, not `compareTo`.** A parsed instant stays a plain object, as the
+  history window and the session metadata hold it. Thus the comparison is a static method with two
+  instants.
+- **`ScanRecovery.read`.** `readStorage` applies the rule that `ScanRecovery.commit` applies to a
+  write: a storage failure in transport makes the scan of that source pending.
+- **`untilShutdown` stays with `CollectorCommand`.** It does not read an argument.
+- **`ClaudeAssistantRecord` has the rule of `claude-usage.ts` only.** `ClaudeChat.read` applies its
+  rule to user records too, so the two rules do not give the same result for each input.
+  `ClaudeChat.read` keeps its statements.
+- **`LegacyScannerSource.historyDiagnostic`.** `sourceHistoryDiagnostic` makes the diagnostic for a
+  source whose history `needsHistoryVerification` flags.
+
+The checks for each code commit:
+
+- **All the checks of step 3**, and Knip, jscpd and Habit Hooks. Run `bun run build` after a change to
+  `packages/shared`.
+- **Output comparison and trace comparison**, with the commands and the scenarios of step 3, on the
+  same frozen sample. Compare one runtime with the same runtime.
+- **Statement comparison.** A script reads each function at the commit before step 4 and its method
+  after the commit. It replaces each old name with the new name and compares the tokens of the two
+  bodies. It does the same for each method that calls a renamed helper. A reviewer reads each body
+  that the script reports as different.
+- **Independent review.** For each task, a reviewer that did not write the change compares the old
+  statements with the new statements.
+- **Mutation probe.** One top-level function in each directory that leaves the `pending` list, and
+  in each shared file, must make `bun run check:collector-structure` fail.
 
 ### Step 5. Finish
 

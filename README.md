@@ -166,7 +166,7 @@ Database tests start disposable PostgreSQL 18.7 containers on loopback. To reuse
 
 Run `bun run check:shared-logging` to build the log record schema, check package dependencies, and run the logging scenarios on Bun and Node. [Shared logging plan](docs/specs/shared-logging.md)
 
-Run `bun run check:collector-structure` to check that the cleaned collector directories declare no top-level function. The check does not yet apply to ten parser files in `providers/`. The `pending` list of the [rule](.habit-hooks/collector-structure.eslint.mjs) names them, and the cleanup plan gives the steps that clean them. The PR workflow runs the same check. [Cleanup plan](docs/specs/local-collector-structure-cleanup.md)
+Run `bun run check:collector-structure` to check that no file of `apps/collector/src` declares a top-level function. The check also applies to two files of `packages/shared` that the collector layers share. The check does not yet apply to the files in the `pending` list of the [rule](.habit-hooks/collector-structure.eslint.mjs). Step 4 of the cleanup plan cleans them. The PR workflow runs the same check. [Cleanup plan](docs/specs/local-collector-structure-cleanup.md)
 
 For a suite that spans components, place it in `test/acceptance/` at the repository root. Declare the workspace packages it imports in the root `devDependencies`. The same `bun run test` command runs it.
 
