@@ -1,17 +1,43 @@
-import { isDeepStrictEqual } from "node:util";
 import { TranscriptChangedError, type DamagedLine, type ReadPosition, type RecordBatch, type TranscriptSource, type VerifiedPrefix } from "../transcript/index.ts";
-import type { Batch, Checkpoint, CodexForkCheckpoint, Message, SessionView } from "../storage/collector-storage.ts";
+import type { Batch, Checkpoint, Message, SessionView } from "../storage/collector-storage.ts";
 import { stateRecord } from "./parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
 import {
   countReplayMessages, planReplayOccurrences, readReplayOccurrences, reconcileReplayMessages, type ReplayOccurrences,
 } from "./replay-occurrences.ts";
 
+/** The checkpoint fields that the scanner writes itself. The format of a provider supplies the other fields. */
+type ScannerCheckpointField = "offset" | "parserState" | "prefixDigest" | "evidenceVersion" | "replayThrough";
+export type ProviderCheckpointFields = Omit<Checkpoint, ScannerCheckpointField>;
+
+/** The decoder state that a checkpoint saved, with its parser version. */
+export interface SavedDecoder { readonly version: unknown; readonly decoder: Record<string, unknown> }
+
+/** The optional batch fields that name an earlier checkpoint. A correction names the checkpoint that it replaces in one of them. */
+export type ReplacedCheckpointFields = {
+  [Field in keyof Batch as undefined extends Batch[Field] ? NonNullable<Batch[Field]> extends Checkpoint ? Field : never : never]?: Checkpoint;
+};
+
+/** A provider's plan to classify the accepted usage again at the accepted byte. */
+export interface UsageCorrection<Entry> {
+  /** The parent session, when the provider knows it before the scanner reads the records. */
+  readonly parentSessionId?: string;
+  /** Give the corrected checkpoint, or the parser that holds the accepted chat state.
+   * format is the format that the scanner uses for this source. */
+  accepted(
+    saved: SavedDecoder | undefined, reread: ChatParser<Entry>, format: ParserFormat<Entry>,
+  ): { checkpoint: Checkpoint } | { parser: ChatParser<Entry> };
+  /** The batch fields that name the replaced checkpoint. */
+  readonly batchFields: ReplacedCheckpointFields;
+}
+
 export interface ParserFormat<Entry> {
   version: number;
   gapVersion?: number;
-  codexFork?: CodexForkCheckpoint;
-  claudeCallOrigins?: true;
+  /** The fields that the provider adds to each checkpoint of this source. */
+  checkpointFields?: ProviderCheckpointFields;
+  /** Return a correction when the accepted checkpoint does not have what this format records now. */
+  correction?(accepted: Checkpoint): UsageCorrection<Entry> | undefined;
   /** Only the format of a source that adds to the session of another file has this. Remove from the batch
    * the fields that storage has. Return false to skip the batch. */
   prepareBatch?(chat: DecodedChat, known: SessionView | null, expectedOffset: number): boolean;
@@ -118,13 +144,12 @@ export class TranscriptCursor<Entry extends SourceLine> {
   static async reconcileUsage<Entry extends SourceLine>(
     source: TranscriptSource<Entry>, checkpoint: Checkpoint, format: ParserFormat<Entry>,
   ): Promise<Omit<Batch, "source" | "expectedOffset" | "expectedVersion"> | undefined> {
-    const claude = format.claudeCallOrigins && !checkpoint.claudeCallOrigins && checkpoint.offset > 0;
-    const fork = format.codexFork;
-    if (!claude && (!fork || isDeepStrictEqual(fork, checkpoint.codexFork))) return;
+    const correction = format.correction?.(checkpoint);
+    if (!correction) return;
     const saved = readState(checkpoint, format, source.sourceFile);
     const parser = format.resume();
     const usage = new BackfilledUsage();
-    let parentSessionId = fork?.parentSessionId;
+    let parentSessionId = correction.parentSessionId;
     let position = { offset: 0, lineNumber: 0 };
     let digest: string | undefined;
     for await (const batch of source.readBatches(position, undefined, checkpoint.offset)) {
@@ -138,17 +163,10 @@ export class TranscriptCursor<Entry extends SourceLine> {
     if (position.offset !== checkpoint.offset || digest !== checkpoint.prefixDigest
       || (saved && saved.lineNumber !== position.lineNumber)) throw new TranscriptChangedError(source.sourceFile);
     const records = { ...usage, messages: [], ...(parentSessionId && { metadata: { parentSessionId } }) };
-    if (claude) {
-      // Claude keeps its usage ledger in storage. An earlier decoder's chat state is authoritative.
-      const chat = saved ? format.resume(saved.decoder) : parser;
-      const next = saved && saved.version !== 1 ? { ...checkpoint, claudeCallOrigins: true as const }
-        : new TranscriptCursor(position, format, chat, saved?.replay).checkpointAt(position, digest);
-      return { ...records, checkpoint: next, backfillClaudeOriginsFrom: checkpoint };
-    }
-    const acceptedChat = saved?.version === 1 ? saved.decoder : saved?.decoder.chat;
-    const restored = acceptedChat ? format.resume({ ...parser.snapshot(), chat: acceptedChat }) : parser;
-    const cursor = new TranscriptCursor(position, format, restored, saved?.replay);
-    return { ...records, checkpoint: cursor.checkpointAt(position, digest), reconcileCodexForkFrom: checkpoint };
+    const accepted = correction.accepted(saved, parser, format);
+    const next = "checkpoint" in accepted ? accepted.checkpoint
+      : new TranscriptCursor(position, format, accepted.parser, saved?.replay).checkpointAt(position, digest);
+    return { ...records, checkpoint: next, ...correction.batchFields };
   }
 
   static async restore<Entry extends SourceLine>(
@@ -252,8 +270,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
     if (this.parser.awaitingBaseline && this.format.gapVersion !== undefined) version = this.format.gapVersion;
     const parserState = JSON.stringify({ version, lineNumber, decoder: this.parser.snapshot(), replayOccurrences });
     return { offset, parserState, prefixDigest, evidenceVersion: 1, ...(replayThrough && { replayThrough }),
-      ...(this.format.claudeCallOrigins && { claudeCallOrigins: true }),
-      ...(this.format.codexFork && { codexFork: this.format.codexFork }) };
+      ...this.format.checkpointFields };
   }
 }
 

@@ -13,7 +13,7 @@ export class ClaudeSessionParser implements ChatParser<ClaudeTranscriptEntry> {
   static forSource(previousCopy: boolean, subagent?: ClaudeSubagent): ParserFormat<ClaudeTranscriptEntry> {
     const resume = (state?: unknown) => new ClaudeSessionParser(ClaudeChat.resume(previousCopy, state), previousCopy, subagent);
     return {
-      version: 2, claudeCallOrigins: true,
+      version: 2, checkpointFields: { claudeCallOrigins: true },
       resume,
       upgrade(oldChat) {
         const parser = resume(oldChat);
@@ -23,6 +23,19 @@ export class ClaudeSessionParser implements ChatParser<ClaudeTranscriptEntry> {
             if (!oldChat) parser.chat.decodeBatch(entries);
             return ClaudeUsage.decodeBatch(entries, subagent, previousCopy);
           },
+        };
+      },
+      correction: checkpoint => {
+        const claude = !checkpoint.claudeCallOrigins && checkpoint.offset > 0;
+        if (!claude) return;
+        return {
+          accepted: (saved, parser, format) => {
+            // Claude keeps its usage ledger in storage. An earlier decoder's chat state is authoritative.
+            const chat = saved ? format.resume(saved.decoder) : parser;
+            return saved && saved.version !== 1 ? { checkpoint: { ...checkpoint, claudeCallOrigins: true as const } }
+              : { parser: chat };
+          },
+          batchFields: { backfillClaudeOriginsFrom: checkpoint },
         };
       },
       ...(previousCopy && { prepareBatch: ClaudeSessionParser.preparePreviousCopy }),

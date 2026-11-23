@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { CodexRolloutEntry } from "../index.ts";
 import type { DamagedLine, RecordBatch } from "../../transcript/index.ts";
 import type { CodexForkCheckpoint } from "../../storage/collector-storage.ts";
@@ -17,9 +18,21 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
   static forFork(plan: CodexForkCheckpoint, forkedAt?: string): ParserFormat<CodexRolloutEntry> {
     const fork = () => new CodexForkUsage(plan, forkedAt);
     return {
-      version: this.version, gapVersion: this.gapVersion, codexFork: plan,
+      version: this.version, gapVersion: this.gapVersion, checkpointFields: { codexFork: plan },
       resume: state => this.resume(state, fork()),
       upgrade: oldChat => this.upgrade(oldChat, fork()),
+      correction: checkpoint => {
+        if (isDeepStrictEqual(plan, checkpoint.codexFork)) return;
+        return {
+          parentSessionId: plan.parentSessionId,
+          accepted: (saved, parser, format) => {
+            const acceptedChat = saved?.version === 1 ? saved.decoder : saved?.decoder.chat;
+            const restored = acceptedChat ? format.resume({ ...parser.snapshot(), chat: acceptedChat }) : parser;
+            return { parser: restored };
+          },
+          batchFields: { reconcileCodexForkFrom: checkpoint },
+        };
+      },
     };
   }
 

@@ -39,9 +39,9 @@ test("a later Codex discovery replaces the fork evidence that selects the parser
   const child = F.child([F.total(80, F.after)]);
   const scan = new CodexScan(new ProviderHistoryStub("/codex", [[child], [rollout("other")]]), {});
   await Array.fromAsync(scan.discoverFiles({}));
-  assert.equal((await scan.parserFor(child, null)).codexFork?.parentSessionId, "parent");
+  assert.equal((await scan.parserFor(child, null)).checkpointFields?.codexFork?.parentSessionId, "parent");
   await Array.fromAsync(scan.discoverFiles({}));
-  assert.equal((await scan.parserFor(child, null)).codexFork, undefined);
+  assert.equal((await scan.parserFor(child, null)).checkpointFields?.codexFork, undefined);
 });
 
 test("a discovery of one changed Codex file also asks for the related sources, and a full discovery does not", async () => {

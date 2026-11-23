@@ -1,9 +1,10 @@
 import { createHash } from "node:crypto";
 import { relative } from "node:path";
 import type {
-  ChatParser, DecodedChat, IdentityInventory, LocatedSource, ParserFormat, ProviderScan, ScanProvider,
+  ChatParser, DecodedChat, IdentityInventory, LocatedSource, ParserFormat, ProviderCheckpointFields, ProviderScan, ScanProvider,
+  UsageCorrection,
 } from "@tracerelic/collector/scan";
-import type { Harness, SessionView, StreamKey } from "@tracerelic/collector/storage";
+import type { Checkpoint, Harness, SessionView, StreamKey } from "@tracerelic/collector/storage";
 import type {
   ReadPosition, RecordBatch, ScanSelection, SourceDiscoveryOptions, TranscriptSource, VerifiedPrefix,
 } from "@tracerelic/collector/transcript";
@@ -75,13 +76,45 @@ class MockChatParser implements ChatParser<MockEntry> {
   }
 }
 
-/** The parser format of the mock provider. */
-class MockFormat implements ParserFormat<MockEntry> {
+/** Adds one call of one input token for each entry that its parser decodes. */
+class MockCallParser implements ChatParser<MockEntry> {
+  constructor(private readonly parser: ChatParser<MockEntry>) {}
+
+  decodeBatch(entries: readonly MockEntry[]): DecodedChat {
+    const usage = entries.map(({ lineNumber }) => ({ id: `call:${lineNumber}`, revision: 1, at, inputTokens: 1, outputTokens: 0 }));
+    return { ...this.parser.decodeBatch(entries), usage };
+  }
+
+  snapshot(): object {
+    return this.parser.snapshot();
+  }
+}
+
+/** The parser format of the mock provider. It adds no checkpoint fields and has no correction. */
+export class MockFormat implements ParserFormat<MockEntry> {
   readonly version = 1;
 
   resume(state?: unknown): ChatParser<MockEntry> {
     const decoded = typeof state === "object" && state !== null && "decoded" in state ? state.decoded : 0;
     return new MockChatParser(typeof decoded === "number" ? decoded : 0);
+  }
+}
+
+/** The plan of a mock provider for an accepted checkpoint. Undefined when that checkpoint needs no correction. */
+type MockCorrection = (accepted: Checkpoint) => UsageCorrection<MockEntry> | undefined;
+
+/** The format of a provider that adds fields to each checkpoint and can correct the accepted usage. Each entry is also one call. */
+export class CorrectingFormat extends MockFormat {
+  constructor(readonly checkpointFields: ProviderCheckpointFields, private readonly plan: MockCorrection = () => undefined) {
+    super();
+  }
+
+  resume(state?: unknown): ChatParser<MockEntry> {
+    return new MockCallParser(super.resume(state));
+  }
+
+  correction(accepted: Checkpoint): UsageCorrection<MockEntry> | undefined {
+    return this.plan(accepted);
   }
 }
 
