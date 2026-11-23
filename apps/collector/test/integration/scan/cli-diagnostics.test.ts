@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { setImmediate } from "node:timers/promises";
-import { runCollectorCli } from "#src/cli";
+import { CollectorCli } from "#src/cli";
 import { PresenceConnection } from "../../fixtures/presence-connection.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 
@@ -12,7 +12,7 @@ test("a command waits for its last diagnostic before returning its exit code", a
     return true;
   });
   let settled = false;
-  const exit = runCollectorCli([]).then(code => { settled = true; return code; });
+  const exit = CollectorCli.run([]).then(code => { settled = true; return code; });
   try {
     await setImmediate();
     assert.equal(settled, false);
@@ -33,9 +33,9 @@ test("a diagnostic write failure preserves a pending exit and fails an otherwise
   const stdout = t.mock.method(console, "log", () => { stop.abort(); });
   const stderr = t.mock.method(process.stderr, "write", () => { throw new Error("stderr write failed"); });
 
-  assert.equal(await runCollectorCli(["scan", "--once", "--config", fixture.configFile], storage), 75);
+  assert.equal(await CollectorCli.run(["scan", "--once", "--config", fixture.configFile], storage), 75);
   assert.equal(stdout.mock.callCount(), 0);
-  const code = await runCollectorCli(["watch", "--config", fixture.configFile], storage, { signal: stop.signal });
+  const code = await CollectorCli.run(["watch", "--config", fixture.configFile], storage, { signal: stop.signal });
   assert.equal(code, 1);
   assert.equal(stderr.mock.callCount(), 2);
   assert.equal(stdout.mock.callCount(), 1);

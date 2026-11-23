@@ -2,9 +2,7 @@ import { TranscriptChangedError, type DamagedLine, type ReadPosition, type Recor
 import type { Batch, Checkpoint, Message, SessionView } from "../storage/collector-storage.ts";
 import { ParserState } from "./parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
-import {
-  countReplayMessages, planReplayOccurrences, readReplayOccurrences, reconcileReplayMessages, type ReplayOccurrences,
-} from "./replay-occurrences.ts";
+import { ReplayOccurrences, type ReplayBounds } from "./replay-occurrences.ts";
 
 /** The checkpoint fields that the scanner writes itself. The format of a provider supplies the other fields. */
 type ScannerCheckpointField = "offset" | "parserState" | "prefixDigest" | "evidenceVersion" | "replayThrough";
@@ -51,7 +49,7 @@ export interface ParserFormat<Entry> {
 export type SourceLine = Pick<DamagedLine, "lineNumber" | "endOffset"> & { readonly recordPrefixDigest?: string };
 
 interface ReplayPlan {
-  occurrences?: ReplayOccurrences;
+  occurrences?: ReplayBounds;
   through?: VerifiedPrefix;
 }
 
@@ -85,23 +83,6 @@ class BackfilledUsage implements DecodedUsage {
   }
 }
 
-function locateDiagnostics<Entry extends SourceLine>(batch: RecordBatch<Entry>, chat: Partial<DecodedUsage>): void {
-  if (!chat.usageDiagnostics?.length && !batch.damagedLines?.length) return;
-  const diagnostics = chat.usageDiagnostics ??= [];
-  if (diagnostics.length) {
-    const byLine = new Map(batch.entries.map(entry => [entry.lineNumber, entry]));
-    for (const diagnostic of diagnostics) {
-      const line = byLine.get(diagnostic.sourceOrder);
-      if (line) diagnostic.byteRange = { startOffset: line.startOffset, endOffset: line.endOffset };
-    }
-  }
-  for (const { lineNumber, startOffset, endOffset } of batch.damagedLines ?? []) {
-    diagnostics.push({ code: "malformed-transcript-line", sourceOrder: lineNumber, byteRange: { startOffset, endOffset } });
-    chat.hasGap = true;
-  }
-  diagnostics.sort((left, right) => left.sourceOrder - right.sourceOrder);
-}
-
 export class TranscriptCursor<Entry extends SourceLine> {
   private constructor(
     private readonly position: ReadPosition, private readonly format: ParserFormat<Entry>,
@@ -114,7 +95,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
     source: TranscriptSource<Entry>, previous: Checkpoint, format: ParserFormat<Entry>,
   ): Promise<Omit<Batch, "source" | "expectedOffset" | "expectedVersion"> | undefined> {
     if (previous.evidenceVersion || !previous.offset || !previous.prefixDigest) return;
-    const old = readState(previous, format, source.sourceFile);
+    const old = TranscriptCursor.readState(previous, format, source.sourceFile);
     const end = previous.offset;
     const prefix: TranscriptSource<Entry> = { ...source, fileSize: end,
       readBatches: (position, size, through = end) => source.readBatches(position, size, Math.min(through, end)) };
@@ -146,7 +127,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
   ): Promise<Omit<Batch, "source" | "expectedOffset" | "expectedVersion"> | undefined> {
     const correction = format.correction?.(checkpoint);
     if (!correction) return;
-    const saved = readState(checkpoint, format, source.sourceFile);
+    const saved = TranscriptCursor.readState(checkpoint, format, source.sourceFile);
     const parser = format.resume();
     const usage = new BackfilledUsage();
     let parentSessionId = correction.parentSessionId;
@@ -155,7 +136,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
     for await (const batch of source.readBatches(position, undefined, checkpoint.offset)) {
       const chat = parser.decodeBatch(batch.entries, batch.damagedLines);
       parentSessionId ??= chat.metadata.parentSessionId;
-      locateDiagnostics(batch, chat);
+      TranscriptCursor.locateDiagnostics(batch, chat);
       usage.add(chat);
       position = batch.next;
       digest = batch.prefixDigest;
@@ -176,7 +157,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
     let position = { offset: 0, lineNumber: 0 };
     if (!checkpoint) return new TranscriptCursor(position, format, format.resume());
     const invalid = `Cannot restore parser state for ${source.sourceFile} at byte ${checkpoint.offset}`;
-    const saved = readState(checkpoint, format, source.sourceFile);
+    const saved = TranscriptCursor.readState(checkpoint, format, source.sourceFile);
     if (replayMessages) return TranscriptCursor.rebuild(source, format, replayMessages);
     let upgrade: ReturnType<NonNullable<ParserFormat<Entry>["upgrade"]>> | undefined;
     let parser: ChatParser<Entry>;
@@ -196,7 +177,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
     for await (const batch of source.readBatches(position, undefined, checkpoint.offset)) {
       if (upgrade && backfill) {
         const usage = upgrade.read(batch.entries, batch.damagedLines);
-        locateDiagnostics(batch, usage);
+        TranscriptCursor.locateDiagnostics(batch, usage);
         backfill.add(usage);
       } else parser.decodeBatch(batch.entries, batch.damagedLines);
       position = batch.next;
@@ -213,10 +194,10 @@ export class TranscriptCursor<Entry extends SourceLine> {
     const counts = new Map<string, number>();
     let through: VerifiedPrefix | undefined;
     for await (const { chat, next, prefixDigest } of fresh.decode(source)) {
-      countReplayMessages(counts, chat.messages);
+      ReplayOccurrences.count(counts, chat.messages);
       through = { offset: next.offset, prefixDigest };
     }
-    const bounds = planReplayOccurrences(accepted, counts);
+    const bounds = ReplayOccurrences.plan(accepted, counts);
     return new TranscriptCursor(start, format, format.resume(), {
       occurrences: Object.keys(bounds).length ? bounds : undefined, through,
     });
@@ -232,14 +213,14 @@ export class TranscriptCursor<Entry extends SourceLine> {
         prepare = undefined;
       }
       const chat = this.parser.decodeBatch(entries, batch.damagedLines);
-      if (this.replay?.occurrences) reconcileReplayMessages(chat, this.replay.occurrences);
+      if (this.replay?.occurrences) ReplayOccurrences.reconcile(chat, this.replay.occurrences);
       if (chat.messages.length) {
         const visible = new Set(chat.messages.map(message => message.sourceOrder));
         const proofs = entries.flatMap(entry => entry.recordPrefixDigest && visible.has(entry.lineNumber)
           ? [{ sourceOrder: entry.lineNumber, prefixDigest: entry.recordPrefixDigest }] : []);
         if (proofs.length) chat.messageOrigins = [...chat.messageOrigins ?? [], ...proofs];
       }
-      locateDiagnostics(batch, chat);
+      TranscriptCursor.locateDiagnostics(batch, chat);
       yield { chat, next, prefixDigest };
     }
   }
@@ -272,39 +253,56 @@ export class TranscriptCursor<Entry extends SourceLine> {
     return { offset, parserState, prefixDigest, evidenceVersion: 1, ...(replayThrough && { replayThrough }),
       ...this.format.checkpointFields };
   }
-}
 
-function readReplayPlan(state: Record<string, unknown>, checkpoint: Checkpoint, gapVersion?: number): ReplayPlan | undefined {
-  const occurrences = readReplayOccurrences(state.replayOccurrences);
-  const supportsRules = state.version === replayVersion || state.version === gapVersion;
-  const requiresRules = state.version === replayVersion || checkpoint.replayThrough !== undefined;
-  if (occurrences ? !supportsRules : requiresRules) throw new Error("Invalid replay state");
-  if (occurrences) return {
-    occurrences: Object.keys(occurrences).length ? occurrences : undefined, through: checkpoint.replayThrough,
-  };
-}
+  private static locateDiagnostics<Entry extends SourceLine>(batch: RecordBatch<Entry>, chat: Partial<DecodedUsage>): void {
+    if (!chat.usageDiagnostics?.length && !batch.damagedLines?.length) return;
+    const diagnostics = chat.usageDiagnostics ??= [];
+    if (diagnostics.length) {
+      const byLine = new Map(batch.entries.map(entry => [entry.lineNumber, entry]));
+      for (const diagnostic of diagnostics) {
+        const line = byLine.get(diagnostic.sourceOrder);
+        if (line) diagnostic.byteRange = { startOffset: line.startOffset, endOffset: line.endOffset };
+      }
+    }
+    for (const { lineNumber, startOffset, endOffset } of batch.damagedLines ?? []) {
+      diagnostics.push({ code: "malformed-transcript-line", sourceOrder: lineNumber, byteRange: { startOffset, endOffset } });
+      chat.hasGap = true;
+    }
+    diagnostics.sort((left, right) => left.sourceOrder - right.sourceOrder);
+  }
 
-function readState<Entry>(checkpoint: Checkpoint, format: ParserFormat<Entry>, sourceFile: string) {
-  const invalid = `Cannot restore parser state for ${sourceFile} at byte ${checkpoint.offset}`;
-  let saved: Record<string, unknown>;
-  try {
-    saved = ParserState.record(JSON.parse(checkpoint.parserState || "{}"));
-  } catch {
-    throw new Error(invalid);
+  private static readReplayPlan(state: Record<string, unknown>, checkpoint: Checkpoint, gapVersion?: number): ReplayPlan | undefined {
+    const occurrences = ReplayOccurrences.restore(state.replayOccurrences);
+    const supportsRules = state.version === replayVersion || state.version === gapVersion;
+    const requiresRules = state.version === replayVersion || checkpoint.replayThrough !== undefined;
+    if (occurrences ? !supportsRules : requiresRules) throw new Error("Invalid replay state");
+    if (occurrences) return {
+      occurrences: Object.keys(occurrences).length ? occurrences : undefined, through: checkpoint.replayThrough,
+    };
   }
-  if (Object.keys(saved).length === 0) return;
-  const { version, lineNumber } = saved;
-  if (!Number.isSafeInteger(version)) throw new Error(invalid);
-  if (version !== format.version && version !== replayVersion && version !== format.gapVersion && !(format.upgrade && version === 1)) {
-    throw new Error(`Unsupported parser version for ${sourceFile} at byte ${checkpoint.offset}`);
-  }
-  if (typeof lineNumber !== "number" || !Number.isSafeInteger(lineNumber)
-    || lineNumber < (checkpoint.offset ? 1 : 0) || lineNumber > checkpoint.offset) {
-    throw new Error(invalid);
-  }
-  try {
-    return { version, lineNumber, decoder: ParserState.record(saved.decoder), replay: readReplayPlan(saved, checkpoint, format.gapVersion) };
-  } catch {
-    throw new Error(invalid);
+
+  private static readState<Entry>(checkpoint: Checkpoint, format: ParserFormat<Entry>, sourceFile: string) {
+    const invalid = `Cannot restore parser state for ${sourceFile} at byte ${checkpoint.offset}`;
+    let saved: Record<string, unknown>;
+    try {
+      saved = ParserState.record(JSON.parse(checkpoint.parserState || "{}"));
+    } catch {
+      throw new Error(invalid);
+    }
+    if (Object.keys(saved).length === 0) return;
+    const { version, lineNumber } = saved;
+    if (!Number.isSafeInteger(version)) throw new Error(invalid);
+    if (version !== format.version && version !== replayVersion && version !== format.gapVersion && !(format.upgrade && version === 1)) {
+      throw new Error(`Unsupported parser version for ${sourceFile} at byte ${checkpoint.offset}`);
+    }
+    if (typeof lineNumber !== "number" || !Number.isSafeInteger(lineNumber)
+      || lineNumber < (checkpoint.offset ? 1 : 0) || lineNumber > checkpoint.offset) {
+      throw new Error(invalid);
+    }
+    try {
+      return { version, lineNumber, decoder: ParserState.record(saved.decoder), replay: TranscriptCursor.readReplayPlan(saved, checkpoint, format.gapVersion) };
+    } catch {
+      throw new Error(invalid);
+    }
   }
 }

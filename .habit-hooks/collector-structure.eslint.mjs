@@ -16,18 +16,6 @@ const pending = [
   "apps/collector/src/providers/claude/claude-source-copy.ts",
   "apps/collector/src/providers/claude/claude-usage-counts.ts",
   "apps/collector/src/providers/claude/claude-usage.ts",
-  // Task 4c
-  "apps/collector/src/cli.ts",
-  "apps/collector/src/commands/collector-command.ts",
-  "apps/collector/src/scan/local-collector.ts",
-  "apps/collector/src/scan/replay-occurrences.ts",
-  "apps/collector/src/scan/scan-pending.ts",
-  "apps/collector/src/scan/scan-rejected.ts",
-  "apps/collector/src/scan/source-presence.ts",
-  "apps/collector/src/scan/transcript-cursor.ts",
-  "apps/collector/src/transcript/captured-transcript-file.ts",
-  "apps/collector/src/watch/scan-activity.ts",
-  "apps/collector/src/watch/scheduled-scanner.ts",
   // Task 4d
   "apps/collector/src/storage/batch-values.ts",
   "apps/collector/src/storage/checkpoint-transition.ts",

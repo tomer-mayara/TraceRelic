@@ -23,16 +23,6 @@ interface OutstandingSource {
   write?: { checkpoint: Checkpoint; version: number; previousOffset: number; lostReply: boolean };
 }
 
-function scopeId(scope: SourceScope): string {
-  return JSON.stringify([scope.harness, scope.installationId, scope.root,
-    [...new Set(scope.sessionIds)].sort(), [...new Set(scope.projectPaths)].sort()]);
-}
-
-/** Retain a fingerprint of a failed write instead of keeping its decoder or conversation in memory. */
-function checkpointStamp(checkpoint: Checkpoint): Checkpoint {
-  return { ...checkpoint, parserState: ParserState.digest(checkpoint.parserState) };
-}
-
 /** Count accepted sessions and retain only work whose storage outcome is still outstanding. */
 export class ScanActivity implements CollectorStorage, ScanProgress {
   private readonly sources = new Map<string, OutstandingSource>();
@@ -75,14 +65,14 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
     } else if (report.source) {
       this.hold(report.source, this.now(), { through: report.byteRange?.endOffset });
     } else {
-      const id = scopeId(report.scope);
+      const id = ScanActivity.scopeId(report.scope);
       const since = this.failedInventory?.id === id ? this.failedInventory.since : this.now();
       if (!this.inventories.has(id)) this.inventories.set(id, since);
     }
   }
 
   async listSources(scope: SourceScope) {
-    const id = scopeId(scope);
+    const id = ScanActivity.scopeId(scope);
     const start = this.now();
     let rows: AcknowledgedSource[];
     try {
@@ -158,7 +148,7 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
     if (write) {
       if (version <= write.version) return;
       if (checkpoint.offset === write.checkpoint.offset) {
-        if (!CheckpointProof.same(write.checkpoint, checkpointStamp(checkpoint))) return;
+        if (!CheckpointProof.same(write.checkpoint, ScanActivity.checkpointStamp(checkpoint))) return;
       } else {
         const { offset, prefixDigest } = write.checkpoint;
         if (!transcript || offset <= write.previousOffset || !prefixDigest) return;
@@ -188,7 +178,7 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
       if (first?.id === id) this.unknownFirstWrites.delete(key);
       return;
     }
-    const stamp = checkpointStamp(checkpoint);
+    const stamp = ScanActivity.checkpointStamp(checkpoint);
     if (first?.id === id && CheckpointProof.same(first.checkpoint, stamp)) this.countCreation(source);
     if (write?.lostReply && version > write.version && CheckpointProof.same(write.checkpoint, stamp)) this.accepted(source, checkpoint.offset);
   }
@@ -207,7 +197,7 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
   private unconfirmed(batch: Batch, since: number, lostReply: boolean): void {
     const work = this.hold(batch.source, since, { through: batch.checkpoint.offset });
     if (batch.checkpoint.offset === batch.sourceObservation?.observedEnd) work.through = batch.checkpoint.offset;
-    const stamp = checkpointStamp(batch.checkpoint);
+    const stamp = ScanActivity.checkpointStamp(batch.checkpoint);
     if (work.through === batch.checkpoint.offset) {
       work.write = { checkpoint: stamp, version: batch.expectedVersion, previousOffset: batch.expectedOffset, lostReply };
     }
@@ -235,5 +225,15 @@ export class ScanActivity implements CollectorStorage, ScanProgress {
     this.sources.delete(id);
     const key = StreamKeys.session(source);
     if (this.unknownFirstWrites.get(key)?.id === id) this.unknownFirstWrites.delete(key);
+  }
+
+  private static scopeId(scope: SourceScope): string {
+    return JSON.stringify([scope.harness, scope.installationId, scope.root,
+      [...new Set(scope.sessionIds)].sort(), [...new Set(scope.projectPaths)].sort()]);
+  }
+
+  /** Retain a fingerprint of a failed write instead of keeping its decoder or conversation in memory. */
+  private static checkpointStamp(checkpoint: Checkpoint): Checkpoint {
+    return { ...checkpoint, parserState: ParserState.digest(checkpoint.parserState) };
   }
 }

@@ -17,13 +17,6 @@ const systemClock: ScanClock = {
 
 const maxTimerMs = 2_147_483_647;
 
-export function checkedScanIntervalMs(value: number): number {
-  if (!Number.isInteger(value) || value < 1 || value > maxTimerMs) {
-    throw new Error(`--interval-ms must be an integer from 1 through ${maxTimerMs}`);
-  }
-  return value;
-}
-
 interface ScheduleOptions {
   intervalMs: number;
   signal: AbortSignal;
@@ -39,10 +32,17 @@ export class ScheduledScanner {
     private readonly activity: Pick<ScanActivity, "beginPass" | "finishPass" | "pending">,
     private readonly clock: ScanClock = systemClock) {}
 
+  static checkedIntervalMs(value: number): number {
+    if (!Number.isInteger(value) || value < 1 || value > maxTimerMs) {
+      throw new Error(`--interval-ms must be an integer from 1 through ${maxTimerMs}`);
+    }
+    return value;
+  }
+
   async run(options: ScheduleOptions): Promise<void> {
     if (this.running) throw new Error("The scheduled scanner is already running");
     const { signal } = options;
-    const intervalMs = checkedScanIntervalMs(options.intervalMs);
+    const intervalMs = ScheduledScanner.checkedIntervalMs(options.intervalMs);
     const start = this.clock.now();
     this.running = true;
     try {

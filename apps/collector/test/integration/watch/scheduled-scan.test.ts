@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { ScanActivity } from "#src/watch/scan-activity";
-import { ScanRejectedError, rejectedBatch } from "#src/scan/scan-rejected";
+import { ScanRejectedError } from "#src/scan/scan-rejected";
 import { ScheduledScanner } from "#src/watch/scheduled-scanner";
 import { captureCollectorStderr } from "../../fixtures/capture-collector-cli.ts";
 import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
@@ -20,7 +20,7 @@ test("a final rejection report preserves a repair already accepted during the pa
     const first = batch(0, 0);
     assert.equal(await activity.commit(first), "invalid");
     assert.equal(await activity.commit({ ...first, messages: [planning] }), "committed");
-    throw new ScanRejectedError([], [rejectedBatch(source, { startOffset: 0, endOffset: first.checkpoint.offset })]);
+    throw new ScanRejectedError([], [ScanRejectedError.batch(source, { startOffset: 0, endOffset: first.checkpoint.offset })]);
   };
   await new ScheduledScanner(scan, activity).run({ intervalMs: 100, signal: stop.signal, onReport: report => {
     stop.abort();

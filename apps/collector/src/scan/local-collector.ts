@@ -40,61 +40,6 @@ interface TranscriptResult {
 type SelectParser<Entry> = (source: TranscriptSource<Entry>, checkpoint: Checkpoint | null) => ParserFormat<Entry> | Promise<ParserFormat<Entry>>;
 type SelectedSessions = Map<string, { source: StreamKey; required: boolean }>;
 
-async function readCheckpoints(sightings: SourceSighting[], now: () => number): Promise<CheckpointSnapshot[]> {
-  const results = await Promise.allSettled(sightings.map(s => ScanRecovery.read(s.source, () => s.readCheckpoint()).catch(error => {
-    if (error instanceof ScanPendingError) error.useClock(now());
-    throw error;
-  })));
-  const snapshots: CheckpointSnapshot[] = [];
-  let pending: ScanPendingError | undefined;
-  const fatal = results.find(result => result.status === "rejected" && result.reason instanceof StorageAuthenticationError);
-  if (fatal?.status === "rejected") throw fatal.reason;
-  for (const result of results) {
-    if (result.status === "fulfilled") snapshots.push(result.value);
-    else if (!(result.reason instanceof ScanPendingError)) throw result.reason;
-    else if (!pending || result.reason.pending.retryAt > pending.pending.retryAt) pending = result.reason;
-  }
-  if (pending) throw pending;
-  return snapshots;
-}
-
-async function scanFiles<Entry extends SourceLine>(
-  presence: SourcePresenceScan<Entry>, scan: ProviderScan<Entry>, importFile: (group: readonly TranscriptSource<Entry>[]) => Promise<void>,
-): Promise<ScanPendingError[]> {
-  const logical = (path: string) => scan.logicalName ? scan.logicalName(path) : path;
-  const retry = new Map<string, string>();
-  const affected = new Map<string, StreamKey>();
-  const failed = new Map<string, string>();
-  const run = async (path?: string) => {
-    const target = path && logical(path);
-    const onChanged = (error: TranscriptChangedError) => {
-      const id = logical(error.sourceFile);
-      if (target) failed.set(target, error.sourceFile);
-      else retry.set(id, error.sourceFile);
-      const key = presence.discardCapture(error.sourceFile);
-      if (key) affected.set(id, key);
-    };
-    for await (const group of scan.discoverFiles({ sourceFile: path, onChanged })) {
-      const id = logical(group[0].sourceFile);
-      if (target ? id !== target || failed.has(id) : retry.has(id)) continue;
-      try {
-        await importFile(group);
-      } catch (error) {
-        if (!(error instanceof TranscriptChangedError)) throw error;
-        onChanged(error);
-        if (error.sourceFile !== group[0].sourceFile) onChanged(new TranscriptChangedError(group[0].sourceFile));
-      }
-    }
-  };
-  await run();
-  for (const path of retry.values()) await run(path);
-  return [...failed].map(([id, path]) => {
-    const error = new ScanPendingError("source-changed", affected.get(id) ?? presence.scope);
-    error.pending.sourceFile = path;
-    return error;
-  });
-}
-
 export class LocalCollector {
   private readonly providers: readonly ScanProvider[];
   private readonly storage: CollectorStorage;
@@ -159,7 +104,7 @@ export class LocalCollector {
     const selectParser: SelectParser<Entry> = (source, checkpoint) => scan.parserFor(source, checkpoint);
     const sessions: SelectedSessions = new Map();
     const rejectedStreams = new Set<string>();
-    const pending = await scanFiles(presence, scan, async group => {
+    const pending = await LocalCollector.scanFiles(presence, scan, async group => {
       const file = group[0];
       const end = await file.completeEnd();
       const sources = [];
@@ -168,7 +113,7 @@ export class LocalCollector {
         if (!rejectedStreams.has(StreamKeys.sourceId(sighting.source))) sources.push({ transcript, sighting });
       }
       if (!sources.length) return;
-      const snapshots = await readCheckpoints(sources.map(s => s.sighting), () => this.progress?.now() ?? Date.now());
+      const snapshots = await LocalCollector.readCheckpoints(sources.map(s => s.sighting), () => this.progress?.now() ?? Date.now());
       const prefixes = snapshots.flatMap(({ checkpoint }) => CheckpointProof.prefixes(checkpoint));
       const offsets = new Set(prefixes.map(prefix => prefix.offset).filter(offset => offset <= file.fileSize));
       offsets.add(end);
@@ -304,5 +249,60 @@ export class LocalCollector {
       expectedVersion++;
     }
     return { hasStoredSession: (previous?.offset ?? 0) > 0 };
+  }
+
+  private static async readCheckpoints(sightings: SourceSighting[], now: () => number): Promise<CheckpointSnapshot[]> {
+    const results = await Promise.allSettled(sightings.map(s => ScanRecovery.read(s.source, () => s.readCheckpoint()).catch(error => {
+      if (error instanceof ScanPendingError) error.useClock(now());
+      throw error;
+    })));
+    const snapshots: CheckpointSnapshot[] = [];
+    let pending: ScanPendingError | undefined;
+    const fatal = results.find(result => result.status === "rejected" && result.reason instanceof StorageAuthenticationError);
+    if (fatal?.status === "rejected") throw fatal.reason;
+    for (const result of results) {
+      if (result.status === "fulfilled") snapshots.push(result.value);
+      else if (!(result.reason instanceof ScanPendingError)) throw result.reason;
+      else if (!pending || result.reason.pending.retryAt > pending.pending.retryAt) pending = result.reason;
+    }
+    if (pending) throw pending;
+    return snapshots;
+  }
+
+  private static async scanFiles<Entry extends SourceLine>(
+    presence: SourcePresenceScan<Entry>, scan: ProviderScan<Entry>, importFile: (group: readonly TranscriptSource<Entry>[]) => Promise<void>,
+  ): Promise<ScanPendingError[]> {
+    const logical = (path: string) => scan.logicalName ? scan.logicalName(path) : path;
+    const retry = new Map<string, string>();
+    const affected = new Map<string, StreamKey>();
+    const failed = new Map<string, string>();
+    const run = async (path?: string) => {
+      const target = path && logical(path);
+      const onChanged = (error: TranscriptChangedError) => {
+        const id = logical(error.sourceFile);
+        if (target) failed.set(target, error.sourceFile);
+        else retry.set(id, error.sourceFile);
+        const key = presence.discardCapture(error.sourceFile);
+        if (key) affected.set(id, key);
+      };
+      for await (const group of scan.discoverFiles({ sourceFile: path, onChanged })) {
+        const id = logical(group[0].sourceFile);
+        if (target ? id !== target || failed.has(id) : retry.has(id)) continue;
+        try {
+          await importFile(group);
+        } catch (error) {
+          if (!(error instanceof TranscriptChangedError)) throw error;
+          onChanged(error);
+          if (error.sourceFile !== group[0].sourceFile) onChanged(new TranscriptChangedError(group[0].sourceFile));
+        }
+      }
+    };
+    await run();
+    for (const path of retry.values()) await run(path);
+    return [...failed].map(([id, path]) => {
+      const error = new ScanPendingError("source-changed", affected.get(id) ?? presence.scope);
+      error.pending.sourceFile = path;
+      return error;
+    });
   }
 }

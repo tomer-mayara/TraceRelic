@@ -1,15 +1,14 @@
-import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { RecordedInstant, recordedPathDialect } from "@tracerelic/shared";
 import { GlobalConfigLoader } from "../config/global-config-loader.ts";
 import { LocalLLMHistory, type LocalHistoryEntry } from "../history/index.ts";
 import { LocalProviders } from "../providers/index.ts";
 import { LocalCollector, type RejectedBatch } from "../scan/local-collector.ts";
 import { ScanActivity, type ScheduledScanReport } from "../watch/scan-activity.ts";
 import type { PendingScan } from "../scan/scan-pending.ts";
-import { checkedScanIntervalMs, ScheduledScanner, type ScanClock } from "../watch/scheduled-scanner.ts";
+import { ScheduledScanner, type ScanClock } from "../watch/scheduled-scanner.ts";
 import type { CollectorStorage, MissingSource, SessionView } from "../storage/collector-storage.ts";
 import type { ScanSelection } from "../transcript/index.ts";
+import { CommandArguments } from "./command-arguments.ts";
 
 const usage = "Usage: collector history --config <file> --from <instant> --to <instant>\n"
   + "       collector scan --once --config <file> [--session <id>] [--project <directory>]\n"
@@ -23,38 +22,6 @@ export interface WatchRuntime {
   onReport: (report: ScheduledScanReport) => void;
   onPending?: (report: PendingScan) => void;
   onFailure?: (error: unknown) => void;
-}
-
-function instant(option: "--from" | "--to", value: string | undefined): string {
-  if (!RecordedInstant.isTimestamp(value)) {
-    throw new Error(`Expected an ISO date and time with a timezone for ${option}`);
-  }
-  return value;
-}
-
-function projectPath(path: string): string {
-  if (recordedPathDialect(path)) return path;
-  if (/^(?:[a-z]:|\\)/i.test(path)) throw new Error("Expected an absolute Windows project directory");
-  return resolve(path);
-}
-
-function watchInterval(value: string | undefined): number {
-  if (value === undefined) return 60_000;
-  return checkedScanIntervalMs(/^\d+$/.test(value) ? Number(value) : NaN);
-}
-
-async function untilShutdown(signal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<void>): Promise<void> {
-  if (signal) return run(signal);
-  const controller = new AbortController();
-  const stop = () => controller.abort();
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
-  try {
-    await run(controller.signal);
-  } finally {
-    process.off("SIGINT", stop);
-    process.off("SIGTERM", stop);
-  }
 }
 
 export class CollectorCommand {
@@ -76,8 +43,8 @@ export class CollectorCommand {
     });
     if (positionals.length !== 1 || !values.config) throw new Error(usage);
     if (positionals[0] === "history" && !values.once && !values.project && !values.session && values["interval-ms"] === undefined) {
-      const from = instant("--from", values.from);
-      const to = instant("--to", values.to);
+      const from = CommandArguments.instant("--from", values.from);
+      const to = CommandArguments.instant("--to", values.to);
       const config = await GlobalConfigLoader.load(values.config);
       return new LocalLLMHistory(LocalProviders.fromConfig(config)).readLocalHistoryInstants(from, to);
     }
@@ -87,11 +54,11 @@ export class CollectorCommand {
     if ([...(values.session ?? []), ...(values.project ?? [])].some(value => !value.trim() || value.includes("\0"))) {
       throw new Error("Expected a nonblank session ID or project directory");
     }
-    const selection = { sessionIds: values.session, projectPaths: values.project?.map(projectPath) };
+    const selection = { sessionIds: values.session, projectPaths: values.project?.map(CommandArguments.projectPath) };
     const configFile = values.config;
     if (watch) {
-      const intervalMs = watchInterval(values["interval-ms"]);
-      return untilShutdown(watch.signal, async signal => {
+      const intervalMs = CommandArguments.watchInterval(values["interval-ms"]);
+      return CollectorCommand.untilShutdown(watch.signal, async signal => {
         const activity = new ScanActivity(await this.storage(), watch.clock?.now.bind(watch.clock));
         const scan = await this.scanHandler(configFile, selection, activity);
         const scheduler = new ScheduledScanner(scan, activity, watch.clock);
@@ -113,5 +80,19 @@ export class CollectorCommand {
       onRejection: this.onRejected, onMissing: this.onMissing, progress: activity,
     });
     return activity ? () => collector.scanForChanges(selection) : () => collector.scanOnce(selection);
+  }
+
+  private static async untilShutdown(signal: AbortSignal | undefined, run: (signal: AbortSignal) => Promise<void>): Promise<void> {
+    if (signal) return run(signal);
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    process.on("SIGINT", stop);
+    process.on("SIGTERM", stop);
+    try {
+      await run(controller.signal);
+    } finally {
+      process.off("SIGINT", stop);
+      process.off("SIGTERM", stop);
+    }
   }
 }

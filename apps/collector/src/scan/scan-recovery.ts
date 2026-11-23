@@ -5,7 +5,7 @@ import {
 } from "../storage/collector-storage.ts";
 import { CheckpointProof } from "./checkpoint-proof.ts";
 import { ScanPendingError } from "./scan-pending.ts";
-import { rejectedBatch, type RejectedBatch } from "./scan-rejected.ts";
+import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 
 export interface ScanRestart extends CheckpointSnapshot {
   reset?: true;
@@ -44,7 +44,7 @@ export class ScanRecovery {
       outcome = "storage-unavailable";
     }
     if (outcome === "committed") return;
-    if (outcome === "invalid") return rejectedBatch(batch.source, { startOffset, endOffset });
+    if (outcome === "invalid") return ScanRejectedError.batch(batch.source, { startOffset, endOffset });
     const winner = await ScanRecovery.read(batch.source, () => this.storage.readCheckpoint(batch.source), byteRange);
     const reason = outcome === "conflict" ? "version-conflict" : "storage-unavailable";
     const pending = () => new ScanPendingError(reason, batch.source, byteRange);

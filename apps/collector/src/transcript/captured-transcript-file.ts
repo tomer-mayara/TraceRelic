@@ -12,18 +12,6 @@ export class TranscriptChangedError extends Error {
   }
 }
 
-function rethrowMissing(sourceFile: string, error: unknown): never {
-  if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
-    throw new TranscriptChangedError(sourceFile, error);
-  }
-  throw error;
-}
-
-function unchanged(before: BigIntStats, after: BigIntStats): boolean {
-  return before.dev === after.dev && before.ino === after.ino && before.size === after.size
-    && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
-}
-
 export class CapturedTranscriptFile {
   private readonly physicalSize: number;
   private logicalSize = 0;
@@ -43,7 +31,7 @@ export class CapturedTranscriptFile {
   get statRevision(): number { return this.revision; }
 
   static async inspect<T>(sourceFile: string, inspect: (chunks: AsyncIterable<Buffer>) => Promise<T>) {
-    const handle = await open(sourceFile, "r").catch(error => rethrowMissing(sourceFile, error));
+    const handle = await open(sourceFile, "r").catch(error => CapturedTranscriptFile.rethrowMissing(sourceFile, error));
     try {
       const file = new CapturedTranscriptFile(sourceFile, await handle.stat({ bigint: true }));
       const chunks = file.capture(handle);
@@ -171,7 +159,7 @@ export class CapturedTranscriptFile {
   }
 
   private async openChecked(): Promise<FileHandle> {
-    const handle = await open(this.sourceFile, "r").catch(error => rethrowMissing(this.sourceFile, error));
+    const handle = await open(this.sourceFile, "r").catch(error => CapturedTranscriptFile.rethrowMissing(this.sourceFile, error));
     try {
       this.checkStat(this.observed, await handle.stat({ bigint: true }));
       return handle;
@@ -184,7 +172,7 @@ export class CapturedTranscriptFile {
   async verifyPath(provisional?: Map<number, Hash>, revision = this.revision): Promise<void> {
     const current = await this.pathStat();
     this.checkStat(this.observed, current);
-    if (unchanged(this.observed, current) && revision === this.revision) return;
+    if (CapturedTranscriptFile.unchanged(this.observed, current) && revision === this.revision) return;
     // Size growth can include an in-place rewrite. Prove the whole original extent and the actual bytes
     // accumulated by a reader that overlapped a change before publishing any of its provisional work.
     const offsets = [...new Set([...(provisional?.keys() ?? []), this.fileSize])].sort((a, b) => a - b);
@@ -200,9 +188,9 @@ export class CapturedTranscriptFile {
         for (const [offset, hash] of provisional ?? []) {
           if (digest(offset) !== hash.copy().digest("hex")) throw new TranscriptChangedError(this.sourceFile);
         }
-        if (unchanged(before, after)) {
+        if (CapturedTranscriptFile.unchanged(before, after)) {
           this.checkStat(this.observed, after);
-          if (!unchanged(this.observed, after)) this.revision++;
+          if (!CapturedTranscriptFile.unchanged(this.observed, after)) this.revision++;
           this.observed = after;
           return;
         }
@@ -214,12 +202,12 @@ export class CapturedTranscriptFile {
   }
 
   private pathStat() {
-    return stat(this.sourceFile, { bigint: true }).catch(error => rethrowMissing(this.sourceFile, error));
+    return stat(this.sourceFile, { bigint: true }).catch(error => CapturedTranscriptFile.rethrowMissing(this.sourceFile, error));
   }
 
   private checkStat(before: BigIntStats, after: BigIntStats): void {
     if (before.dev !== after.dev || before.ino !== after.ino || after.size < before.size
-      || (after.size === before.size && !unchanged(before, after))) throw new TranscriptChangedError(this.sourceFile);
+      || (after.size === before.size && !CapturedTranscriptFile.unchanged(before, after))) throw new TranscriptChangedError(this.sourceFile);
   }
 
   private async *readRange(handle: FileHandle, start: number, end: number): AsyncGenerator<Buffer> {
@@ -243,7 +231,7 @@ export class CapturedTranscriptFile {
         offset = next;
       }
     } catch (error) {
-      if (!unchanged(observed, await this.pathStat())) throw new TranscriptChangedError(this.sourceFile, error);
+      if (!CapturedTranscriptFile.unchanged(observed, await this.pathStat())) throw new TranscriptChangedError(this.sourceFile, error);
       throw error;
     } finally {
       input.destroy();
@@ -261,5 +249,17 @@ export class CapturedTranscriptFile {
       offset += bytesRead;
       yield chunk.subarray(0, bytesRead);
     }
+  }
+
+  private static rethrowMissing(sourceFile: string, error: unknown): never {
+    if (error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+      throw new TranscriptChangedError(sourceFile, error);
+    }
+    throw error;
+  }
+
+  private static unchanged(before: BigIntStats, after: BigIntStats): boolean {
+    return before.dev === after.dev && before.ino === after.ino && before.size === after.size
+      && before.mtimeNs === after.mtimeNs && before.ctimeNs === after.ctimeNs;
   }
 }

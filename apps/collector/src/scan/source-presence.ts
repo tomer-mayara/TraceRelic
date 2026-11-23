@@ -15,28 +15,6 @@ export interface RestoredSource {
 }
 export type RestoreCopy<Entry> = (known: AcknowledgedSource, copy: TranscriptSource<Entry>) => Promise<RestoredSource | "unknown" | undefined>;
 
-function reportFor({ source, acceptedOffset, observedEnd }: AcknowledgedSource): MissingSource {
-  return { status: "missing", source, acceptedOffset, observedEnd };
-}
-
-function extentFor(row: AcknowledgedSource, local?: SourceSighting): ObservedExtent & Pick<SourceObservation, "checkedPrefix"> {
-  const proof = local?.verified;
-  const sameGeneration = proof && (proof.version === row.version
-    || (row.generation !== undefined && row.generation <= proof.version && proof.version <= row.version));
-  if (sameGeneration && (proof.extent.offset > row.observedEnd || (proof.extent.offset === row.observedEnd && !row.observedPrefixDigest))) {
-    return { ...proof.extent, checkedPrefix: proof.checkedPrefix };
-  }
-  return { offset: row.observedEnd, prefixDigest: row.observedPrefixDigest };
-}
-
-function recordsSighting(known: AcknowledgedSource | undefined, observation: SourceObservation): boolean {
-  if (!known || known.presence !== "present" || known.observedEnd < observation.observedEnd) return false;
-  if (observation.observedEnd < known.observedEnd && known.observedEnd > known.acceptedOffset && !known.unrecovered) return false;
-  const { location } = observation;
-  // A stream may retain its earlier cwd if the current file supplies none.
-  return isDeepStrictEqual(known.location, { ...known.location, ...location }) && location.currentFileCwd === known.location.currentFileCwd;
-}
-
 /** Compare an inventory snapshot with a subsequent search of every possible physical location. */
 export class SourcePresenceScan<Entry extends SourceLine> {
   private readonly seen = new Map<string, SeenSource<TranscriptSource<Entry>>>();
@@ -124,14 +102,14 @@ export class SourcePresenceScan<Entry extends SourceLine> {
       const copies = byPath.get(initial.location.path);
       if (!copies?.length) continue;
       let row = initial;
-      const extent = extentFor(row, uncertain.get(id));
+      const extent = SourcePresenceScan.extentFor(row, uncertain.get(id));
       if (extent.prefixDigest && (extent.offset > row.observedEnd || (!row.observedPrefixDigest && !row.unrecovered))) {
         // The original disappeared before its last upload. Save that generation's proof before a backup can advance the byte.
         const result = await this.write({ source: row.source, expectedVersion: row.version, expectedOffset: row.acceptedOffset,
           location: row.location, presence: row.presence, observedEnd: extent.offset, observedPrefixDigest: extent.prefixDigest,
           checkedPrefix: extent.checkedPrefix });
         const current = await this.reload(row.source);
-        if (!current || (result !== "committed" && extentFor(current, uncertain.get(id)).offset > current.observedEnd)) {
+        if (!current || (result !== "committed" && SourcePresenceScan.extentFor(current, uncertain.get(id)).offset > current.observedEnd)) {
           throw new ScanPendingError(result === "storage-unavailable" ? result : "version-conflict", row.source);
         }
         known.set(id, row = current);
@@ -179,7 +157,7 @@ export class SourcePresenceScan<Entry extends SourceLine> {
   private async present(seen: RestoredSource, known?: AcknowledgedSource): Promise<boolean> {
     const { sighting } = seen;
     const { observation, source, confirmed } = sighting;
-    for (let attempt = 0; !recordsSighting(known, observation); attempt++) {
+    for (let attempt = 0; !SourcePresenceScan.recordsSighting(known, observation); attempt++) {
       const expectedOffset = known?.acceptedOffset ?? confirmed?.checkpoint?.offset;
       const expectedVersion = known?.version ?? confirmed?.version;
       if (expectedOffset === undefined || expectedVersion === undefined) break;
@@ -189,7 +167,7 @@ export class SourcePresenceScan<Entry extends SourceLine> {
         source, expectedOffset, expectedVersion, presence: "present" });
       if (result === "committed") break;
       known = await this.reload(source);
-      if (recordsSighting(known, observation)) break;
+      if (SourcePresenceScan.recordsSighting(known, observation)) break;
       if (!known || result === "storage-unavailable" || attempt > 0) throw new ScanPendingError(result, source);
     }
     this.memory.discardReply(source);
@@ -200,9 +178,9 @@ export class SourcePresenceScan<Entry extends SourceLine> {
   private async missing(row: AcknowledgedSource, local?: SourceSighting, excluded?: readonly string[]): Promise<boolean> {
     for (let attempt = 0; attempt < 2; attempt++) {
       // A concurrent reset can reach the same accepted byte in a different transcript.
-      const extent = extentFor(row, local);
+      const extent = SourcePresenceScan.extentFor(row, local);
       const end = extent.offset;
-      const report = reportFor(row);
+      const report = SourcePresenceScan.reportFor(row);
       if (row.presence === "missing" && end <= row.observedEnd) {
         this.memory.confirmReply(report);
         return true;
@@ -219,7 +197,7 @@ export class SourcePresenceScan<Entry extends SourceLine> {
       const current = await this.reload(row.source);
       if (!current) throw new ScanPendingError(result, row.source);
       if (current.presence === "missing" && current.observedEnd >= report.observedEnd) {
-        this.memory.confirmReply(reportFor(current));
+        this.memory.confirmReply(SourcePresenceScan.reportFor(current));
         return true;
       }
       if (result === "storage-unavailable" || attempt > 0) throw new ScanPendingError(result, row.source);
@@ -246,5 +224,27 @@ export class SourcePresenceScan<Entry extends SourceLine> {
     }
     if (result === "invalid") throw new Error(`Storage rejected source presence for ${update.source.streamId}`);
     return result === "conflict" ? "version-conflict" : result;
+  }
+
+  private static reportFor({ source, acceptedOffset, observedEnd }: AcknowledgedSource): MissingSource {
+    return { status: "missing", source, acceptedOffset, observedEnd };
+  }
+
+  private static extentFor(row: AcknowledgedSource, local?: SourceSighting): ObservedExtent & Pick<SourceObservation, "checkedPrefix"> {
+    const proof = local?.verified;
+    const sameGeneration = proof && (proof.version === row.version
+      || (row.generation !== undefined && row.generation <= proof.version && proof.version <= row.version));
+    if (sameGeneration && (proof.extent.offset > row.observedEnd || (proof.extent.offset === row.observedEnd && !row.observedPrefixDigest))) {
+      return { ...proof.extent, checkedPrefix: proof.checkedPrefix };
+    }
+    return { offset: row.observedEnd, prefixDigest: row.observedPrefixDigest };
+  }
+
+  private static recordsSighting(known: AcknowledgedSource | undefined, observation: SourceObservation): boolean {
+    if (!known || known.presence !== "present" || known.observedEnd < observation.observedEnd) return false;
+    if (observation.observedEnd < known.observedEnd && known.observedEnd > known.acceptedOffset && !known.unrecovered) return false;
+    const { location } = observation;
+    // A stream may retain its earlier cwd if the current file supplies none.
+    return isDeepStrictEqual(known.location, { ...known.location, ...location }) && location.currentFileCwd === known.location.currentFileCwd;
   }
 }
