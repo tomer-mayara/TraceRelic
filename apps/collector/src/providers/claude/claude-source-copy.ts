@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ClaudeHistory, ClaudeTranscriptEntry } from "../index.ts";
+import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "../index.ts";
 import { TranscriptChangedError, type TranscriptSource } from "../../transcript/index.ts";
 import type { AcknowledgedSource, Checkpoint, ObservedExtent, SourceLocation } from "../../storage/collector-storage.ts";
 import { captureProof, checkpointPrefixes, verifiedCheckpoint } from "../../scan/scan-recovery.ts";
@@ -7,16 +7,16 @@ import type { CopyAssessment, EarlierCopies, EarlierCopy, SourceCopy } from "../
 import type { ParserFormat } from "../../scan/transcript-cursor.ts";
 import { ClaudeSessionParser } from "./claude-session-parser.ts";
 
-type ClaudeSource = TranscriptSource<ClaudeTranscriptEntry>;
+type ClaudeSource = ClaudeTranscriptSource;
 
-interface Candidate<Entry> { transcript: TranscriptSource<Entry>; path: string; end: number; suffix: "matches" | "unknown" | "differs" }
+interface Candidate<Source> { transcript: Source; path: string; end: number; suffix: "matches" | "unknown" | "differs" }
 
 function unreadableCopy(error: unknown): boolean {
   return error instanceof TranscriptChangedError || (error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM"));
 }
 
-async function compareCopy<Entry>(copy: EarlierCopy<TranscriptSource<Entry>>, sessionId: string, checkpoint: Checkpoint | null,
-  wanted: ObservedExtent): Promise<Candidate<Entry> | false | undefined> {
+async function compareCopy<Source extends TranscriptSource<unknown>>(copy: EarlierCopy<Source>, sessionId: string, checkpoint: Checkpoint | null,
+  wanted: ObservedExtent): Promise<Candidate<Source> | false | undefined> {
   if (!copy.sources.length) return;
   const transcript = copy.sources.find(source => source.sessionId === sessionId);
   if (!transcript) return false;
@@ -33,15 +33,15 @@ async function compareCopy<Entry>(copy: EarlierCopy<TranscriptSource<Entry>>, se
   return { transcript, path: copy.path, end, suffix };
 }
 
-function through<Entry>(source: TranscriptSource<Entry>, end: number): TranscriptSource<Entry> {
+function through<Source extends TranscriptSource<unknown>>(source: Source, end: number): Source {
   return { ...source, fileSize: end, completeEnd: async () => end,
     readBatches: (position, size, limit = end) => source.readBatches(position, size, Math.min(limit, end)) };
 }
 
 /** Resume only the common, proved bytes when equally plausible copies disagree. */
-async function assessClaudeCopies<Entry>(row: AcknowledgedSource, checkpoint: Checkpoint | null, copies: EarlierCopy<TranscriptSource<Entry>>[]) {
+async function assessClaudeCopies<Source extends TranscriptSource<unknown>>(row: AcknowledgedSource, checkpoint: Checkpoint | null, copies: EarlierCopy<Source>[]) {
   const excluded: string[] = [];
-  const candidates: Candidate<Entry>[] = [];
+  const candidates: Candidate<Source>[] = [];
   const wanted = row.unrecovered ?? { offset: row.observedEnd, prefixDigest: row.observedPrefixDigest };
   for (const copy of copies) {
     try {

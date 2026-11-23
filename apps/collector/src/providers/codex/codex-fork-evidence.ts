@@ -1,5 +1,5 @@
-import type { CodexRolloutEntry } from "../index.ts";
-import type { DamagedLine, ReadPosition, RecordBatch, TranscriptSource } from "../../transcript/index.ts";
+import type { CodexRolloutEntry, CodexRolloutSource } from "../index.ts";
+import type { DamagedLine, ReadPosition, RecordBatch } from "../../transcript/index.ts";
 import { recordedInstant } from "@tracerelic/shared";
 import type { CodexForkCheckpoint, TokenCounts } from "../../storage/collector-storage.ts";
 import { jsonDigest } from "../../scan/parser-state.ts";
@@ -7,7 +7,7 @@ import { CodexForkTurn } from "./codex-fork-usage.ts";
 import { breakdowns, object, providerCounts, sameTotals } from "./codex-token-counts.ts";
 import { type CallContext, type Fields, initialHistory, readReport, reportContext } from "./codex-usage-report.ts";
 
-type Source = TranscriptSource<CodexRolloutEntry>;
+type Source = CodexRolloutSource;
 type Entry = CodexRolloutEntry & { startOffset: number; afterBlankPrefix?: true };
 
 interface Report {

@@ -1,5 +1,4 @@
 export { TranscriptChangedError } from "./captured-transcript-file.ts";
 export type {
-  ClaudeSubagent, DamagedLine, ReadPosition, RecordBatch, ScanSelection, SourceDiscoveryOptions, Transcript, TranscriptEntry, TranscriptSource,
-  VerifiedPrefix,
+  DamagedLine, ReadPosition, RecordBatch, ScanSelection, SourceDiscoveryOptions, Transcript, TranscriptEntry, TranscriptSource, VerifiedPrefix,
 } from "./transcript-source.ts";

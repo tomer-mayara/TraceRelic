@@ -1,9 +1,28 @@
 import assert from "node:assert/strict";
-import { appendFile, copyFile, rename, stat, symlink, truncate, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { appendFile, copyFile, readFile, rename, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { CodexHistory, type CodexRollout, type CodexSelection } from "@tracerelic/collector/providers";
 import { CodexRolloutFixture as Rollout } from "../../../fixtures/codex-rollout-fixture.ts";
+
+test("a discovered Codex source has no previousCopy, and only its response_item and event_msg records get the digest through their own line", async t => {
+  const fixture = await Rollout.create();
+  t.after(() => fixture.close());
+  const at = "2026-02-01T08:00:00Z";
+  const rows = [Rollout.header("one"), Rollout.message(at, "Plan"), Rollout.tokenCount(at), Rollout.turnContext(at, "t1"),
+    { timestamp: at, type: "user", message: { role: "user", content: "Plan" } }];
+  const sourceFile = await fixture.write(rows);
+  const bytes = await readFile(sourceFile);
+  const [source] = await Array.fromAsync(new CodexHistory(fixture.home).discoverSources());
+  assert.equal("previousCopy" in source, false);
+  const entries = (await Array.fromAsync(source.readBatches({ offset: 0, lineNumber: 0 }))).flatMap(batch => batch.entries);
+  const digest = (offset: number) => createHash("sha256").update(bytes.subarray(0, offset)).digest("hex");
+  assert.deepEqual(entries.map(entry => [entry.record.type, entry.recordPrefixDigest]), [
+    ["session_meta", undefined], ["response_item", digest(entries[1].endOffset)], ["event_msg", digest(entries[2].endOffset)],
+    ["turn_context", undefined], ["user", undefined],
+  ]);
+});
 
 test("selects Codex rollouts by their first native header within the configured workspace root", async t => {
   const configured = await Rollout.create();
@@ -81,7 +100,7 @@ test("reads Codex batches from the specified byte and physical line, with a larg
   const reader = new CodexHistory(fixture.home);
   const [source] = await Array.fromAsync(reader.discoverSources());
   const { readBatches: _readBatches, prefixDigests: _prefixDigests, completeEnd: _completeEnd, ...info } = source;
-  assert.deepEqual(info, { sourceFile, sessionId: "one", previousCopy: false, fileSize: (await stat(sourceFile)).size, codexHeaderEnd: start.offset });
+  assert.deepEqual(info, { sourceFile, sessionId: "one", fileSize: (await stat(sourceFile)).size, codexHeaderEnd: start.offset });
   const throughPair = { offset: start.offset + budget, lineNumber: 4 };
   const throughLarge = { offset: throughPair.offset + Buffer.byteLength(large), lineNumber: 5 };
   const throughFinal = { offset: throughLarge.offset + Buffer.byteLength(final), lineNumber: 6 };

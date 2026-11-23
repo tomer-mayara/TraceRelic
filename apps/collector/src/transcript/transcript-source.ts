@@ -51,23 +51,11 @@ export interface VerifiedPrefix {
   readonly prefixDigest: string;
 }
 
-export interface ClaudeSubagent {
-  readonly parentSessionId: string;
-  readonly agentId: string;
-}
-
+/** One session in one captured file. It has no provider field. Each provider declares its own source type. */
 interface TranscriptSourceInfo {
   readonly sessionId: string;
   readonly sourceFile: string;
   readonly fileSize: number;
-  readonly previousCopy: boolean;
-  readonly codexForkHeader?: { readonly parentSessionId: string; readonly forkedAt?: string };
-  readonly codexHeaderEnd?: number;
-  readonly claudeSubagent?: ClaudeSubagent;
-  readonly selectionCwd?: string;
-  readonly projectDir?: string;
-  readonly currentFileCwd?: string;
-  readonly currentFilePath?: string;
 }
 
 export interface TranscriptSource<Entry> extends TranscriptSourceInfo {
@@ -81,9 +69,12 @@ export interface DecodedRecord extends Pick<LocalHistoryEntry, "lineNumber" | "r
   readonly afterBlankPrefix?: true;
 }
 
-export interface SelectedFile<H extends LocalHistoryEntry["harness"]> extends Pick<TranscriptSourceInfo, "sessionId" | "previousCopy" | "selectionCwd" | "projectDir"> {
+export interface SelectedFile<H extends LocalHistoryEntry["harness"]> {
+  readonly sessionId: string;
   readonly file: CapturedTranscriptFile;
   readonly harness: H;
   readonly blankPrefixHeaderEnd?: number;
   matches(record: LocalHistoryEntry["record"], lineNumber: number): boolean;
+  /** True for a conversation record. Each one gets the digest of the file through its own line. */
+  isConversation(record: LocalHistoryEntry["record"]): boolean;
 }

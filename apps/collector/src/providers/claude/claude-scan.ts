@@ -1,16 +1,16 @@
 import { relative } from "node:path";
-import type { ClaudeHistory, ClaudeTranscriptEntry } from "../index.ts";
-import type { ScanSelection, SourceDiscoveryOptions, TranscriptSource } from "../../transcript/index.ts";
+import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "../index.ts";
+import type { ScanSelection, SourceDiscoveryOptions } from "../../transcript/index.ts";
 import type { LocatedSource, ProviderScan } from "../../scan/scan-provider.ts";
 import type { ParserFormat } from "../../scan/transcript-cursor.ts";
 import { ClaudeSessionParser } from "./claude-session-parser.ts";
 import { ClaudeEarlierCopies } from "./claude-source-copy.ts";
 
-type Source = TranscriptSource<ClaudeTranscriptEntry>;
+type Source = ClaudeTranscriptSource;
 type ScannedHistory = Pick<ClaudeHistory, "root" | "discoverSources" | "confirmedAbsent" | "recoveryCandidates">;
 
 /** One Claude Code scan pass. It has no identity repair and no logical name. */
-export class ClaudeScan implements ProviderScan<ClaudeTranscriptEntry> {
+export class ClaudeScan implements ProviderScan<ClaudeTranscriptEntry, ClaudeTranscriptSource> {
   readonly earlierCopies: ClaudeEarlierCopies;
 
   constructor(private readonly history: ScannedHistory, private readonly selection: ScanSelection) {

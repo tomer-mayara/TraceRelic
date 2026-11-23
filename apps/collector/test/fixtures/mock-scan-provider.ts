@@ -19,7 +19,6 @@ interface MockEntry {
 
 /** One session in an in-memory JSONL file. Each line is a JSON object with one text. */
 export class MockTranscript implements TranscriptSource<MockEntry> {
-  readonly previousCopy = false;
   readonly fileSize: number;
   private readonly bytes: Buffer;
   private readonly lines: (MockEntry & { readonly startOffset: number })[] = [];

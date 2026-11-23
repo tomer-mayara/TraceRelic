@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { claudeCopyStem } from "@tracerelic/shared";
-import type { ClaudeSubagent } from "../../transcript/index.ts";
 import { listDirectory } from "../../transcript/transcript-directories.ts";
+import type { ClaudeSubagent } from "./claude-session-identity.ts";
 
 export interface TranscriptFile {
   sourceFile: string;

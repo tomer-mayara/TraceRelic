@@ -1,7 +1,7 @@
 import type { ClaudeTranscriptEntry } from "../index.ts";
-import type { ClaudeSubagent } from "../../transcript/index.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { ClaudeCallOrigin, ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../../storage/collector-storage.ts";
+import type { ClaudeSubagent } from "./claude-session-identity.ts";
 import { ClaudeUsageCounts, isObject, type ReportIssue } from "./claude-usage-counts.ts";
 
 type Fields = Readonly<Record<string, unknown>>;

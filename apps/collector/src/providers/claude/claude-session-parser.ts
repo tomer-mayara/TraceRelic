@@ -1,8 +1,8 @@
 import { claudeCopyFallbackFields } from "@tracerelic/shared";
 import type { ClaudeTranscriptEntry } from "../index.ts";
-import type { ClaudeSubagent } from "../../transcript/index.ts";
 import type { SessionView } from "../../storage/collector-storage.ts";
 import { ClaudeChat } from "./claude-chat.ts";
+import type { ClaudeSubagent } from "./claude-session-identity.ts";
 import { ClaudeUsage } from "./claude-usage.ts";
 import type { ChatParser, DecodedChat } from "../../scan/decoded-chat.ts";
 import type { ParserFormat } from "../../scan/transcript-cursor.ts";

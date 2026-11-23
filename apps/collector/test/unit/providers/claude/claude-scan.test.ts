@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ClaudeScan } from "#src/providers/claude/claude-scan";
-import type { ClaudeTranscriptEntry } from "#src/providers/index";
-import { ProviderHistoryStub, ScanPassFixture, type SourceFields } from "../../../fixtures/provider-scan-fixture.ts";
+import type { ClaudeTranscriptEntry, ClaudeTranscriptSource } from "#src/providers/index";
+import { ProviderHistoryStub, ScanPassFixture } from "../../../fixtures/provider-scan-fixture.ts";
 
 const current = "/claude/projects/p/one.jsonl";
-const transcript = (sessionId: string, fields: Partial<SourceFields> = {}) =>
-  ScanPassFixture.source<ClaudeTranscriptEntry>({ sessionId, sourceFile: current, ...fields });
+const transcript = (sessionId: string, fields: Partial<ClaudeTranscriptSource> = {}): ClaudeTranscriptSource =>
+  ({ ...ScanPassFixture.source<ClaudeTranscriptEntry>({ sessionId, sourceFile: current }), previousCopy: false, ...fields });
 const earlierCopy = () => transcript("a", { sourceFile: `${current}.superseded-1`, previousCopy: true });
-const pass = () => new ClaudeScan(new ProviderHistoryStub<ClaudeTranscriptEntry>("/claude"), {});
+const pass = () => new ClaudeScan(new ProviderHistoryStub<ClaudeTranscriptSource>("/claude"), {});
 
 test("the selected sessions of one Claude file are one group, and two files give two groups", async () => {
   const [first, second] = [transcript("a"), transcript("b")];

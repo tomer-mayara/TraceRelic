@@ -1,19 +1,20 @@
-import { TranscriptChangedError, type TranscriptSource } from "../../transcript/index.ts";
+import type { CodexRolloutSource } from "../index.ts";
+import { TranscriptChangedError } from "../../transcript/index.ts";
 import { legacyScannerLine, needsHistoryVerification, type AcknowledgedSource, type Checkpoint, type CodexIdentityProof, type CollectorStorage,
   type SourceScope, type StreamKey } from "../../storage/collector-storage.ts";
 import { ScanPendingError } from "../../scan/scan-pending.ts";
 import { captureProof, readStorage } from "../../scan/scan-recovery.ts";
 import { sourceId, type SourceSighting } from "../../scan/source-sightings.ts";
 
-interface Seen<Entry> { sighting: SourceSighting; transcript: TranscriptSource<Entry> }
+interface Seen { sighting: SourceSighting; transcript: CodexRolloutSource }
 type IdentitiesAt = (paths: ReadonlySet<string>) => AsyncIterable<{ path: string; sessionId: string }>;
 
 /** A filename only selects candidates. Both accepted checkpoints must match one sealed native capture. */
 export class CodexIdentityRepair {
   constructor(private readonly storage: CollectorStorage, private readonly scope: SourceScope) {}
 
-  async reconcile<Entry>(known: ReadonlyMap<string, AcknowledgedSource>, seen: Iterable<Seen<Entry>>, identitiesAt?: IdentitiesAt) {
-    const peers = new Map<string, Seen<Entry>[]>();
+  async reconcile(known: ReadonlyMap<string, AcknowledgedSource>, seen: Iterable<Seen>, identitiesAt?: IdentitiesAt) {
+    const peers = new Map<string, Seen[]>();
     for (const other of seen) {
       const path = other.sighting.observation.location.path;
       const located = peers.get(path) ?? [];
@@ -41,7 +42,7 @@ export class CodexIdentityRepair {
     return [...selected.values()];
   }
 
-  private async repair<Entry>(row: AcknowledgedSource, candidates: Seen<Entry>[]) {
+  private async repair(row: AcknowledgedSource, candidates: Seen[]) {
     const storage = this.storage;
     for (let attempt = 0; attempt < 2; attempt++) {
       const { checkpoint, version } = await readStorage(row.source, () => storage.readCheckpoint(row.source));
@@ -84,7 +85,7 @@ export class CodexIdentityRepair {
       .find(row => sourceId(row.source) === sourceId(source)));
   }
 
-  private async proof<Entry>(old: Checkpoint, { sighting, transcript }: Seen<Entry>): Promise<CodexIdentityProof | undefined> {
+  private async proof(old: Checkpoint, { sighting, transcript }: Seen): Promise<CodexIdentityProof | undefined> {
     const headerEnd = transcript.codexHeaderEnd;
     if (sighting.rejected || !old.prefixDigest || !headerEnd || headerEnd > old.offset || legacyScannerLine(old) === undefined) return;
     const { checkpoint, version } = await readStorage(sighting.source, () => this.storage.readCheckpoint(sighting.source));

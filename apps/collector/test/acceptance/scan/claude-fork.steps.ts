@@ -51,7 +51,7 @@ When("I collect both transcripts in either order", async function (this: ClaudeF
   for (const [index, fixture] of this.forks.entries()) {
     const home = fixture.roots.child.home;
     const [source] = await Array.fromAsync(new ClaudeHistory(home).discoverSources());
-    assert(scanContract.validate("TranscriptSourceInfo.json", source), scanContract.errorsText());
+    assert(scanContract.validate("ClaudeTranscriptSource.json", source), scanContract.errorsText());
     const order = index === 0 ? ["parent", "child"] as const : ["child", "parent"] as const;
     await fixture.scan(order[0]);
     if (order[0] === "child") {

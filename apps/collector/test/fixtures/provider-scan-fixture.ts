@@ -3,7 +3,7 @@ import type { Metadata, SessionView } from "../../src/storage/collector-storage.
 import type { ScanSelection, SourceDiscoveryOptions, TranscriptSource } from "../../src/transcript/index.ts";
 
 /** The fields of a source. A source needs only its session ID and its file. */
-export type SourceFields = Pick<TranscriptSource<unknown>, "sessionId" | "sourceFile">
+type SourceFields = Pick<TranscriptSource<unknown>, "sessionId" | "sourceFile">
   & Partial<Omit<TranscriptSource<unknown>, "completeEnd" | "prefixDigests" | "readBatches">>;
 
 /** One call of discoverSources. */
@@ -14,10 +14,10 @@ export interface DiscoveryCall {
 
 /** Values that the unit tests of a scan pass give to the pass. */
 export class ScanPassFixture {
-  /** A source with these fields and no records. */
+  /** A source with these fields and no records. A provider test adds the fields of its own source type. */
   static source<Entry>(fields: SourceFields): TranscriptSource<Entry> {
     return {
-      fileSize: 0, previousCopy: false, ...fields,
+      fileSize: 0, ...fields,
       completeEnd: async () => 0,
       prefixDigests: async () => [],
       readBatches: async function* () {},
@@ -34,14 +34,14 @@ export class ScanPassFixture {
  * A stand-in for the history class that a scan pass reads. Each call of discoverSources gives the next
  * list of sources and records the call.
  */
-export class ProviderHistoryStub<Entry> {
+export class ProviderHistoryStub<Source> {
   readonly calls: DiscoveryCall[] = [];
   /** The number of sources that the discoveries started to give. */
   requested = 0;
 
-  constructor(readonly root: string, private readonly discoveries: readonly (readonly TranscriptSource<Entry>[])[] = []) {}
+  constructor(readonly root: string, private readonly discoveries: readonly (readonly Source[])[] = []) {}
 
-  discoverSources(selection: ScanSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<TranscriptSource<Entry>> {
+  discoverSources(selection: ScanSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<Source> {
     const sources = this.discoveries[this.calls.length] ?? [];
     this.calls.push({ selection, options });
     return this.serve(sources);
@@ -53,9 +53,9 @@ export class ProviderHistoryStub<Entry> {
 
   async *identitiesAt(): AsyncGenerator<{ path: string; sessionId: string }> {}
 
-  async *recoveryCandidates(): AsyncGenerator<EarlierCopy<TranscriptSource<Entry>>, void, unknown> {}
+  async *recoveryCandidates(): AsyncGenerator<EarlierCopy<Source>, void, unknown> {}
 
-  private async *serve(sources: readonly TranscriptSource<Entry>[]): AsyncGenerator<TranscriptSource<Entry>> {
+  private async *serve(sources: readonly Source[]): AsyncGenerator<Source> {
     for (const source of sources) {
       this.requested++;
       yield source;

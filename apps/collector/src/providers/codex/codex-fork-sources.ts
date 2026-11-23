@@ -1,11 +1,10 @@
-import type { CodexRolloutEntry } from "../index.ts";
-import type { TranscriptSource } from "../../transcript/index.ts";
+import type { CodexRolloutEntry, CodexRolloutSource } from "../index.ts";
 import type { Checkpoint, CodexForkCheckpoint } from "../../storage/collector-storage.ts";
 import { CodexForkEvidence } from "./codex-fork-evidence.ts";
 import { CodexSessionParser } from "./codex-session-parser.ts";
 import type { ParserFormat } from "../../scan/transcript-cursor.ts";
 
-type Source = TranscriptSource<CodexRolloutEntry>;
+type Source = CodexRolloutSource;
 
 function strongestBoundary(previous: CodexForkCheckpoint | undefined, current: Awaited<ReturnType<CodexForkEvidence["assess"]>>) {
   const before = previous?.inheritedThrough, after = current?.fork.inheritedThrough;

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CodexScan } from "#src/providers/codex/codex-scan";
-import type { CodexRolloutEntry } from "#src/providers/index";
+import type { CodexRolloutEntry, CodexRolloutSource } from "#src/providers/index";
 import { ForkEvidenceSource as F } from "../../../fixtures/codex-fork-evidence-fixture.ts";
 import { ProviderHistoryStub, ScanPassFixture } from "../../../fixtures/provider-scan-fixture.ts";
 
-const rollout = (sessionId: string, fields: { sourceFile?: string; selectionCwd?: string } = {}) =>
-  ScanPassFixture.source<CodexRolloutEntry>({ sessionId, sourceFile: `/codex/sessions/2026/rollout-${sessionId}.jsonl`, ...fields });
+const rollout = (sessionId: string, fields: { sourceFile?: string; selectionCwd?: string } = {}): CodexRolloutSource =>
+  ({ ...ScanPassFixture.source<CodexRolloutEntry>({ sessionId, sourceFile: `/codex/sessions/2026/rollout-${sessionId}.jsonl` }), ...fields });
 
 test("each Codex source is its own group, and the first group arrives before discovery gives a second source", async () => {
   const [first, second] = [rollout("one"), rollout("two")];
@@ -20,13 +20,13 @@ test("each Codex source is its own group, and the first group arrives before dis
 });
 
 test("a plain Codex rollout and its .zst form have the same logical name", () => {
-  const scan = new CodexScan(new ProviderHistoryStub<CodexRolloutEntry>("/codex"), {});
+  const scan = new CodexScan(new ProviderHistoryStub<CodexRolloutSource>("/codex"), {});
   assert.equal(scan.logicalName("/codex/sessions/2026/01/02/rollout-one.jsonl"), "rollout-one.jsonl");
   assert.equal(scan.logicalName("/codex/archived_sessions/rollout-one.jsonl.zst"), "rollout-one.jsonl");
 });
 
 test("a Codex source is located by its logical name, and its root-based stream ID is the root and that name", () => {
-  const scan = new CodexScan(new ProviderHistoryStub<CodexRolloutEntry>("/codex"), {});
+  const scan = new CodexScan(new ProviderHistoryStub<CodexRolloutSource>("/codex"), {});
   const rootStreamId = '["/codex","rollout-one.jsonl"]';
   assert.deepEqual(scan.locate(rollout("one", { sourceFile: "/codex/archived_sessions/rollout-one.jsonl.zst" })),
     { location: { root: "/codex", path: "rollout-one.jsonl" }, rootStreamId });
@@ -59,6 +59,6 @@ test("a discovery of one changed Codex file also asks for the related sources, a
 });
 
 test("a Codex pass cannot select a parser before a discovery", () => {
-  const scan = new CodexScan(new ProviderHistoryStub<CodexRolloutEntry>("/codex"), {});
+  const scan = new CodexScan(new ProviderHistoryStub<CodexRolloutSource>("/codex"), {});
   assert.throws(() => scan.parserFor(rollout("one"), null), { name: "Error" });
 });

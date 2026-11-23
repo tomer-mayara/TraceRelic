@@ -1,5 +1,5 @@
-import type { CodexHistory, CodexRolloutEntry } from "../index.ts";
-import type { ScanSelection, SourceDiscoveryOptions, TranscriptSource } from "../../transcript/index.ts";
+import type { CodexHistory, CodexRolloutEntry, CodexRolloutSource } from "../index.ts";
+import type { ScanSelection, SourceDiscoveryOptions } from "../../transcript/index.ts";
 import type { Checkpoint, StreamKey } from "../../storage/collector-storage.ts";
 import type { IdentityInventory, LocatedSource, ProviderScan } from "../../scan/scan-provider.ts";
 import type { ParserFormat } from "../../scan/transcript-cursor.ts";
@@ -7,11 +7,11 @@ import { CodexForkSources } from "./codex-fork-sources.ts";
 import { CodexIdentityRepair } from "./codex-identity-repair.ts";
 import { CodexRolloutFiles } from "./codex-rollout-files.ts";
 
-type Source = TranscriptSource<CodexRolloutEntry>;
+type Source = CodexRolloutSource;
 type ScannedHistory = Pick<CodexHistory, "root" | "discoverSources" | "confirmedAbsent" | "identitiesAt">;
 
 /** One Codex scan pass. Its state is the fork evidence of the latest discovery. */
-export class CodexScan implements ProviderScan<CodexRolloutEntry> {
+export class CodexScan implements ProviderScan<CodexRolloutEntry, CodexRolloutSource> {
   private sources?: CodexForkSources;
 
   constructor(private readonly history: ScannedHistory, private readonly selection: ScanSelection) {}
