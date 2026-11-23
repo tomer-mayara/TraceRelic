@@ -59,24 +59,37 @@ model ReplayOccurrences {
   replayed: Count;
 }
 
+/** One session in one captured file, as the scanner reads it. It has no provider field.
+ * Each provider declares its own source model. */
 model TranscriptSourceInfo {
   ...PickProperties<LocalHistoryEntry, "sessionId" | "sourceFile">;
   /** File size observed at discovery, including any unfinished suffix. */
   fileSize: Count;
-  previousCopy: boolean;
-  /** Only the child's own native Codex header supplies this link. */
-  codexForkHeader?: CodexForkHeader;
-  /** End of the first valid native Codex header in the sealed prefix. */
-  codexHeaderEnd?: Count;
-  /** Native parent and agent of a selected Claude subagent transcript. */
-  claudeSubagent?: ClaudeSubagent;
+}
+
+/** One session in one Codex rollout. */
+model CodexRolloutSource extends TranscriptSourceInfo {
   /** First working directory used for project selection, when available. */
   selectionCwd?: string;
-  /** Exact Claude transcript project directory, when available. */
+  /** End of the first valid native Codex header in the sealed prefix. */
+  codexHeaderEnd?: Count;
+  /** Only the child's own native Codex header supplies this link. */
+  codexForkHeader?: CodexForkHeader;
+}
+
+/** One session in one Claude Code transcript file. */
+model ClaudeTranscriptSource extends TranscriptSourceInfo {
+  /** True for a named earlier copy. An earlier copy can supply additional UUID-backed rows. */
+  previousCopy: boolean;
+  /** First working directory used for project selection, when available. */
+  selectionCwd?: string;
+  /** Exact transcript project directory, when available. */
   projectDir?: string;
-  /** A distinct working directory inherited from the current Claude transcript. */
+  /** Native parent and agent of a selected subagent transcript. */
+  claudeSubagent?: ClaudeSubagent;
+  /** A distinct working directory inherited from the current transcript. */
   currentFileCwd?: string;
-  /** For a named earlier Claude copy, the current transcript path relative to the configured root. */
+  /** For a named earlier copy, the current transcript path relative to the configured root. */
   currentFilePath?: Identifier;
 }
 
@@ -130,32 +143,189 @@ interface SourceBatches<Entry extends {}> {
   readBatches(position: ReadPosition, maxBatchBytes?: SourceOrder, endOffset?: Count): RecordBatch<Entry>[];
 }
 
-/** The Codex provider. It receives the Codex root directory. */
-interface CodexHistory extends HistoryProvider {
+/** Where a source is, and its stream ID for a collector that has no installation ID. */
+model LocatedSource {
+  location: SourceLocation;
+  /** The stream ID that contains the provider root. A collector that has an installation ID
+   * uses location.path as the stream ID. */
+  rootStreamId: Identifier;
+}
+
+/** One earlier copy of a current file. */
+model EarlierCopy<Source> {
+  /** Path of the current file, relative to the provider root. */
+  currentPath: Identifier;
+  /** Path of the copy, relative to the provider root. */
+  path: Identifier;
+  /** Each readable session in the copy. */
+  sources: Source[];
+}
+
+model ClaudeEarlierCopy is EarlierCopy<ClaudeTranscriptSource>;
+
+/** A copy that can continue an acknowledged source. */
+model CopyCandidate<Source> {
+  transcript: Source;
+  /** Path of the copy, relative to the provider root. */
+  path: Identifier;
+}
+
+/** The copies that can continue one acknowledged source, best first, and the copies that cannot. */
+model CopyAssessment<Source> {
+  /** Paths of the copies whose identity or accepted prefix is disproved. */
+  excluded: Identifier[];
+  candidates: CopyCandidate<Source>[];
+}
+
+model ClaudeCopyAssessment is CopyAssessment<ClaudeTranscriptSource>;
+
+/** The checkpoint fields that a provider owns. The scanner writes the other fields. */
+model ProviderCheckpointFields {
+  ...PickProperties<Checkpoint, "codexFork" | "claudeCallOrigins">;
+}
+
+/** A provider's plan to classify the accepted usage again at the accepted byte.
+ * The scanner reads the accepted bytes again and commits the corrected usage in one batch. */
+interface UsageCorrection {
+  /** Optional. The parent session, when the provider knows it before the scanner reads the records. */
+  parentSessionId(): Identifier;
+  /** Give the corrected checkpoint, or the parser that holds the accepted chat state.
+   * The scanner saves the state of that parser in the corrected checkpoint. */
+  accepted(): Checkpoint;
+  /** The batch field that names the replaced checkpoint: reconcileCodexForkFrom or backfillClaudeOriginsFrom. */
+  replaces(): Checkpoint;
+}
+
+/** The parser of one source. The provider owns the decoder state in ParserCheckpointState
+ * and the provider fields of a checkpoint. Each operation here is optional. */
+interface ParserFormat {
+  /** The fields that the provider adds to each checkpoint of this source.
+   * Codex adds codexFork for a fork. Claude Code adds claudeCallOrigins. */
+  checkpointFields(): ProviderCheckpointFields;
+  /** Return a correction when the accepted checkpoint does not have what this format records now.
+   * Codex returns one when the fork evidence is different from the saved codexFork.
+   * Claude Code returns one when a checkpoint beyond byte zero has no claudeCallOrigins. */
+  correction(accepted: Checkpoint): UsageCorrection | null;
+  /** Only the format of a source that adds to the session of another file has this operation.
+   * An earlier Claude Code copy is such a source. Before the first batch that needs it, the
+   * scanner reads the stored session. Remove from the batch the fields that storage has.
+   * Return false to skip the batch. */
+  prepareBatch(known: SessionView | null, expectedOffset: Count): boolean;
+}
+
+/** A named earlier file can resume the logical current stream only from verified bytes. */
+interface SourceCopy<Source extends TranscriptSourceInfo> {
+  /** Return the digests of the accepted prefixes when the copy has the bytes of the checkpoint. */
+  verify(checkpoint: Checkpoint | null): VerifiedPrefix[] | null;
+  /** The copy with the name and the location of the current stream. */
+  current(location: SourceLocation): Source;
+  /** The parser of the copy when the scanner reads it as the current stream. */
+  format(): ParserFormat;
+}
+
+/** The earlier copies of the current files of one provider. An earlier copy can continue an
+ * acknowledged source whose current file is absent. */
+interface EarlierCopies<Source extends TranscriptSourceInfo> {
+  /** Identify every readable session in the copies of the acknowledged relative paths. */
+  candidates(paths: Identifier[]): EarlierCopy<Source>[];
+  /** Compare the copies of one acknowledged source with its checkpoint and its observed extent.
+   * When equally good copies disagree, limit each one to the common, proved bytes. */
+  assess(row: AcknowledgedSource, checkpoint: Checkpoint | null, copies: EarlierCopy<Source>[]): CopyAssessment<Source>;
+  /** True for an error that shows only that a copy cannot be read. */
+  unreadable(error: unknown): boolean;
+  /** Read one copy as the current stream. */
+  open(copy: Source): SourceCopy<Source>;
+}
+
+/** One scan pass of one provider over the selected files. The pass keeps its own state. */
+interface ProviderScan<Source extends TranscriptSourceInfo> {
+  /** Discover the selected sources. The sources that share one physical file arrive together.
+   * With sourceFile, discover only that file again. Report a file that changes during
+   * discovery, and continue with the next file. */
+  discoverFiles(sourceFile?: Identifier): Source[][];
+  /** Optional. The name that the physical forms of one file share. */
+  logicalName(sourceFile: Identifier): Identifier;
+  /** Select the parser for a discovered source and its accepted checkpoint.
+   * Use the state of the latest discovery. */
+  parserFor(source: Source, checkpoint: Checkpoint | null): ParserFormat;
+  /** Give the location of a discovered source and its root-based stream ID. */
+  locate(source: Source): LocatedSource;
+  /** Search each possible location under an accessible root. Return the paths that are absent. */
+  confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
+  /** Optional. Check the identity of the acknowledged sources that this pass did not see.
+   * Return the sources that the scan must select. */
+  repairIdentities(scope: SourceScope, known: AcknowledgedSource[], seen: Source[]): StreamKey[];
+  /** Optional. Only a provider that keeps earlier copies of a file has this. */
+  earlierCopies(): EarlierCopies<Source>;
+}
+
+/** The local transcripts of one provider, as the scanner uses them. The scanner knows a provider
+ * only through this port. */
+interface ScanProvider<Source extends TranscriptSourceInfo> {
+  /** The harness of each source that this provider discovers. */
+  harness(): Harness;
+  /** The provider root. It is the root of each source scope and of each source location. */
+  root(): string;
+  /** Open one pass over the selected files. */
+  openScan(selection?: ScanSelection): ProviderScan<Source>;
+}
+
+/** One Codex scan pass. Its state is the fork evidence of the latest discovery. A discovery of one
+ * changed file replaces that evidence, with the selected parents as related sources. */
+interface CodexScan extends ProviderScan<CodexRolloutSource> {
+  /** Give each selected rollout as its own group, as soon as it is discovered.
+   * A fork also needs the headers of the later selected files. */
+  discoverFiles(sourceFile?: Identifier): CodexRolloutSource[][];
+  /** The rollout basename. A plain rollout and its .zst form have the same name. */
+  logicalName(sourceFile: Identifier): Identifier;
+  /** The path is the logical name. The root-based stream ID is the JSON array of the root and the path. */
+  locate(source: CodexRolloutSource): LocatedSource;
   /** Check rollout basenames in the active and archive directories of an accessible root. */
   confirmedAbsent(paths: Identifier[]): Identifier[];
-  discoverSources(selection?: ScanSelection): TranscriptSourceInfo[];
+  /** A filename only selects candidates. Both accepted checkpoints must match one sealed native capture.
+   * A session-only scan may inspect the native ID at an old location without importing the other chat. */
+  repairIdentities(scope: SourceScope, known: AcknowledgedSource[], seen: CodexRolloutSource[]): StreamKey[];
+}
+
+/** The Codex provider. It receives the Codex root directory. */
+interface CodexHistory extends HistoryProvider {
+  /** "codex" */
+  harness(): Harness;
+  root(): string;
+  openScan(selection?: ScanSelection): CodexScan;
+  /** Check rollout basenames in the active and archive directories of an accessible root. */
+  confirmedAbsent(paths: Identifier[]): Identifier[];
+  discoverSources(selection?: ScanSelection): CodexRolloutSource[];
   /** Yield one selected rollout at a time. Preserve undated metadata and source order. */
   readRollouts(selection?: ScanSelection): CodexRollout[];
+}
+
+/** One Claude Code scan pass. It has no identity repair and no logical name. */
+interface ClaudeScan extends ProviderScan<ClaudeTranscriptSource> {
+  /** Give all the selected sessions of one physical file as one group. */
+  discoverFiles(sourceFile?: Identifier): ClaudeTranscriptSource[][];
+  /** The path is relative to the root. The root-based stream ID is the absolute source file. */
+  locate(source: ClaudeTranscriptSource): LocatedSource;
+  /** Ignore a backup's current-name alias only when its identity or accepted prefix has been disproved. */
+  confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
+  earlierCopies(): EarlierCopies<ClaudeTranscriptSource>;
 }
 
 /** The Claude Code provider. It receives the Claude Code root directory.
  * A collector with no Claude Code root has no Claude Code provider. */
 interface ClaudeHistory extends HistoryProvider {
+  /** "claude" */
+  harness(): Harness;
+  root(): string;
+  openScan(selection?: ScanSelection): ClaudeScan;
   /** Ignore a backup's current-name alias only when its identity or accepted prefix has been disproved. */
   confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
   /** Identify every readable session in backups of the acknowledged relative paths. */
-  recoveryCandidates(paths: Identifier[]): ClaudeRecoveryCandidate[];
-  discoverSources(selection?: ScanSelection): TranscriptSourceInfo[];
+  recoveryCandidates(paths: Identifier[]): ClaudeEarlierCopy[];
+  discoverSources(selection?: ScanSelection): ClaudeTranscriptSource[];
   /** Yield complete records grouped by file and effective session ID.
    * Include earlier copies of a selected file for the same session. */
   readTranscripts(selection?: ScanSelection): ClaudeTranscript[];
-}
-
-model ClaudeRecoveryCandidate {
-  currentPath: Identifier;
-  path: Identifier;
-  sources: TranscriptSourceInfo[];
 }
 
 /** A scan could not confirm its work. The CLI writes this JSON as a WARN message on stderr.
@@ -221,6 +391,37 @@ model FailedScan {
   reason: "scan-failed";
 }
 
+/** What the scanner receives. Each operation gives one value. Only providers and storage are required. */
+interface LocalCollectorOptions {
+  /** The scanner reads these providers in this order. A provider that is not configured is not supplied.
+   * LocalProviders.fromConfig gives Codex first, then Claude Code when the configuration has a claudePath.
+   * Each of these provider objects is a HistoryProvider and a ScanProvider. */
+  providers(): ScanProvider<TranscriptSourceInfo>[];
+  /** The destination workspace. */
+  storage(): CollectorStorage;
+  /** The installation ID of the configuration. Without it, each stream ID is root-based. */
+  installationId(): Identifier;
+  /** Receives each RejectedBatch. */
+  onRejection(report: RejectedBatch): void;
+  /** Receives each MissingSource. */
+  onMissing(report: MissingSource): void;
+  /** The watch schedule supplies its clock and its record of outstanding work. */
+  progress(): ScanProgress;
+}
+
+/** The scanner tells the watch schedule what storage has confirmed. */
+interface ScanProgress {
+  /** UTC milliseconds since the Unix epoch. */
+  now(): Count;
+  /** The scanner matched the durable checkpoint of a source to its capture. */
+  verified(source: StreamKey, snapshot: CheckpointSnapshot): void;
+  /** The scanner read a source to its end without a rejection. */
+  finishedSource(source: StreamKey): void;
+}
+
+/** The scanner receives LocalCollectorOptions. It scans the files of each provider in the order
+ * of the providers. Then it checks the presence of the sources of each provider in the same order.
+ * It returns the sessions of each provider in that order. */
 interface LocalCollector {
   /** Import complete records into the destination workspace. Return its selected sessions.
    * An unconfirmed write or unresolved version conflict raises a scan error carrying PendingScan.

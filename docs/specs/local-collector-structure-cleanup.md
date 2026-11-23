@@ -13,11 +13,11 @@ imports of the storage helpers that change name).
 
 ## Status
 
-Steps 0 and 1 are complete on 2026-11-22. Step 2 is complete on 2026-11-23. The owner accepted the
-five recommendations in [Decisions for the owner](#decisions-for-the-owner). The sections after this
-one describe the code before step 1, at commit `21ab8a9`. They name each file by its path at that
-commit. The table in [Where the current files go](#where-the-current-files-go) gives the path of each
-file after step 2.
+Steps 0 and 1 are complete on 2026-11-22. Step 2 is complete on 2026-11-23. Step 3 has its
+constraints, and its code changes follow. The owner accepted the five recommendations in
+[Decisions for the owner](#decisions-for-the-owner). The sections after this one describe the code
+before step 1, at commit `21ab8a9`. They name each file by its path at that commit. The table in
+[Where the current files go](#where-the-current-files-go) gives the path of each file after step 2.
 
 | Measure | Before | After step 1 | After step 2 |
 | --- | ---: | ---: | ---: |
@@ -309,32 +309,53 @@ configuration has no `claudePath`, no Claude provider is injected. The five `cla
 
 ### The scanner
 
-`LocalCollector` receives the same provider objects through a second, narrow port.
+`LocalCollector` receives the same provider objects through a second, narrow port. Step 3 fixed the
+shape of this port. The contract is in [scan.tsp](local-collector/scan.tsp).
 
 ```ts
-// scan/scan-provider.ts — a starting point; step 3 fixes the final shape
-export interface ScanProvider<Entry extends SourceLine = SourceLine> {
+// scan/scan-provider.ts
+export interface ScanProvider<Entry extends SourceLine = SourceLine, Source extends TranscriptSource<Entry> = TranscriptSource<Entry>> {
   readonly harness: Harness;
   readonly root: string;
   /** One pass over the selected files. The pass keeps its own state, such as Codex fork evidence. */
-  openScan(selection: ScanSelection): ProviderScan<Entry>;
+  openScan(selection: ScanSelection): ProviderScan<Entry, Source>;
 }
 
-export interface ProviderScan<Entry extends SourceLine> {
+export interface ProviderScan<Entry extends SourceLine = SourceLine, Source extends TranscriptSource<Entry> = TranscriptSource<Entry>> {
   /** Sources that share one physical file arrive together. */
-  discoverFiles(options: SourceDiscoveryOptions): AsyncIterable<readonly TranscriptSource<Entry>[]>;
-  parserFor(source: TranscriptSource<Entry>, checkpoint: Checkpoint | null): Promise<ParserFormat<Entry>>;
-  locate(source: TranscriptSource<Entry>): { streamId: string; location: SourceLocation };
-  confirmedAbsent(paths: readonly string[], excludedCopies?: readonly string[]): Promise<readonly string[]>;
-  /** Provider recovery after the files are read: Codex identity repair, Claude earlier copies. */
-  recover?(inventory: RecoveryInventory<Entry>): Promise<readonly StreamKey[]>;
+  discoverFiles(options: SourceDiscoveryOptions): AsyncIterable<readonly Source[]>;
+  /** The name that the physical forms of one file share. Absent when each file has one form. */
+  logicalName?(sourceFile: string): string;
+  parserFor(source: Source, checkpoint: Checkpoint | null): ParserFormat<Entry> | Promise<ParserFormat<Entry>>;
+  /** The location of a source, and its stream ID for a collector that has no installation ID. */
+  locate(source: Source): LocatedSource;
+  confirmedAbsent(paths: readonly string[], excludedCopyPaths?: readonly string[]): Promise<readonly string[]>;
+  /** Codex only: check the identity of the acknowledged sources that this pass did not see. */
+  repairIdentities?(inventory: IdentityInventory<Source>): Promise<readonly StreamKey[]>;
+  /** Claude Code only: the earlier copies that can continue an absent current file. */
+  readonly earlierCopies?: EarlierCopies<Entry, Source>;
+}
+
+// scan/transcript-cursor.ts: the parser of one source also has the provider rules for its checkpoints
+export interface ParserFormat<Entry> {
+  version: number;
+  gapVersion?: number;
+  /** codexFork for a Codex fork, claudeCallOrigins for Claude Code. */
+  checkpointFields?: ProviderCheckpointFields;
+  /** Present when the accepted checkpoint lacks what this format records now. */
+  correction?(accepted: Checkpoint): UsageCorrection<Entry> | undefined;
+  /** For a source that adds to the session of another file, such as an earlier Claude Code copy. */
+  prepareBatch?(chat: DecodedChat, known: SessionView | null, expectedOffset: number): boolean;
+  resume(state?: unknown): ChatParser<Entry>;
+  upgrade?(oldDecoder?: object): ...;
 }
 
 new LocalCollector({ providers, storage, installationId, onRejection, onMissing, progress });
 ```
 
-Each row of the table in finding 3 moves behind this port. After that, `scan/` and `watch/` do not
-import `providers/`.
+Each row of the table in finding 3 is behind this port. `scan/` and `watch/` do not import
+`providers/`. The table in [step 3](#step-3-the-scanner-receives-its-providers) gives the port member
+for each row.
 
 ## Where the current files go
 
@@ -438,13 +459,20 @@ Dependency rules:
 | `providers-do-not-know-each-other` | `providers/codex/` to `providers/claude/`, and the reverse | Step 1 |
 | `providers-receive-their-paths` | `providers/codex/` and `providers/claude/` to `config/`. `history-receives-global-config` continues to keep the configuration loader out of `history/`, `providers/` and `transcript/`. | Step 1 |
 | `scan-engine-is-provider-neutral` | `scan/`, `watch/` to `providers/` | Step 3 |
-| `only-local-providers-names-both-providers` | Any file outside `providers/` to `providers/codex/` or `providers/claude/` | Step 3 |
+| `only-local-providers-names-both-providers` | Any file of `apps/collector/src` outside `providers/` to `providers/codex/` or `providers/claude/` | Step 3 |
 | `storage-is-self-contained` | `storage/` to any other collector directory | Step 2 |
 | Existing rules for the HTTP client, the schedule and the storage port | Same meaning, new paths | Step 2 |
 
 `scanner-uses-only-the-storage-port` is the existing rule for the storage port. Before step 2 it starts
 from `scan/`. Step 2 moves some of these files to `watch/` and `providers/`, so the rule then starts
 from `scan/`, `watch/` and `providers/`.
+
+Step 3 turns on its two rules in its first commit, before the code changes. At that commit, three
+`scan/` files import `providers/`: `local-collector.ts`, `source-presence.ts` and `source-sightings.ts`.
+A `pathNot` list in each rule names these files, and the rule does not apply to them. The rule applies
+to each other file from the first commit. Each later commit of step 3 removes the names that it clears.
+At the end of step 3 the two rules have no `pathNot` list. A test file can import a provider file, so
+the second rule starts only from `apps/collector/src`.
 
 The structure rule is in [collector-structure.eslint.mjs](../../.habit-hooks/collector-structure.eslint.mjs).
 Its `cleaned` list names the directories that have no top-level function. Habit Hooks applies the same
@@ -515,16 +543,85 @@ Size: small risk, large diff. About 35 source files move or change name.
 
 ### Step 3. The scanner receives its providers
 
-1. Write `ScanProvider` and the source model of each provider in [scan.tsp](local-collector/scan.tsp)
-   before the code changes. Then add `ScanProvider`. Move each row of the table in finding 3 into
-   `CodexHistory`, `ClaudeHistory` or one of their collaborators.
-2. Remove the provider fields from the generic source type. Each provider declares its own source type.
-3. `LocalCollector` takes one options object. Update 29 constructor calls in the tests.
-4. Turn on `scan-engine-is-provider-neutral`.
+The four constraint decisions for this step:
 
-Size: large. This step has the most risk. It changes `local-collector.ts`, `source-presence.ts` and
-`source-sightings.ts`, about 700 lines. The 31 scan scenarios, the 34 test files in
-`test/integration/scan` and the two in `test/integration/watch` cover it.
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | No change for a user of the CLI. Three scenarios are new, because a scanner that receives its providers is new for a TypeScript caller. Before this step the scanner always read Codex. The scenarios are below. Check with `bun run check:collector-scan` and `bun run test`. A unit test gives `LocalCollector` a mock `ScanProvider` and a mock storage. It shows that the engine needs no Codex class and no Claude Code class. |
+| Observability | Out of scope. No signal is added or changed. Each logger call stays in `cli.ts`. |
+| Architecture | `scan-engine-is-provider-neutral` and `only-local-providers-names-both-providers` are on from the first commit. Check with `bun run check:collector-deps`. |
+| Interface | [scan.tsp](local-collector/scan.tsp): `ScanProvider`, `ProviderScan`, `ParserFormat`, `LocalCollectorOptions`, `CodexRolloutSource` and `ClaudeTranscriptSource` are new. `TranscriptSourceInfo` has only the session ID, the file and its size. The storage and HTTP contracts do not change. Check with `bun run schema:collector-scan`. |
+
+The new scenarios:
+
+```gherkin
+Feature: Scan with one scanner for the providers that it receives
+
+  Scenario: One scanner imports Codex and Claude Code chats
+    Given Codex chat "c1" records "Plan search" and Claude Code chat "h1" records "Use an index"
+    When I scan with one scanner for both providers
+    Then the workspace has "Plan search" for "codex/c1" and "Use an index" for "claude/h1"
+
+  Scenario: A scanner for Codex alone does not import Claude Code chats
+    Given Codex chat "c1" records "Plan search" and Claude Code chat "h1" records "Use an index"
+    When I scan with a scanner for Codex alone
+    Then the workspace has only "Plan search" for "codex/c1"
+
+  Scenario: A scanner for Claude Code alone does not import Codex chats
+    Given Codex chat "c1" records "Plan search" and Claude Code chat "h1" records "Use an index"
+    When I scan with a scanner for Claude Code alone
+    Then the workspace has only "Use an index" for "claude/h1"
+```
+
+Each provider decision of finding 3 moves behind the port. The generic algorithm stays in the engine.
+For example, the loop that imports an earlier copy stays in `LocalCollector`.
+
+| # | Provider decision | Port member | Codex | Claude Code |
+| --- | --- | --- | --- | --- |
+| 1 | Construct the providers | `LocalCollectorOptions.providers` | `LocalProviders.fromConfig` | `LocalProviders.fromConfig`, only when `claudePath !== undefined` |
+| 2 | Fork evidence and parser selection | `ProviderScan.parserFor`, and the state of the pass | `CodexScan` keeps the `CodexForkSources` of its latest discovery | `ClaudeSessionParser.forSource` |
+| 3 | File grouping | `ProviderScan.discoverFiles` | One source for each group, as soon as it is discovered | All the selected sessions of one file together |
+| 4 | Logical file name | `ProviderScan.logicalName`, optional | The rollout name without `.zst` | Absent |
+| 5 | Stream ID, path and location | `ProviderScan.locate` | Path: the logical name. Root-based stream ID: the JSON array of the root and the path | Path: relative to the root. Root-based stream ID: the absolute file |
+| 6 | Identity repair | `ProviderScan.repairIdentities`, optional | `CodexIdentityRepair` | Absent |
+| 7 | Earlier copies of an absent file | `ProviderScan.earlierCopies`, optional | Absent | `recoveryCandidates`, `assessClaudeCopies`, `unreadableCopy`, `ClaudeSourceCopy` |
+| 8 | A batch of an earlier copy | `ParserFormat.prepareBatch`, optional | Absent | The format of an earlier copy |
+| 9 | Provider fields of a source, and the record types that get a prefix digest | The source type of each provider, and `SelectedFile.isConversation` | `CodexRolloutSource`; `response_item` and `event_msg` | `ClaudeTranscriptSource`; `user` and `assistant` |
+| 10 | Provider fields of a checkpoint, and the correction of accepted usage | `ParserFormat.checkpointFields` and `ParserFormat.correction` | `codexFork` and `reconcileCodexForkFrom` | `claudeCallOrigins` and `backfillClaudeOriginsFrom` |
+
+The engine applies one generic rule for the stream ID. With an installation ID, the stream ID is the
+path of the location. Without one, it is the root-based stream ID of the provider.
+
+The rules for each move:
+
+- **No behavior change.** The scanner keeps the same sequence of file reads and storage calls, the same
+  batches and checkpoints, and the same errors and messages. A Codex source goes to the import as soon
+  as it is discovered.
+- **Move, do not rewrite.** A moved statement keeps its conditions and their order.
+- **Contract names stay.** The `Checkpoint` and `Batch` fields `codexFork`, `claudeCallOrigins`,
+  `reconcileCodexForkFrom` and `backfillClaudeOriginsFrom` keep their names. `scan/scan-recovery.ts`
+  continues to read these contract fields.
+- **New provider code is class members.** `providers/` is a cleaned directory. The top-level functions
+  that are in the `pending` files stay until step 4.
+
+The commits, each with all checks green and the output comparison of step 0:
+
+1. The constraints: this section, [scan.tsp](local-collector/scan.tsp) and the two dependency rules.
+2. The port and rows 2 to 8. `CodexHistory` and `ClaudeHistory` implement `ScanProvider`. The scanner
+   still builds its two providers, and it knows them only through the port.
+3. Row 1. `LocalCollector` takes one options object. `LocalProviders.fromConfig` gives objects that
+   implement both ports, and the command builds the reader and the scanner from that list. The tests
+   build a collector from a configuration with one fixture helper. The type `ScanProgress` moves to
+   `scan/`.
+4. Row 9. Each provider declares its own source type.
+5. Row 10. Each parser format has the provider rules for its checkpoints.
+
+The rows move before the options object. If the providers were injected first, the engine would need
+temporary provider branches and type casts for rows 2 to 8.
+
+Size: large. This step has the most risk. It changes `local-collector.ts`, `source-presence.ts`,
+`source-sightings.ts` and `transcript-cursor.ts`, about 950 lines. The scan scenarios, the 34 test
+files in `test/integration/scan` and the two in `test/integration/watch` cover it.
 
 ### Step 4. Functions to classes
 

@@ -67,6 +67,26 @@
       "to": { "path": "^apps/collector/src/config/" }
     },
     {
+      "name": "scan-engine-is-provider-neutral",
+      "comment": "The scanner and the schedule know a provider only through the ScanProvider port. pathNot names the files that step 3 has not yet changed. The rule applies to each other file now. Step 3 removes pathNot.",
+      "severity": "error",
+      "from": {
+        "path": "^apps/collector/src/(scan|watch)/",
+        "pathNot": "^apps/collector/src/scan/(local-collector|source-presence|source-sightings)\\.ts$"
+      },
+      "to": { "path": "^apps/collector/src/providers/" }
+    },
+    {
+      "name": "only-local-providers-names-both-providers",
+      "comment": "Outside providers/, a file gets the providers from providers/index.ts. pathNot names the files that step 3 has not yet changed. Step 3 removes pathNot.",
+      "severity": "error",
+      "from": {
+        "path": "^apps/collector/src/(?!providers/)",
+        "pathNot": "^apps/collector/src/scan/(local-collector|source-presence|source-sightings)\\.ts$"
+      },
+      "to": { "path": "^apps/collector/src/providers/(codex|claude)/" }
+    },
+    {
       "name": "scanner-uses-only-the-storage-port",
       "severity": "error",
       "from": { "path": "^apps/collector/src/(scan|watch|providers)/" },
