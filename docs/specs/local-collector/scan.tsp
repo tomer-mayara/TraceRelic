@@ -108,7 +108,9 @@ model ScannedEntry<Entry extends {}> {
   ...Entry;
   /** Inclusive byte position of this complete physical record. */
   startOffset: Count;
-  /** For conversation records, identifies this exact occurrence across verified file copies. */
+  /** For conversation records, identifies this exact occurrence across verified file copies.
+   * Each provider names its conversation records. Codex names response_item and event_msg.
+   * Claude Code names user and assistant. */
   recordPrefixDigest?: PrefixDigest;
   /** A native Codex session header can follow leading blank lines. */
   afterBlankPrefix?: true;
@@ -184,16 +186,23 @@ model ProviderCheckpointFields {
   ...PickProperties<Checkpoint, "codexFork" | "claudeCallOrigins">;
 }
 
+/** The batch fields that name the checkpoint that a correction replaces. A correction has one of them. */
+model CorrectionBatchFields {
+  ...PickProperties<Batch, "reconcileCodexForkFrom" | "backfillClaudeOriginsFrom">;
+}
+
 /** A provider's plan to classify the accepted usage again at the accepted byte.
  * The scanner reads the accepted bytes again and commits the corrected usage in one batch. */
 interface UsageCorrection {
   /** Optional. The parent session, when the provider knows it before the scanner reads the records. */
   parentSessionId(): Identifier;
-  /** Give the corrected checkpoint, or the parser that holds the accepted chat state.
-   * The scanner saves the state of that parser in the corrected checkpoint. */
-  accepted(): Checkpoint;
-  /** The batch field that names the replaced checkpoint: reconcileCodexForkFrom or backfillClaudeOriginsFrom. */
-  replaces(): Checkpoint;
+  /** Receives the saved parser state of the accepted checkpoint, if it has one, the parser that
+   * read the accepted bytes again, and the format of the source. Give the corrected checkpoint, or
+   * the parser that holds the accepted chat state. The scanner saves the state of that parser in
+   * the corrected checkpoint. */
+  accepted(saved: ParserCheckpointState | null, format: ParserFormat): Checkpoint;
+  /** The batch field that names the replaced checkpoint. */
+  batchFields(): CorrectionBatchFields;
 }
 
 /** The parser of one source. The provider owns the decoder state in ParserCheckpointState
@@ -207,8 +216,9 @@ interface ParserFormat {
    * Claude Code returns one when a checkpoint beyond byte zero has no claudeCallOrigins. */
   correction(accepted: Checkpoint): UsageCorrection | null;
   /** Only the format of a source that adds to the session of another file has this operation.
-   * An earlier Claude Code copy is such a source. Before the first batch that needs it, the
-   * scanner reads the stored session. Remove from the batch the fields that storage has.
+   * An earlier Claude Code copy is such a source. Before the first batch of that source, the
+   * scanner reads the stored session. The operation receives each decoded batch, the stored
+   * session and the accepted offset. Remove from the batch the fields that storage has.
    * Return false to skip the batch. */
   prepareBatch(known: SessionView | null, expectedOffset: Count): boolean;
 }
@@ -254,7 +264,7 @@ interface ProviderScan<Source extends TranscriptSourceInfo> {
   confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
   /** Optional. Check the identity of the acknowledged sources that this pass did not see.
    * Return the sources that the scan must select. */
-  repairIdentities(scope: SourceScope, known: AcknowledgedSource[], seen: Source[]): StreamKey[];
+  repairIdentities(storage: CollectorStorage, scope: SourceScope, known: AcknowledgedSource[], seen: Source[]): StreamKey[];
   /** Optional. Only a provider that keeps earlier copies of a file has this. */
   earlierCopies(): EarlierCopies<Source>;
 }
@@ -284,7 +294,7 @@ interface CodexScan extends ProviderScan<CodexRolloutSource> {
   confirmedAbsent(paths: Identifier[]): Identifier[];
   /** A filename only selects candidates. Both accepted checkpoints must match one sealed native capture.
    * A session-only scan may inspect the native ID at an old location without importing the other chat. */
-  repairIdentities(scope: SourceScope, known: AcknowledgedSource[], seen: CodexRolloutSource[]): StreamKey[];
+  repairIdentities(storage: CollectorStorage, scope: SourceScope, known: AcknowledgedSource[], seen: CodexRolloutSource[]): StreamKey[];
 }
 
 /** The Codex provider. It receives the Codex root directory. */

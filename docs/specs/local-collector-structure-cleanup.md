@@ -13,23 +13,26 @@ imports of the storage helpers that change name).
 
 ## Status
 
-Steps 0 and 1 are complete on 2026-11-22. Step 2 is complete on 2026-11-23. Step 3 has its
-constraints, and its code changes follow. The owner accepted the five recommendations in
-[Decisions for the owner](#decisions-for-the-owner). The sections after this one describe the code
-before step 1, at commit `21ab8a9`. They name each file by its path at that commit. The table in
+Steps 0 and 1 are complete on 2026-11-22. Steps 2 and 3 are complete on 2026-11-23. The owner accepted
+the five recommendations in [Decisions for the owner](#decisions-for-the-owner). The sections
+[Baseline](#baseline) and [Findings](#findings) describe the code before step 1, at commit `21ab8a9`.
+They name each file by its path at that commit. The table in
 [Where the current files go](#where-the-current-files-go) gives the path of each file after step 2.
+[The scanner](#the-scanner) and [step 3](#step-3-the-scanner-receives-its-providers) describe the port
+as it is after step 3.
 
-| Measure | Before | After step 1 | After step 2 |
-| --- | ---: | ---: | ---: |
-| Top-level functions in `history/` and `providers/` | 7 | 0 | 67 |
-| Top-level functions in all of `src/` | 265 | 262 | 258 |
-| Classes | 57 | 67 | 67 |
-| Node tests | 687 | 778 | 778 |
-| Collector scenarios | 47 | 49 | 49 |
+| Measure | Before | After step 1 | After step 2 | After step 3 |
+| --- | ---: | ---: | ---: | ---: |
+| Top-level functions in `history/` and `providers/` | 7 | 0 | 67 | 67 |
+| Top-level functions in all of `src/` | 265 | 262 | 258 | 256 |
+| Classes | 57 | 67 | 67 | 70 |
+| Node tests | 687 | 778 | 778 | 809 |
+| Collector scenarios | 47 | 49 | 49 | 52 |
 
 Step 2 changed no function. The 67 functions came into `providers/` with the parser files, and all of
 them are in the ten files of the `pending` list. Four functions left `src/` with the two shared leaf
-modules.
+modules. Step 3 moved two functions of `scan/` into provider classes. Its three new classes are
+`CodexScan`, `ClaudeScan` and `ClaudeEarlierCopies`.
 
 Results of step 1:
 
@@ -70,6 +73,83 @@ Results of step 2:
 - **Files with no change.** `knip.json` and `apps/api/component.yaml` name no moved path. No API
   source file changed.
 
+Results of step 3:
+
+- **The port.** [scan-provider.ts](../../apps/collector/src/scan/scan-provider.ts) has `ScanProvider`
+  and `ProviderScan`, the interface for one scan pass. `CodexHistory` and `ClaudeHistory` implement
+  `HistoryProvider` and `ScanProvider`. `CodexScan` and `ClaudeScan` are their pass classes.
+  `LocalCollector` receives one options object. `LocalProviders.fromConfig` gives the list of providers
+  for the reader and for the scanner.
+- **The ten provider decisions.** Each row of the table in
+  [step 3](#step-3-the-scanner-receives-its-providers) is behind the port. No row stayed in the engine.
+  `scan/` and `watch/` import nothing from `providers/`, and `scan/` does not test the name of a
+  harness. `scan/` imports only the storage port and the transcript layer. `scan/transcript-cursor.ts`
+  names no provider field.
+- **Output comparison.** After each of the four code commits, `scan --once` and `history` give the same
+  bytes as before step 3 on a new frozen sample. The sample has plain, compressed and archived Codex
+  rollouts, Codex sessions with a fork parent, and Claude Code transcripts with subagents. The
+  comparison ran 13 commands. Ten ran the source on Bun, and three ran the compiled files on Node.js.
+  For each command the standard output, the standard error and the exit code are the same. The
+  commands are:
+  - a full scan with an installation ID, and a full scan without one;
+  - a full history window, and a history window with fractional seconds;
+  - a scan with `--session`, and a scan with `--project`;
+  - a fork child alone, the fork child with its parent, and a fork child whose parent is not in the
+    sample;
+  - a scan with no Claude Code root.
+- **Trace comparison.** The CLI output does not show the sequence of the work. A second check recorded
+  each `open`, `stat` and `readdir` of a transcript path, and each storage call. For a storage call it
+  recorded a digest of the arguments and a digest of the result. It ran twelve scenarios before step 3
+  and after each code commit. Each trace is identical. The scenarios are:
+  - two scans with root-based stream IDs, and two scans with an installation ID;
+  - a fork child alone, then with its parent, which corrects the accepted usage of the fork;
+  - a project selection, then a session selection;
+  - checkpoints of an earlier collector that have no `codexFork` and no `claudeCallOrigins`, which
+    cause fork corrections and origin backfills;
+  - checkpoints that have no evidence version, which cause evidence repairs;
+  - a scanner for Codex alone, then a scanner for both providers on the same workspace;
+  - earlier copies of Claude Code transcripts when the current file is absent, with a copy that has
+    the same bytes, a longer copy and a shorter copy;
+  - a Codex fork child that gets a new inode during the scan, so that the scanner discovers that
+    file again;
+  - one collector that scans three times, and one collector that scans while files go away and
+    return.
+- **Review.** Two independent reviews compared the old statements with the new statements. One read
+  the commit of rows 2 to 8. The other read the commits of rows 9 and 10. They found no input of a
+  real scan that gives a different result. The second review asked for two changes to the port of
+  row 10, and that commit has them. A correction resumes through the format that it receives, as the
+  old lines did. A correction can add only a batch field that holds an earlier checkpoint.
+- **Checks.** On Node.js 26.13.1, these pass at each commit of step 3: the Node tests, lint, the
+  dependency rules, `check:collector-structure`, the three schemas, the collector scenarios, the API
+  and PostgreSQL scenarios, the shared logging checks, Knip and the Habit Hooks ESLint rules.
+- **Rules.** `scan-engine-is-provider-neutral` and `only-local-providers-names-both-providers` are on,
+  and they have no pending list. A test added eight forbidden imports and three top-level functions,
+  one at a time: in `scan/`, `watch/`, `commands/`, `cli.ts`, `transcript/` and three provider files.
+  Each of the eleven lines made its check fail.
+- **Changes for a TypeScript caller.**
+  - `new LocalCollector(config, storage, ...)` is now `new LocalCollector({ providers, storage, ... })`.
+  - A scanner for one provider is possible. Three scenarios in
+    [scan-providers.feature](../../apps/collector/test/acceptance/scan/scan-providers.feature) show it.
+  - `LocalProviders.fromConfig` gives objects that implement both ports. `CodexHistory` and
+    `ClaudeHistory` have a public `root` and `openScan`.
+  - A discovered Codex source has no `previousCopy`. The source types are `CodexRolloutSource` and
+    `ClaudeTranscriptSource`. `ClaudeSubagent` is an export of `./providers`, not of `./transcript`.
+  - `readBatches` gives a `recordPrefixDigest` only to the conversation records of its provider.
+    Before, it gave one to a record of each of the four types for each provider.
+  - `ParserFormat` has `checkpointFields` in place of `codexFork` and `claudeCallOrigins`.
+  - `SourceSightings.capture` receives the result of `locate`.
+- **Two differences that the scanner cannot reach.** The reviews found them, and no input of a real
+  scan gives them.
+  - `CodexScan.parserFor` throws an `Error` when no discovery ran before it. The old closure threw a
+    `TypeError` there. The scanner selects a parser only for a source that a discovery gave.
+  - A parser state that no collector can write can name a line after its checkpoint as the first
+    copy of a later message. If that line is a Codex record of type `user`, the old scanner added a
+    prefix digest for that line to `messageOrigins`, and the new scanner does not. A collector writes
+    only positions at or before its checkpoint, and it names only an `event_msg` record as such a
+    first copy.
+- **Files with no change.** The storage and HTTP contracts, `apps/collector/src/storage/`,
+  `apps/api/src/` and each golden text.
+
 The later steps must know these points:
 
 - **A restored parser can write different text.** A parser that resumes from a checkpoint does not
@@ -79,20 +159,45 @@ The later steps must know these points:
 - **Two block builders, two key orders.** Paginated Codex items build a text block as
   `{ blockIndex, text }`. Legacy Codex records build it as `{ text, blockIndex }`. The fallback message
   ID hashes the block, so step 4a must keep the two builders apart.
-- **Empty `claudePath`.** `LocalProviders.fromConfig` adds the Claude Code provider when `claudePath` is
-  defined. The scanner adds it when `claudePath` is not empty. `GlobalConfig` rejects an empty path, so
-  the two rules agree today. Step 3 must keep one rule.
-- **Eight imports from `scan/` to `providers/`.** `scan/local-collector.ts` imports the provider index,
-  `claude-session-parser.ts`, `claude-source-copy.ts`, `codex-fork-sources.ts` and
-  `codex-rollout-files.ts`. `scan/source-presence.ts` imports `claude-source-copy.ts` and
-  `codex-identity-repair.ts`. `scan/source-sightings.ts` imports `codex-rollout-files.ts`. Step 3
-  removes these imports.
-- **Imports from `providers/` to `scan/`.** Twelve parser files import six `scan/` files:
-  `parser-state.ts`, `decoded-chat.ts`, `transcript-cursor.ts`, `scan-recovery.ts`, `scan-pending.ts`
-  and `source-sightings.ts`. No rule forbids this direction.
-- **`scan/` and `watch/` import each other.** `scan/local-collector.ts` imports the type `ScanProgress`
-  from `watch/scan-activity.ts`. The two `watch/` files import five `scan/` files. Step 3 gives
-  `LocalCollector` a `progress` option and can move this type to `scan/`.
+- **Functions that step 3 left.** `scan/` has 25 top-level functions and `watch/` has 4. Step 4c has 42
+  functions now. `claude-source-copy.ts` is in the `pending` list. Its new class `ClaudeEarlierCopies`
+  calls the functions `assessClaudeCopies` and `unreadableCopy` of the same file, and they are not
+  exports now. Step 4b can make them members of that class.
+- **The pass classes.** `CodexScan` and `ClaudeScan` receive their history class as a narrow type: a
+  `Pick` of the methods that they call. In each provider directory the history file imports the pass
+  file, and the pass file imports the type of the history class.
+- **Methods that only a pass and the tests call.** `discoverSources`, `confirmedAbsent`, `identitiesAt`
+  and `recoveryCandidates` stay public on `CodexHistory` and `ClaudeHistory`. `readRollouts` and
+  `readTranscripts` are still the test-only methods of decision 2.
+- **The types of the port.** The members of `ScanProvider`, `ProviderScan`, `EarlierCopies` and
+  `ParserFormat` are methods. Thus a provider that has its own entry type and source type fits the
+  default type of the port. Keep them as methods. The compiler does not check three things that the
+  code does by construction. The scanner gives a pass only the sources that this pass discovered. The
+  scanner keeps each pass with its own presence scan. `locate` gives a location whose root is the root
+  of its provider.
+- **Contract fields that stay in `scan/`.** `scan/scan-recovery.ts` reads `codexFork` and
+  `claudeCallOrigins` of a checkpoint. `scan/decoded-chat.ts`, `scan/transcript-cursor.ts` and
+  `scan/local-collector.ts` name `claudeUsageReports`, `codexCallClaims` and `codexCallAliases`,
+  because they are fields of `Batch`. `scan/source-presence.ts` reads `currentFileCwd` of a
+  `SourceLocation`. These are fields of the storage contract, not provider decisions.
+- **Imports from `providers/` to `scan/`.** Sixteen provider files import seven `scan/` files:
+  `parser-state.ts`, `decoded-chat.ts`, `transcript-cursor.ts`, `scan-provider.ts`, `scan-recovery.ts`,
+  `scan-pending.ts` and `source-sightings.ts`. No rule forbids this direction.
+- **`watch/` imports `scan/`.** The two `watch/` files import six `scan/` files. `scan/` imports nothing
+  from `watch/`, because the type `ScanProgress` is in `scan/scan-progress.ts` now.
+- **The package export `./scan`.** It exports `LocalCollectorOptions` and the port types that a
+  provider needs: `ScanProvider`, `ProviderScan`, `LocatedSource`, `IdentityInventory`, `ParserFormat`,
+  `ProviderCheckpointFields`, `ReplacedCheckpointFields`, `UsageCorrection`, `SavedDecoder`,
+  `ChatParser` and `DecodedChat`. The mock provider and the tests import them through the package.
+  Knip does not see an import through `#src/…`.
+- **The command builds its providers one time.** Before step 3 the scanner built them for each scan
+  pass. Each pass still opens a new pass object. The history classes keep no state between passes.
+- **Test fixtures of step 3.** `ConfiguredCollector` builds a collector from a configuration.
+  `MockScanProvider` and `RecordingCollectorStorage` are the mock adapters for a unit test of the
+  engine. `ScanPassFixture` and `ProviderHistoryStub` are for a unit test of a pass class.
+- **The trace comparison is the check for step 4c.** Step 4c changes the engine again. Record each
+  file operation and each storage call on a frozen sample before the change and after it. The
+  scenarios in the results of step 3 reach the paths that the CLI output does not show.
 - **Shared leaf modules.** `recorded-instant.ts` and `claude-transcript-copy.ts` are in
   `packages/shared/src`, and `@tracerelic/shared` exports their six names. The structure rule applies
   only to `apps/collector/src`, so it does not see their four functions. Step 4 makes
@@ -106,11 +211,10 @@ The later steps must know these points:
   the source and the Node.js run of the compiled files do not give the same bytes. The content is the
   same, but the order of the sessions and of some messages is different. Compare the output of one
   runtime with the output of the same runtime.
-- **`ClaudeSubagent`** stays in `transcript/transcript-source.ts` until step 3 moves the provider fields.
 - **`JsonlRecords.isRecord`** is the plain-object check of the transcript layer. The `JsonRecord` class
   of step 4 takes it over.
-- **`SourceDiscovery`** in `transcript/source-discovery.ts` is new. It owns the selection by session and
-  project. The package has two new exports, `./providers` and `./transcript`.
+- **`SourceDiscovery`** in `transcript/source-discovery.ts` owns the selection by session and project.
+  The package has the exports `./providers` and `./transcript` from step 2.
 
 ## Baseline
 
@@ -246,6 +350,7 @@ apps/collector/src/
 │   ├── local-providers.ts     LocalProviders.fromConfig(config): the only file that names both providers
 │   ├── codex/                 all code that knows Codex files and records
 │   │   ├── codex-history.ts          CodexHistory: implements HistoryProvider and ScanProvider
+│   │   ├── codex-scan.ts             CodexScan: one scan pass, with the fork evidence of its latest discovery
 │   │   ├── codex-rollout-files.ts    sessions/, archived_sessions/, plain and .zst forms
 │   │   ├── codex-session-header.ts   session ID, working directory, fork parent
 │   │   ├── codex-session-parser.ts, codex-chat.ts, codex-visible-text.ts
@@ -253,6 +358,7 @@ apps/collector/src/
 │   │   └── codex-fork-*.ts, codex-identity-repair.ts, codex-rollout-copies.ts
 │   └── claude/                all code that knows Claude Code files and records
 │       ├── claude-history.ts         ClaudeHistory: implements HistoryProvider and ScanProvider
+│       ├── claude-scan.ts            ClaudeScan: one scan pass
 │       ├── claude-transcript-files.ts   projects/, subagents/, earlier copies
 │       ├── claude-session-identity.ts   native ID, subagent ID
 │       ├── claude-session-parser.ts, claude-chat.ts, claude-visible-text.ts
@@ -264,7 +370,8 @@ apps/collector/src/
 │   └── transcript-source.ts   TranscriptSource, RecordBatch, ReadPosition, ScanSelection
 ├── scan/                      provider-neutral import engine
 │   ├── local-collector.ts     LocalCollector: scanOnce, scanForChanges; receives providers and storage
-│   ├── scan-provider.ts       ScanProvider (port)
+│   ├── scan-provider.ts       ScanProvider and ProviderScan (port)
+│   ├── scan-progress.ts       ScanProgress: what the scanner tells the watch schedule
 │   ├── transcript-cursor.ts, parser-state.ts, replay-occurrences.ts, decoded-chat.ts
 │   ├── scan-recovery.ts, checkpoint-proof.ts, source-presence.ts, source-sightings.ts
 │   └── scan-pending.ts, scan-rejected.ts
@@ -634,7 +741,8 @@ Four bounded tasks. Each worker owns a set of files and each caller of what it r
 | 4c | `scan/`, `watch/`, `transcript/`, `commands/`, `cli.ts`, shared classes | 44 | |
 | 4d | `storage/`, and three API files that import the renamed helpers | 150 | `bun run check:collector-api`, `bun run check:collector-postgres` |
 
-These counts are the 262 functions that remain after step 1.
+These counts are the 262 functions that remain after step 1. Step 3 removed two functions of `scan/`, so
+task 4c has 42.
 
 Tasks 4a, 4b and 4d touch separate files and can run at the same time. Task 4c follows 4a and 4b,
 because it renames helpers that they call. Task 4d is the largest. The API replays each stored write
