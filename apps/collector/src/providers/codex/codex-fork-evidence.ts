@@ -156,7 +156,7 @@ class ForkCapture {
       live, fresh, ownerThread: report.ownerThread, ownCallOnly: !end && live && report.independent && !!report.last };
   }
 
-  static countsDisagree(left?: TokenCounts, right?: TokenCounts): boolean {
+  private static countsDisagree(left?: TokenCounts, right?: TokenCounts): boolean {
     return !!left && !!right && (!CodexTokenCounts.sameTotals(left, right)
       || breakdowns.some(key => left[key] !== undefined && right[key] !== undefined && left[key] !== right[key]));
   }
