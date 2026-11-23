@@ -1,17 +1,11 @@
 import { ClaudeTranscriptCopy, RecordedInstant, recordedPathDialect } from "@tracerelic/shared";
 import type { Batch, BranchObservation, Metadata, SourceLocation } from "./collector-storage.ts";
-import { isCount, isIdentifier, isRecord } from "./batch-values.ts";
+import { BatchValues } from "./batch-values.ts";
 
 const fields = ["cwd", "repository", "branch", "parentSessionId"] as const;
 type Field = typeof fields[number];
 type Observations = Partial<Record<Field, { value: string; version: number }>>;
 type Branch = { name: string; line: number; instant?: ReturnType<typeof RecordedInstant.parse> };
-
-export function hasValidMetadata(metadata: Metadata | undefined): boolean {
-  if (metadata === undefined) return true;
-  return isRecord(metadata) && fields.every(field => metadata[field] === undefined ||
-    (field === "parentSessionId" ? isIdentifier(metadata[field]) : typeof metadata[field] === "string"));
-}
 
 /** Keep the most recent observation for each field in each source generation. */
 export class SessionMetadata {
@@ -26,9 +20,15 @@ export class SessionMetadata {
     this.latestBranch = previous?.latestBranch;
   }
 
+  static isValid(metadata: Metadata | undefined): boolean {
+    if (metadata === undefined) return true;
+    return BatchValues.isRecord(metadata) && fields.every(field => metadata[field] === undefined ||
+      (field === "parentSessionId" ? BatchValues.isIdentifier(metadata[field]) : typeof metadata[field] === "string"));
+  }
+
   /** The original writes record which fallback fields the backup supplied, and when. Both the view and call ownership use these fields. */
   restoreBackupFields(batch: Batch, source: string, location?: SourceLocation): void {
-    if (!location || batch.source.harness !== "claude" || !hasValidMetadata(batch.metadata)) return;
+    if (!location || batch.source.harness !== "claude" || !SessionMetadata.isValid(batch.metadata)) return;
     const filename = recordedPathDialect(location.root)?.basename(location.path);
     if (!filename || !ClaudeTranscriptCopy.stem(filename)) return;
     const metadata: Metadata = { ...batch.metadata };
@@ -42,7 +42,7 @@ export class SessionMetadata {
   }
 
   static apply(previous: SessionMetadata | undefined, batch: Batch, source: string, version: number): SessionMetadata | null {
-    if (!hasValidMetadata(batch.metadata)) return null;
+    if (!SessionMetadata.isValid(batch.metadata)) return null;
     const repair = !!batch.repairEvidenceFrom;
     const observation = batch.branchObservation;
     const incoming = batch.metadata ?? {};
@@ -74,7 +74,7 @@ export class SessionMetadata {
   }
 
   private recordBranch(source: string, name: string | undefined, observation: BranchObservation): boolean {
-    if (!isRecord(observation) || !isCount(observation.sourceOrder) || !observation.sourceOrder || !name) return false;
+    if (!BatchValues.isRecord(observation) || !BatchValues.isCount(observation.sourceOrder) || !observation.sourceOrder || !name) return false;
     const instant = observation.at === undefined ? undefined : RecordedInstant.parse(observation.at);
     if (observation.at !== undefined && !instant) return false;
     if (observation.sourceOrder > (this.branches.get(source)?.line ?? 0)) {

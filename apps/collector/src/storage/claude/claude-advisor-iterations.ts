@@ -5,24 +5,6 @@ type Identity = Pick<ClaudeUsageReport, "messageId" | "requestId">;
 type Iteration = Identity & Pick<ClaudeUsageReport, "iterationId" | "iterationPosition">;
 type Request = { names: Map<string, string>; positions: Map<number, Set<string>>; ordinals: Map<string, Set<number>> };
 
-function key({ messageId, requestId }: Identity): string {
-  return JSON.stringify([messageId, requestId]);
-}
-
-function add<K, V>(map: Map<K, Set<V>>, k: K, value: V): void {
-  const values = map.get(k) ?? new Set<V>();
-  values.add(value);
-  map.set(k, values);
-}
-
-function position(report: Iteration): number | undefined {
-  if (report.iterationPosition !== undefined) return report.iterationPosition;
-  if (report.iterationId?.startsWith("index:")) {
-    const value = Number(report.iterationId.slice(6));
-    if (Number.isSafeInteger(value) && value >= 0) return value;
-  }
-}
-
 /** Join an ordinal to a provider iteration only within an unambiguous provider request. */
 export class ClaudeAdvisorIterations {
   readonly reports: OwnedReport[] = [];
@@ -32,18 +14,18 @@ export class ClaudeAdvisorIterations {
 
   constructor(rows: readonly OwnedReport[], published: readonly Usage[]) {
     for (const row of rows) if (row.messageId && row.requestId) {
-      add(this.pairs, key({ messageId: row.messageId }), key(row));
-      add(this.pairs, key({ requestId: row.requestId }), key(row));
+      ClaudeAdvisorIterations.add(this.pairs, ClaudeAdvisorIterations.key({ messageId: row.messageId }), ClaudeAdvisorIterations.key(row));
+      ClaudeAdvisorIterations.add(this.pairs, ClaudeAdvisorIterations.key({ requestId: row.requestId }), ClaudeAdvisorIterations.key(row));
     }
     for (const row of rows) {
       if (!row.iterationId) continue;
       const id = this.request(row);
       const request = this.requests.get(id) ?? { names: new Map(), positions: new Map(), ordinals: new Map() };
       this.requests.set(id, request);
-      const index = position(row);
+      const index = ClaudeAdvisorIterations.position(row);
       if (index !== undefined && row.iterationId.startsWith("native:")) {
-        add(request.positions, index, row.iterationId);
-        add(request.ordinals, row.iterationId, index);
+        ClaudeAdvisorIterations.add(request.positions, index, row.iterationId);
+        ClaudeAdvisorIterations.add(request.ordinals, row.iterationId, index);
       }
     }
     for (const row of published) this.name(row);
@@ -54,15 +36,33 @@ export class ClaudeAdvisorIterations {
     }
   }
 
+  private static key({ messageId, requestId }: Identity): string {
+    return JSON.stringify([messageId, requestId]);
+  }
+
+  private static add<K, V>(map: Map<K, Set<V>>, k: K, value: V): void {
+    const values = map.get(k) ?? new Set<V>();
+    values.add(value);
+    map.set(k, values);
+  }
+
+  private static position(report: Iteration): number | undefined {
+    if (report.iterationPosition !== undefined) return report.iterationPosition;
+    if (report.iterationId?.startsWith("index:")) {
+      const value = Number(report.iterationId.slice(6));
+      if (Number.isSafeInteger(value) && value >= 0) return value;
+    }
+  }
+
   private request(row: Identity): string {
-    const id = key(row), pairs = this.pairs.get(id);
+    const id = ClaudeAdvisorIterations.key(row), pairs = this.pairs.get(id);
     return pairs?.size === 1 ? [...pairs][0] : id;
   }
 
   private name(row: Iteration): string | null | undefined {
     const request = this.requests.get(this.request(row));
     const reported = row.iterationId;
-    const supplied = position(row);
+    const supplied = ClaudeAdvisorIterations.position(row);
     const ordinals = reported && request?.ordinals.get(reported);
     const index = supplied ?? (ordinals && ordinals.size === 1 ? [...ordinals][0] : undefined);
     const names = index === undefined ? undefined : request?.positions.get(index);

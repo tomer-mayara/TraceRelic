@@ -1,20 +1,8 @@
 import type { Batch, CodexCallAlias, SourceUsageDiagnostic, Usage } from "../collector-storage.ts";
-import { isByteRange, isCount, isIdentifier, isRecord, isTokenCounts } from "../batch-values.ts";
+import { BatchValues } from "../batch-values.ts";
 
 export type CodexUsageInput = Pick<Batch, "source" | "usage" | "usageAnchors" | "usageWindows" | "codexCallAliases">;
 type Witness = { call: string; diagnostic?: SourceUsageDiagnostic; closing?: CodexCallAlias["closing"] };
-
-export function validCodexAliases(batch: Batch): boolean {
-  const aliases = batch.codexCallAliases;
-  return aliases === undefined || (batch.source.harness === "codex" && Array.isArray(aliases)
-    && aliases.every(row => isRecord(row) && typeof row.callUsageId === "string" && /^call:native:[a-f0-9]{64}$/.test(row.callUsageId)
-      && typeof row.aliasUsageId === "string" && /^call:(?:native:)?[a-f0-9]{64}$/.test(row.aliasUsageId)
-      && (row.closing === undefined || (!row.aliasUsageId.startsWith("call:native:") && isTokenCounts(row.closing)
-        && (row.closing.turnId === undefined || isIdentifier(row.closing.turnId))
-        && (row.closing.responseId === undefined || isIdentifier(row.closing.responseId))))
-      && row.callUsageId !== row.aliasUsageId && (row.sourceOrder === undefined && row.byteRange === undefined ||
-        (isCount(row.sourceOrder) && row.sourceOrder > 0 && isByteRange(row.byteRange, batch.checkpoint.offset)))));
-}
 
 /** A request can identify a single call until a distinct native call proves that the request was shared. */
 export class CodexCallAliases {
@@ -36,6 +24,18 @@ export class CodexCallAliases {
       for (const row of input.usage) this.reserve(row);
       for (const window of input.usageWindows ?? []) for (const row of window.parts) this.reserve(row);
     }
+  }
+
+  static valid(batch: Batch): boolean {
+    const aliases = batch.codexCallAliases;
+    return aliases === undefined || (batch.source.harness === "codex" && Array.isArray(aliases)
+      && aliases.every(row => BatchValues.isRecord(row) && typeof row.callUsageId === "string" && /^call:native:[a-f0-9]{64}$/.test(row.callUsageId)
+        && typeof row.aliasUsageId === "string" && /^call:(?:native:)?[a-f0-9]{64}$/.test(row.aliasUsageId)
+        && (row.closing === undefined || (!row.aliasUsageId.startsWith("call:native:") && BatchValues.isTokenCounts(row.closing)
+          && (row.closing.turnId === undefined || BatchValues.isIdentifier(row.closing.turnId))
+          && (row.closing.responseId === undefined || BatchValues.isIdentifier(row.closing.responseId))))
+        && row.callUsageId !== row.aliasUsageId && (row.sourceOrder === undefined && row.byteRange === undefined ||
+          (BatchValues.isCount(row.sourceOrder) && row.sourceOrder > 0 && BatchValues.isByteRange(row.byteRange, batch.checkpoint.offset)))));
   }
 
   private addWitness(source: CodexUsageInput["source"], row: CodexCallAlias): void {

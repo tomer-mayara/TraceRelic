@@ -1,5 +1,5 @@
 import type { Batch, Harness, SourceUsageDiagnostic, UsageDiagnosticCode } from "./collector-storage.ts";
-import { isByteRange, isCount, isRecord } from "./batch-values.ts";
+import { BatchValues } from "./batch-values.ts";
 
 const rules: Record<UsageDiagnosticCode, { provider?: Harness; reportsGap?: true }> = {
   "invalid-claude-usage": { provider: "claude" },
@@ -37,13 +37,13 @@ export class SourceUsageDiagnostics {
     const { streamId, installationId, harness } = batch.source;
     let hasGap = false;
     for (const entry of incoming) {
-      if (!isRecord(entry) || !isCount(entry.sourceOrder) || entry.sourceOrder === 0) return null;
+      if (!BatchValues.isRecord(entry) || !BatchValues.isCount(entry.sourceOrder) || entry.sourceOrder === 0) return null;
       const { code, sourceOrder, byteRange } = entry;
       if (typeof code !== "string" || !Object.hasOwn(rules, code)) return null;
       const rule = rules[code];
       if (rule.provider && harness !== rule.provider) return null;
       if (rule.reportsGap || byteRange !== undefined) {
-        if (!isByteRange(byteRange, batch.checkpoint.offset)) return null;
+        if (!BatchValues.isByteRange(byteRange, batch.checkpoint.offset)) return null;
       }
       // Workspace ownership supplies the current status, including parent evidence from other installations.
       if (code === "unresolved-claude-fork") continue;

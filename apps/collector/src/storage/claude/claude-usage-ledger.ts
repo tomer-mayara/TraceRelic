@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { ClaudeReportEvidence } from "./claude-report-evidence.ts";
 import type { ClaudeUsageReport, Usage } from "../collector-storage.ts";
-import { isClaudeUsageReport, isIdentifier } from "../batch-values.ts";
+import { BatchValues } from "../batch-values.ts";
 
 type Identity = Pick<ClaudeUsageReport, "messageId" | "requestId">;
 type Iterations = Map<string, ClaudeReportEvidence>;
@@ -16,31 +16,6 @@ interface Slot {
   order: number;
   revision: number;
   measurement?: Usage;
-}
-
-function key(messageId?: string, requestId?: string): string {
-  return JSON.stringify([messageId, requestId]);
-}
-
-function singleIds({ messageId, requestId }: Identity): string[] {
-  return [key(messageId), key(undefined, requestId)];
-}
-
-function firstSlot(sessionId: string, groups: ClaudeReportEvidence[]): Slot {
-  const earliest = groups.reduce((a, b) => a.order < b.order ? a : b);
-  const { at, messageId, requestId, iterationId } = earliest.first;
-  const id = "claude:" + JSON.stringify([sessionId, messageId, requestId, iterationId]);
-  return { id, at, order: earliest.order, revision: 0 };
-}
-
-function accept(slot: Slot, winner: ClaudeUsageReport, owner: Identity): Slot {
-  const { id, at, revision } = slot;
-  const measurement: Usage = { ...winner, id, at, revision, kind: "call" };
-  if (owner.messageId) measurement.messageId = owner.messageId;
-  if (owner.requestId) measurement.requestId = owner.requestId;
-  if (isDeepStrictEqual(slot.measurement, measurement)) return slot;
-  measurement.revision++;
-  return { ...slot, measurement, revision: measurement.revision };
 }
 
 export class ClaudeUsageLedger {
@@ -65,6 +40,31 @@ export class ClaudeUsageLedger {
     this.measurements = slots.sort((a, b) => a.order - b.order).flatMap(slot => slot.measurement ? [slot.measurement] : []);
   }
 
+  private static key(messageId?: string, requestId?: string): string {
+    return JSON.stringify([messageId, requestId]);
+  }
+
+  private static singleIds({ messageId, requestId }: Identity): string[] {
+    return [ClaudeUsageLedger.key(messageId), ClaudeUsageLedger.key(undefined, requestId)];
+  }
+
+  private static firstSlot(sessionId: string, groups: ClaudeReportEvidence[]): Slot {
+    const earliest = groups.reduce((a, b) => a.order < b.order ? a : b);
+    const { at, messageId, requestId, iterationId } = earliest.first;
+    const id = "claude:" + JSON.stringify([sessionId, messageId, requestId, iterationId]);
+    return { id, at, order: earliest.order, revision: 0 };
+  }
+
+  private static accept(slot: Slot, winner: ClaudeUsageReport, owner: Identity): Slot {
+    const { id, at, revision } = slot;
+    const measurement: Usage = { ...winner, id, at, revision, kind: "call" };
+    if (owner.messageId) measurement.messageId = owner.messageId;
+    if (owner.requestId) measurement.requestId = owner.requestId;
+    if (isDeepStrictEqual(slot.measurement, measurement)) return slot;
+    measurement.revision++;
+    return { ...slot, measurement, revision: measurement.revision };
+  }
+
   get hasGap(): boolean {
     return this.gap;
   }
@@ -75,8 +75,8 @@ export class ClaudeUsageLedger {
   }
 
   static merge(previous: ClaudeUsageLedger | undefined, reports: readonly ClaudeUsageReport[], sessionId: string): ClaudeUsageLedger | null {
-    if (!isIdentifier(sessionId) || !Array.isArray(reports)) return null;
-    for (const report of reports) if (!isClaudeUsageReport(report)) return null;
+    if (!BatchValues.isIdentifier(sessionId) || !Array.isArray(reports)) return null;
+    for (const report of reports) if (!BatchValues.isClaudeUsageReport(report)) return null;
     return this.fromValidatedReports(previous, reports, sessionId);
   }
 
@@ -87,7 +87,7 @@ export class ClaudeUsageLedger {
 
   private observe(report: ClaudeUsageReport, sessionId: string): void {
     const { messageId, requestId } = report;
-    const identity = key(messageId, requestId);
+    const identity = ClaudeUsageLedger.key(messageId, requestId);
     const iteration = report.iterationId ?? "";
     const old = this.reports.get(identity);
     const previous = old?.iterations.get(iteration);
@@ -98,7 +98,7 @@ export class ClaudeUsageLedger {
     const group = { messageId, requestId, iterations };
     this.reports.set(identity, group);
     if (messageId && requestId && !old) {
-      for (const alias of singleIds(group)) this.indexPair(alias, identity, sessionId);
+      for (const alias of ClaudeUsageLedger.singleIds(group)) this.indexPair(alias, identity, sessionId);
       this.refresh(identity, sessionId);
       return;
     }
@@ -137,7 +137,7 @@ export class ClaudeUsageLedger {
   private contributors(identity: string, owner: RequestReports): RequestReports[] {
     const groups = [owner];
     if (owner.messageId && owner.requestId) {
-      for (const alias of singleIds(owner)) {
+      for (const alias of ClaudeUsageLedger.singleIds(owner)) {
         const single = this.reports.get(alias);
         if (single && this.pairs.get(alias) === identity) groups.push(single);
       }
@@ -159,11 +159,11 @@ export class ClaudeUsageLedger {
         if (slot) slots.set(iteration, { ...slot, measurement: undefined });
         continue;
       }
-      const saved = slot ?? firstSlot(sessionId, evidence);
+      const saved = slot ?? ClaudeUsageLedger.firstSlot(sessionId, evidence);
       this.ids.add(saved.id);
       const winner = ClaudeReportEvidence.select(evidence);
       if (!winner) this.gap = true;
-      slots.set(iteration, winner ? accept(saved, winner, owner) : { ...saved, measurement: undefined });
+      slots.set(iteration, winner ? ClaudeUsageLedger.accept(saved, winner, owner) : { ...saved, measurement: undefined });
     }
     this.slots.set(identity, slots);
   }

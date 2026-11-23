@@ -6,22 +6,14 @@ import {
   type CheckpointSnapshot, type CollectorStorage, type CommitResult, type Coverage, type MissingSource, type PresenceWrite,
   type SessionKey, type SessionView, type SourceScope, type SourceUsageDiagnostic, type StreamKey, type Usage,
 } from "./collector-storage.ts";
-import { checkpointFailure } from "./checkpoint-transition.ts";
+import { CheckpointTransition } from "./checkpoint-transition.ts";
 import { ClaudeCallOwners } from "./claude/claude-call-owners.ts";
 import { CodexCallOwners } from "./codex/codex-call-owners.ts";
-import { codexSourceIdentity } from "./codex/codex-source-identity.ts";
-import { mergeMeasurements, type StoredUsage, type UsageWrite } from "./session-usage.ts";
+import { CodexSourceIdentity } from "./codex/codex-source-identity.ts";
+import { SessionUsage, type StoredUsage, type UsageWrite } from "./session-usage.ts";
 import { StoredSource } from "./source-inventory.ts";
 import { SourceUsageDiagnostics } from "./source-usage-diagnostics.ts";
-import { isCount, isIdentifier, isRecord } from "./batch-values.ts";
-
-function hasValidPosition(write: Pick<Batch, "source" | "expectedVersion" | "expectedOffset">): boolean {
-  const source = write?.source;
-  return isRecord(source) && (source.harness === "codex" || source.harness === "claude")
-    && isIdentifier(source.sessionId) && isIdentifier(source.streamId)
-    && (source.installationId === undefined || isIdentifier(source.installationId))
-    && isCount(write.expectedVersion) && isCount(write.expectedOffset);
-}
+import { BatchValues } from "./batch-values.ts";
 
 interface StoredSession {
   version: number;
@@ -35,44 +27,6 @@ interface StoredSession {
   hasGap: boolean;
 }
 
-function coverage(records: number, hasGap: boolean): Coverage {
-  if (records === 0) return "unknown";
-  return hasGap ? "partial" : "reported";
-}
-
-function totalTokens(usage: readonly Usage[]): number {
-  return usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
-}
-
-function mergeSessionRecords(
-  previous: StoredSession | undefined, batch: Batch, stream: string, source: StoredSource,
-): Omit<StoredSession, "version" | "checkpoints"> | null {
-  if (!Array.isArray(batch.messages)) return null;
-  const { generation, lc17Evidence } = source;
-  const messages = SessionMessages.apply(previous?.messages, batch, stream, generation);
-  const measurements = mergeMeasurements(previous, batch, stream, generation);
-  const sourceEvidence = new Map(previous?.sourceEvidence);
-  const key = JSON.stringify([stream, generation]);
-  const metadata = SessionMetadata.apply(previous?.metadata, batch, key, batch.expectedVersion + 1);
-  let prior = batch.repairEvidenceFrom ? undefined : sourceEvidence.get(key);
-  if (!lc17Evidence && batch.reconcileCodexForkFrom && prior?.diagnostics?.some(row => row.code === "unresolved-codex-fork")) {
-    const remaining = prior.diagnostics.filter(row => row.code !== "unresolved-codex-fork");
-    prior = { diagnostics: remaining, hasGap: prior.hasGap && remaining.length > 0 };
-  }
-  const diagnostics = SourceUsageDiagnostics.merge(prior?.diagnostics, batch);
-  if (!messages || !measurements || !metadata || !diagnostics) return null;
-  const { usage, stored } = measurements;
-  sourceEvidence.set(key, { hasGap: prior?.hasGap === true || batch.hasGap === true || diagnostics.hasGap, diagnostics: diagnostics.values });
-  const hasGap = measurements.hasGap || [...sourceEvidence.values()].some(value => value.hasGap);
-  const values = SourceUsageDiagnostics.combine([...sourceEvidence.values()].flatMap(value => value.diagnostics ?? []),
-    [...stored.ambiguous?.values() ?? []].filter((row): row is SourceUsageDiagnostic => row !== undefined));
-  const view = {
-    key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata: metadata.fields, usage,
-    ...(values?.length && { usageDiagnostics: values }),
-  };
-  return { view, messages, measurements: stored, metadata, hasGap, usageWrites: measurements.history, sourceEvidence };
-}
-
 /** A write can advance the session that supplied the data and another session that owns a call. */
 export interface SessionRevision extends SessionKey { version: number }
 
@@ -81,6 +35,52 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   private readonly aliases = new Map<string, string>();
   private readonly codexOwners = new CodexCallOwners();
   private claudeOwners = new ClaudeCallOwners();
+
+  private static hasValidPosition(write: Pick<Batch, "source" | "expectedVersion" | "expectedOffset">): boolean {
+    const source = write?.source;
+    return BatchValues.isRecord(source) && (source.harness === "codex" || source.harness === "claude")
+      && BatchValues.isIdentifier(source.sessionId) && BatchValues.isIdentifier(source.streamId)
+      && (source.installationId === undefined || BatchValues.isIdentifier(source.installationId))
+      && BatchValues.isCount(write.expectedVersion) && BatchValues.isCount(write.expectedOffset);
+  }
+
+  private static coverage(records: number, hasGap: boolean): Coverage {
+    if (records === 0) return "unknown";
+    return hasGap ? "partial" : "reported";
+  }
+
+  private static totalTokens(usage: readonly Usage[]): number {
+    return usage.reduce((sum, record) => sum + record.inputTokens + record.outputTokens, 0);
+  }
+
+  private static mergeSessionRecords(
+    previous: StoredSession | undefined, batch: Batch, stream: string, source: StoredSource,
+  ): Omit<StoredSession, "version" | "checkpoints"> | null {
+    if (!Array.isArray(batch.messages)) return null;
+    const { generation, lc17Evidence } = source;
+    const messages = SessionMessages.apply(previous?.messages, batch, stream, generation);
+    const measurements = SessionUsage.apply(previous, batch, stream, generation);
+    const sourceEvidence = new Map(previous?.sourceEvidence);
+    const key = JSON.stringify([stream, generation]);
+    const metadata = SessionMetadata.apply(previous?.metadata, batch, key, batch.expectedVersion + 1);
+    let prior = batch.repairEvidenceFrom ? undefined : sourceEvidence.get(key);
+    if (!lc17Evidence && batch.reconcileCodexForkFrom && prior?.diagnostics?.some(row => row.code === "unresolved-codex-fork")) {
+      const remaining = prior.diagnostics.filter(row => row.code !== "unresolved-codex-fork");
+      prior = { diagnostics: remaining, hasGap: prior.hasGap && remaining.length > 0 };
+    }
+    const diagnostics = SourceUsageDiagnostics.merge(prior?.diagnostics, batch);
+    if (!messages || !measurements || !metadata || !diagnostics) return null;
+    const { usage, stored } = measurements;
+    sourceEvidence.set(key, { hasGap: prior?.hasGap === true || batch.hasGap === true || diagnostics.hasGap, diagnostics: diagnostics.values });
+    const hasGap = measurements.hasGap || [...sourceEvidence.values()].some(value => value.hasGap);
+    const values = SourceUsageDiagnostics.combine([...sourceEvidence.values()].flatMap(value => value.diagnostics ?? []),
+      [...stored.ambiguous?.values() ?? []].filter((row): row is SourceUsageDiagnostic => row !== undefined));
+    const view = {
+      key: { harness: batch.source.harness, sessionId: batch.source.sessionId }, metadata: metadata.fields, usage,
+      ...(values?.length && { usageDiagnostics: values }),
+    };
+    return { view, messages, measurements: stored, metadata, hasGap, usageWrites: measurements.history, sourceEvidence };
+  }
 
   async canonicalSource(source: StreamKey) { return this.aliases.get(StreamKeys.stream(source)); }
 
@@ -118,7 +118,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const { checkpoint, source } = candidate;
     const remove: Batch = { source, expectedVersion: session.version, expectedOffset: checkpoint.offset,
       checkpoint, repairEvidenceFrom: checkpoint, messages: [], usage: [] };
-    const records = mergeSessionRecords(session, remove, StreamKeys.stream(source), candidate);
+    const records = InMemoryCollectorStorage.mergeSessionRecords(session, remove, StreamKeys.stream(source), candidate);
     if (!records || records.hasGap !== session.hasGap || !isDeepStrictEqual(records.view, session.view)
         || !isDeepStrictEqual(records.messages.ordered(), session.messages.ordered())) return;
     if (source.harness === "claude") {
@@ -172,7 +172,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   }
 
   async recordPresence(update: PresenceWrite, changed?: SessionRevision[], lc17Journal = false): Promise<CommitResult> {
-    if (!hasValidPosition(update)) return "invalid";
+    if (!InMemoryCollectorStorage.hasValidPosition(update)) return "invalid";
     const alias = this.aliases.get(StreamKeys.stream(update.source));
     if (alias !== undefined) return this.recordPresence({ ...update, source: { ...update.source, streamId: alias } }, changed, lc17Journal);
     const key = StreamKeys.session(update.source);
@@ -181,14 +181,14 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const current = session?.checkpoints.get(stream);
     if (!current || !session) return "invalid";
     if (session.version !== update.expectedVersion || current.checkpoint.offset !== update.expectedOffset) return "conflict";
-    const repair = codexSourceIdentity(update, { file: current, messages: session.messages, stream, version: session.version },
+    const repair = CodexSourceIdentity.correction(update, { file: current, messages: session.messages, stream, version: session.version },
       source => this.messageSource(source));
     if (typeof repair === "string") return repair;
     const next = current.record(update, repair.status, lc17Journal);
     if (!next) return "invalid";
     if (next === current) return "committed";
     const version = session.version + 1;
-    if (!isCount(version) || (repair.advancePeer && !this.advancePeers(update.source, new Set([repair.advancePeer]), changed))) return "invalid";
+    if (!BatchValues.isCount(version) || (repair.advancePeer && !this.advancePeers(update.source, new Set([repair.advancePeer]), changed))) return "invalid";
     const checkpoints = new Map(session.checkpoints).set(stream, next);
     this.saveSession(key, { ...session, version, checkpoints, messages: repair.messages ?? session.messages }, changed);
     return "committed";
@@ -230,7 +230,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
       if (missing) missingSources.push(missing);
     }
     return structuredClone({ ...stored.view, usage, messages: stored.messages.ordered(),
-      coverage: coverage(usage.length, partial), observedTotalTokens: usage.length ? totalTokens(usage) : null,
+      coverage: InMemoryCollectorStorage.coverage(usage.length, partial), observedTotalTokens: usage.length ? InMemoryCollectorStorage.totalTokens(usage) : null,
       ...((diagnostics.length || historyDiagnostics.length) && {
         usageDiagnostics: SourceUsageDiagnostics.combine(stored.view.usageDiagnostics ?? [], diagnostics, historyDiagnostics),
       }),
@@ -259,7 +259,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
       const key = StreamKeys.session({ harness: source.harness, sessionId: id });
       const stored = this.sessions.get(key);
       if (!stored) continue;
-      if (!isCount(stored.version + 1) || (validUsage && !validUsage(stored))) return false;
+      if (!BatchValues.isCount(stored.version + 1) || (validUsage && !validUsage(stored))) return false;
       peers.set(key, { ...stored, version: stored.version + 1 });
     }
     for (const [key, updated] of peers) this.saveSession(key, updated, changed);
@@ -273,13 +273,13 @@ export class InMemoryCollectorStorage implements CollectorStorage {
       if (!staged) return false;
       const validUsage = (session: StoredSession) => {
         const projected = staged.owners.view(session.view.key.sessionId, session.view.usage, session.measurements.order);
-        return !projected.conflictingUsageId && isCount(totalTokens(projected.usage));
+        return !projected.conflictingUsageId && BatchValues.isCount(InMemoryCollectorStorage.totalTokens(projected.usage));
       };
       if (!validUsage(next) || !this.advancePeers(batch.source, staged.changedSessions, changed, validUsage)) return false;
       this.claudeOwners = staged.owners;
       return true;
     }
-    if (!isCount(totalTokens(next.view.usage))) return false;
+    if (!BatchValues.isCount(InMemoryCollectorStorage.totalTokens(next.view.usage))) return false;
     const newProof = batch.checkpoint.codexFork?.inheritedThrough !== undefined &&
       !isDeepStrictEqual(batch.checkpoint.codexFork, current?.codexFork);
     const ownership = this.codexOwners.prepare(batch, next.view.usage, id => this.verifiedParent(id, next), newProof, source);
@@ -291,7 +291,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
   }
 
   async commit(batch: Batch, changed?: SessionRevision[], lc17Journal = false): Promise<CommitResult> {
-    if (!hasValidPosition(batch)) return "invalid";
+    if (!InMemoryCollectorStorage.hasValidPosition(batch)) return "invalid";
     const alias = this.aliases.get(StreamKeys.stream(batch.source));
     if (alias !== undefined) return this.commit({ ...batch, source: { ...batch.source, streamId: alias } }, changed, lc17Journal);
     const { source, expectedVersion, expectedOffset } = batch;
@@ -303,8 +303,8 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     const current = previous?.checkpoints.get(stream);
     if (expectedVersion !== currentVersion || expectedOffset !== (current?.checkpoint.offset ?? 0)) return "conflict";
     const version = currentVersion + 1;
-    if (!isCount(version)) return "invalid";
-    const failure = checkpointFailure(batch, current?.checkpoint);
+    if (!BatchValues.isCount(version)) return "invalid";
+    const failure = new CheckpointTransition(batch, current?.checkpoint).failure();
     if (failure) return failure;
     const incoming = structuredClone(batch);
     // A rewritten file can describe the same counters through a different set of reports.
@@ -314,7 +314,7 @@ export class InMemoryCollectorStorage implements CollectorStorage {
     if (incoming.repairEvidenceFrom) {
       previous?.metadata.restoreBackupFields(incoming, JSON.stringify([stream, generation]), accepted.selected(undefined, version)?.location);
     }
-    const records = mergeSessionRecords(previous, incoming, stream, accepted);
+    const records = InMemoryCollectorStorage.mergeSessionRecords(previous, incoming, stream, accepted);
     if (!records) return "invalid";
     const checkpoints = new Map(previous?.checkpoints);
     checkpoints.set(stream, accepted);

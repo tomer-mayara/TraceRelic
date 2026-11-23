@@ -1,6 +1,6 @@
 import type { Batch, ClaudeCallOrigin, ClaudeUsageReport, StreamKey, Usage } from "../collector-storage.ts";
 import type { SourceGeneration } from "../source-inventory.ts";
-import { isByteRange } from "../batch-values.ts";
+import { BatchValues } from "../batch-values.ts";
 
 export type ClaudeIdentity = Pick<ClaudeUsageReport, "messageId" | "requestId" | "iterationId">;
 export type LocatedOrigin = ClaudeCallOrigin & Pick<StreamKey, "streamId" | "installationId">;
@@ -17,60 +17,6 @@ export interface NativeCall extends ClaudeIdentity {
   readonly key: string;
   readonly origins: LocatedOrigin[];
   requestOwnsIterations: boolean;
-}
-
-function identity({ messageId, requestId, iterationId }: ClaudeIdentity): string {
-  return JSON.stringify([messageId, requestId, iterationId]);
-}
-
-function groupKey(report: ClaudeUsageReport, origin: LocatedOrigin | undefined, ordinal: string): string {
-  // Only a full pair can group observations before attribution. Two genuine requests can share one provider ID.
-  if (report.messageId && report.requestId) return identity(report);
-  return JSON.stringify([identity(report), origin?.transcriptUuid ?? ordinal]);
-}
-
-function originKey(row: ClaudeCallOrigin): string {
-  return JSON.stringify([row.kind, row.parentSessionId, row.parentMessageUuid, row.transcriptUuid,
-    row.sourceOrder, row.byteRange.startOffset, row.byteRange.endOffset]);
-}
-
-function collect(records: Map<string, Observation>, incoming: ClaudeUsageReport, source: StreamKey, generation: string, lc17: boolean): boolean {
-  const { origin: native, ...data } = incoming;
-  const reportKey = JSON.stringify([data.at, data.messageId, data.requestId, data.iterationId, data.status, data.inputTokens, data.outputTokens,
-    data.cacheReadTokens, data.cacheWriteTokens, data.cacheWrite5mTokens, data.cacheWrite1hTokens, data.reasoningTokens, data.turnId, data.model,
-    data.iterationPosition]);
-  const sourceKey = lc17 ? JSON.stringify([source.streamId, source.installationId]) : generation;
-  const unlocated = JSON.stringify([sourceKey, reportKey]);
-  const first = records.get(unlocated);
-  let key = unlocated;
-  let origin: LocatedOrigin | undefined;
-  if (native) {
-    origin = { ...native, byteRange: { ...native.byteRange }, streamId: source.streamId, installationId: source.installationId };
-    if (first?.origin) {
-      const position = originKey(native);
-      if (originKey(first.origin) === position) return false;
-      key = JSON.stringify([unlocated, position]);
-      if (records.has(key)) return false;
-    }
-  } else if (first) {
-    return false;
-  }
-  // Upgrade the first unlocated observation in place to keep its original position across installations.
-  records.set(key, { report: data, origin, callKey: groupKey(data, origin, key), generation, lc17 });
-  return true;
-}
-
-function originalIn(groups: ReadonlySet<NativeCall>, call: ClaudeIdentity): NativeCall | null {
-  let result: NativeCall | undefined;
-  for (const candidate of groups) {
-    const agrees = call.messageId && candidate.messageId ? call.messageId === candidate.messageId
-      : !!call.requestId && call.requestId === candidate.requestId;
-    if (!agrees) return null;
-    if (result && ((result.messageId && candidate.messageId && result.messageId !== candidate.messageId)
-      || (result.requestId && candidate.requestId && result.requestId !== candidate.requestId))) return null;
-    if (!result || (candidate.messageId && candidate.requestId)) result = candidate;
-  }
-  return result ?? null;
 }
 
 /** Preserve row identity even when the local numbers are disputed or a single-ID report is ambiguous. */
@@ -102,6 +48,60 @@ export class ClaudeOriginReports {
     }
   }
 
+  private static identity({ messageId, requestId, iterationId }: ClaudeIdentity): string {
+    return JSON.stringify([messageId, requestId, iterationId]);
+  }
+
+  private static groupKey(report: ClaudeUsageReport, origin: LocatedOrigin | undefined, ordinal: string): string {
+    // Only a full pair can group observations before attribution. Two genuine requests can share one provider ID.
+    if (report.messageId && report.requestId) return ClaudeOriginReports.identity(report);
+    return JSON.stringify([ClaudeOriginReports.identity(report), origin?.transcriptUuid ?? ordinal]);
+  }
+
+  private static originKey(row: ClaudeCallOrigin): string {
+    return JSON.stringify([row.kind, row.parentSessionId, row.parentMessageUuid, row.transcriptUuid,
+      row.sourceOrder, row.byteRange.startOffset, row.byteRange.endOffset]);
+  }
+
+  private static collect(records: Map<string, Observation>, incoming: ClaudeUsageReport, source: StreamKey, generation: string, lc17: boolean): boolean {
+    const { origin: native, ...data } = incoming;
+    const reportKey = JSON.stringify([data.at, data.messageId, data.requestId, data.iterationId, data.status, data.inputTokens, data.outputTokens,
+      data.cacheReadTokens, data.cacheWriteTokens, data.cacheWrite5mTokens, data.cacheWrite1hTokens, data.reasoningTokens, data.turnId, data.model,
+      data.iterationPosition]);
+    const sourceKey = lc17 ? JSON.stringify([source.streamId, source.installationId]) : generation;
+    const unlocated = JSON.stringify([sourceKey, reportKey]);
+    const first = records.get(unlocated);
+    let key = unlocated;
+    let origin: LocatedOrigin | undefined;
+    if (native) {
+      origin = { ...native, byteRange: { ...native.byteRange }, streamId: source.streamId, installationId: source.installationId };
+      if (first?.origin) {
+        const position = ClaudeOriginReports.originKey(native);
+        if (ClaudeOriginReports.originKey(first.origin) === position) return false;
+        key = JSON.stringify([unlocated, position]);
+        if (records.has(key)) return false;
+      }
+    } else if (first) {
+      return false;
+    }
+    // Upgrade the first unlocated observation in place to keep its original position across installations.
+    records.set(key, { report: data, origin, callKey: ClaudeOriginReports.groupKey(data, origin, key), generation, lc17 });
+    return true;
+  }
+
+  private static originalIn(groups: ReadonlySet<NativeCall>, call: ClaudeIdentity): NativeCall | null {
+    let result: NativeCall | undefined;
+    for (const candidate of groups) {
+      const agrees = call.messageId && candidate.messageId ? call.messageId === candidate.messageId
+        : !!call.requestId && call.requestId === candidate.requestId;
+      if (!agrees) return null;
+      if (result && ((result.messageId && candidate.messageId && result.messageId !== candidate.messageId)
+        || (result.requestId && candidate.requestId && result.requestId !== candidate.requestId))) return null;
+      if (!result || (candidate.messageId && candidate.requestId)) result = candidate;
+    }
+    return result ?? null;
+  }
+
   get rows() { return this.observations.values(); }
 
   private retains(usage: readonly Usage[], location: string, parentSessionId?: string): boolean {
@@ -126,9 +126,9 @@ export class ClaudeOriginReports {
     let observed = false;
     for (const report of reports) {
       const { origin } = report;
-      if (origin && !isByteRange(origin.byteRange, batch.checkpoint.offset)) return null;
+      if (origin && !BatchValues.isByteRange(origin.byteRange, batch.checkpoint.offset)) return null;
       if (origin?.parentSessionId) parents.add(origin.parentSessionId);
-      if (collect(records, report, batch.source, location, source.lc17Evidence)) observed = true;
+      if (ClaudeOriginReports.collect(records, report, batch.source, location, source.lc17Evidence)) observed = true;
     }
     if (unchanged && !observed && parents.size === (origins.get(location)?.size ?? 0)) return previous;
     origins.set(location, parents);
@@ -150,8 +150,8 @@ export class ClaudeOriginReports {
     const uuid = row?.parentMessageUuid ?? row?.transcriptUuid;
     if (uuid) {
       const originals = this.uuids.get(JSON.stringify([uuid, call.iterationId]));
-      if (originals) return originalIn(originals, call);
+      if (originals) return ClaudeOriginReports.originalIn(originals, call);
     }
-    if (call.messageId && call.requestId) return this.calls.get(identity(call));
+    if (call.messageId && call.requestId) return this.calls.get(ClaudeOriginReports.identity(call));
   }
 }
