@@ -8,10 +8,6 @@ const files = [
   "packages/shared/src/recorded-instant.ts",
 ];
 
-// The files that step 4 of the cleanup has not cleaned. The rule does not apply to them.
-// Each task of step 4 removes its names. The list goes away at the end of step 4.
-const pending = [];
-
 const message =
   "Put this function in the class that owns the rule. See docs/specs/local-collector-structure-cleanup.md.";
 
@@ -29,10 +25,6 @@ export default [
   {
     files: files.map((file) => `**/${file}`),
     languageOptions: { parser: tsparser },
-  },
-  {
-    files: files.map((file) => `**/${file}`),
-    ignores: pending.map((file) => `**/${file}`),
     rules: {
       "no-restricted-syntax": ["error", ...topLevelFunctions],
     },

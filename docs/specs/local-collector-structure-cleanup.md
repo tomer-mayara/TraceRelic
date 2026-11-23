@@ -13,26 +13,29 @@ imports of the storage helpers that change name).
 
 ## Status
 
-Steps 0 and 1 are complete on 2026-11-22. Steps 2 and 3 are complete on 2026-11-23. The owner accepted
-the five recommendations in [Decisions for the owner](#decisions-for-the-owner). The sections
-[Baseline](#baseline) and [Findings](#findings) describe the code before step 1, at commit `21ab8a9`.
-They name each file by its path at that commit. The table in
-[Where the current files go](#where-the-current-files-go) gives the path of each file after step 2.
-[The scanner](#the-scanner) and [step 3](#step-3-the-scanner-receives-its-providers) describe the port
-as it is after step 3.
+Steps 0 and 1 are complete on 2026-11-22. Steps 2, 3 and 4 are complete on 2026-11-23. Step 5 is not
+started. The owner accepted the five recommendations in
+[Decisions for the owner](#decisions-for-the-owner). The sections [Baseline](#baseline) and
+[Findings](#findings) describe the code before step 1, at commit `21ab8a9`. They name each file by its
+path at that commit. The table in [Where the current files go](#where-the-current-files-go) gives the
+path of each file after step 2. [The scanner](#the-scanner) and
+[step 3](#step-3-the-scanner-receives-its-providers) describe the port as it is after step 3. The tables
+in [step 4](#step-4-functions-to-classes) give the class of each function.
 
-| Measure | Before | After step 1 | After step 2 | After step 3 |
-| --- | ---: | ---: | ---: | ---: |
-| Top-level functions in `history/` and `providers/` | 7 | 0 | 67 | 67 |
-| Top-level functions in all of `src/` | 265 | 262 | 258 | 256 |
-| Classes | 57 | 67 | 67 | 70 |
-| Node tests | 687 | 778 | 778 | 809 |
-| Collector scenarios | 47 | 49 | 49 | 52 |
+| Measure | Before | After step 1 | After step 2 | After step 3 | After step 4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Top-level functions in `history/` and `providers/` | 7 | 0 | 67 | 67 | 0 |
+| Top-level functions in all of `src/` | 265 | 262 | 258 | 256 | 0 |
+| Classes | 57 | 67 | 67 | 70 | 92 |
+| Node tests | 687 | 778 | 778 | 809 | 809 |
+| Collector scenarios | 47 | 49 | 49 | 52 | 52 |
 
 Step 2 changed no function. The 67 functions came into `providers/` with the parser files, and all of
 them are in the ten files of the `pending` list. Four functions left `src/` with the two shared leaf
 modules. Step 3 moved two functions of `scan/` into provider classes. Its three new classes are
-`CodexScan`, `ClaudeScan` and `ClaudeEarlierCopies`.
+`CodexScan`, `ClaudeScan` and `ClaudeEarlierCopies`. Step 4 made each of the 256 functions of `src/` and
+the 4 functions of the two shared leaf modules a member of a class. It made 22 classes in `src/` and 2
+classes in `packages/shared`. It added no test and no scenario, because no behavior changed.
 
 Results of step 1:
 
@@ -150,19 +153,108 @@ Results of step 3:
 - **Files with no change.** The storage and HTTP contracts, `apps/collector/src/storage/`,
   `apps/api/src/` and each golden text.
 
+Results of step 4:
+
+- **The conversion.** No top-level function remains in `apps/collector/src` or in the two shared leaf
+  modules. The five tasks converted 43, 46, 12, 26 and 133 functions. The tables in
+  [step 4](#step-4-functions-to-classes) give the class of each function. A helper that needs no
+  instance is a static method, and a caller names it through its class. The 260 functions are 254
+  methods, because twelve copies became six methods of `JsonRecord` and `StreamKeys`. Of the 254
+  methods, 165 are private and 8 are instance methods.
+- **Statement comparison.** A script read each function before step 4 and its method after step 4. It
+  replaced each old name with the new name and compared the tokens. Of the 260 bodies, 246 have the same
+  tokens and the same signature. One more has the same tokens, and its signature has the types that
+  came from a type alias before: `TranscriptDirectories.listDirectory`. The other 13 are these:
+  - Six copies that `JsonRecord` replaced had a different form of the same rule: three `object`
+    functions, two `identifier` functions and `isObject`. Each copy gives the same result as its method
+    for each input that a caller can give.
+  - The six decisions of `CheckpointTransition` start with one new statement,
+    `const { batch, current } = this;`. The other tokens of each body are the same.
+  - `ClaudeEarlierCopies.assess` calls `this.unreadable` in place of the function `unreadableCopy`.
+- **Members and tests.** The script also compared the 678 class members of the code before step 4. 672
+  have the same tokens apart from the new names. `JsonlRecords.isRecord` went away. The other five
+  changed as the plan says. Two default parameters have a written type. `ClaudeEarlierCopies.assess`
+  and `ClaudeEarlierCopies.unreadable` have the bodies of the functions that they called.
+  `InMemoryCollectorStorage.commit` calls `new CheckpointTransition(batch, current).failure()`. Eight
+  test and fixture files changed, and only in the name through which they get a helper. No assertion
+  changed.
+- **Output comparison.** After each of the six code commits, `scan --once` and `history` give the same
+  bytes as before step 4, on the frozen sample of step 3. The comparison ran the 13 commands of step 3.
+  For each command the standard output, the standard error and the exit code are the same.
+- **Trace comparison.** After each of the six code commits, the trace of each `open`, `stat` and
+  `readdir` of a transcript path and of each storage call is identical to the trace before step 4. The
+  comparison ran the twelve scenarios of step 3.
+- **Review.** Five independent reviews, one for each task, compared the old statements with the new
+  statements. Each reviewer read the commit of a different worker. They found no behavior difference.
+  The review of task 4a found that one helper of `ForkCapture` could be private. The sixth code commit
+  makes it private.
+- **Checks.** On Node.js 26.13.1, these pass at each commit of step 4: the Node tests, lint, the
+  dependency rules, `check:collector-structure`, the three schemas, the collector scenarios, the API and
+  PostgreSQL scenarios, the shared logging checks, Knip, jscpd and Habit Hooks.
+- **Rules.** The structure rule applies to all of `apps/collector/src` and to the two shared leaf
+  modules, and it has no `pending` list. After each task, a test added one top-level function to a
+  file that the task cleaned, one file at a time: 58 files in all. At the end it did the same for one
+  file in each of the 14 directories of `src/` and for each shared file. Each function made
+  `bun run check:collector-structure` fail. A function in `packages/shared/src/recorded-path.ts` did
+  not, because the rule does not apply to that file.
+- **One difference in the compiled CLI.** Each logger call is in `cli.ts`, on the same line as before:
+  22, 27, 34 and 45. In the compiled `dist/cli.js`, each call is one line lower, because the class
+  `CollectorCli` has its own first line. A diagnostic of `node apps/collector/dist/cli.js` without
+  source maps shows that line in its prefix. The tests accept each line number.
+- **Changes for a TypeScript caller.** No `.tsp` file changed. The exported functions became members
+  of exported classes:
+  - `@tracerelic/shared`: `RecordedInstant` (`isTimestamp`, `parse`, `compare`) replaces
+    `isHistoryTimestamp`, `recordedInstant` and `compareRecordedInstants`. `ClaudeTranscriptCopy`
+    (`stem`, `fallbackFields`) replaces `claudeCopyStem` and `claudeCopyFallbackFields`.
+  - `@tracerelic/collector/storage`: `LegacyScannerSource` (`location`, `stream`, `line`,
+    `needsHistoryVerification`, `historyDiagnostic`) and `SourceScopes.matches` replace six functions.
+    `StreamKeys` is new.
+  - `@tracerelic/collector/wire-contract`: `PackedBatches` (`pack`, `unpack`, `digest`, `stateBytes`,
+    `fitsWireRecords`, `decodeBase64`) replaces six functions, and `LegacyScannerSource` replaces
+    `legacyScannerLocation` and `legacyScannerStream`.
+  - `cli.ts`: `CollectorCli.run` replaces `runCollectorCli`.
+  - Internal modules that a test or another module imports by path: `ParserState`, `CheckpointProof`,
+    `ScanRecovery.read`, `ReplayOccurrences` with the type `ReplayBounds`, `ScanRejectedError.batch`,
+    `ScheduledScanner.checkedIntervalMs`, `TranscriptDirectories.listDirectory`, `JsonRecord`,
+    `CodexTokenCounts`, `CodexCallContext`, `CodexUsageReport`, `BatchValues`, `CheckpointTransition`,
+    `SessionUsage.apply`, `SessionMetadata.isValid`, `UsageWindows.isWindow`, `ObservedCounterSpans`,
+    `CodexSourceIdentity.correction` and `CodexCallAliases.valid`.
+- **Files with no change.** Each `.tsp` file, each golden text, the dependency rules, the PR workflow,
+  `knip.json` and the component manifests.
+
 The later steps must know these points:
 
 - **A restored parser can write different text.** A parser that resumes from a checkpoint does not
   always give the same key order as one continuous scan. Five cases are known. The parser tests pin
   each case as it is, and three tests have the name "known restore difference, kept as it is". The
   cleanup must keep this behavior. A change to it is a separate decision.
-- **Two block builders, two key orders.** Paginated Codex items build a text block as
-  `{ blockIndex, text }`. Legacy Codex records build it as `{ text, blockIndex }`. The fallback message
-  ID hashes the block, so step 4a must keep the two builders apart.
-- **Functions that step 3 left.** `scan/` has 25 top-level functions and `watch/` has 4. Step 4c has 42
-  functions now. `claude-source-copy.ts` is in the `pending` list. Its new class `ClaudeEarlierCopies`
-  calls the functions `assessClaudeCopies` and `unreadableCopy` of the same file, and they are not
-  exports now. Step 4b can make them members of that class.
+- **Two block builders, two key orders.** `CodexVisibleText.completedBlocks` builds a text block of a
+  paginated Codex item as `{ blockIndex, text }`. `CodexVisibleText.blocks` builds a text block of a
+  legacy Codex record as `{ text, blockIndex }`. The fallback message ID hashes the block, so the two
+  builders must stay apart. `ClaudeVisibleText.blocks` builds `{ blockIndex, text }`.
+- **A static method that is used as a value must not use `this`.** These methods go to `map`, `filter`,
+  `every`, `some`, `Array.from` or a default parameter without a receiver:
+  `TranscriptDirectories.listDirectory`, `CollectorCli.configuredStorage`,
+  `CommandArguments.projectPath`, `CodexChat.statePosition`, `CodexUsage.validCallId`,
+  `CodexUsage.restoreCall`, `CodexUsage.savedCall`, `BatchValues.isUsage`,
+  `BatchValues.isNativeCodexCall` and `UsageIntervals.unidentifiedTokens`. A caller names a static
+  helper through its class, also inside the class.
+- **Rules that stay separate.** Step 4 merged two copies only if they give the same result for each
+  input. These pairs look alike, and each one stays two rules:
+  - `StreamKeys.stream` and `StreamKeys.sourceId` give different text for a source that has no
+    installation ID.
+  - `ForkCapture.later` and the comparison in `SessionMetadata.selectBranch` are not
+    `RecordedInstant.compare`. They give a different result for a second that is not a number.
+  - `ClaudeUsage.text` ignores a string of spaces. `JsonRecord.identifier` accepts it.
+  - `ClaudeChat.read` applies its rule for a real message to user records and assistant records.
+    `ClaudeAssistantRecord.message` is the rule of the usage parser for an assistant record.
+  - `ObservedCounterSpans.compare` and `UsageIntervals.position` have the same statement. Two uses do
+    not make a shared rule.
+  - The list of token breakdown fields is in `codex-token-counts.ts` and in `usage-intervals.ts`. A
+    provider file cannot import a storage file other than the port, and `storage/` cannot import a
+    provider file.
+- **The logger calls of `cli.ts`.** The log prefix shows the file and the line of a logger call. The
+  four calls are on lines 22, 27, 34 and 45 of `cli.ts`. A change that moves them changes the prefix.
 - **The pass classes.** `CodexScan` and `ClaudeScan` receive their history class as a narrow type: a
   `Pick` of the methods that they call. In each provider directory the history file imports the pass
   file, and the pass file imports the type of the history class.
@@ -175,16 +267,18 @@ The later steps must know these points:
   code does by construction. The scanner gives a pass only the sources that this pass discovered. The
   scanner keeps each pass with its own presence scan. `locate` gives a location whose root is the root
   of its provider.
-- **Contract fields that stay in `scan/`.** `scan/scan-recovery.ts` reads `codexFork` and
+- **Contract fields that stay in `scan/`.** `scan/checkpoint-proof.ts` reads `codexFork` and
   `claudeCallOrigins` of a checkpoint. `scan/decoded-chat.ts`, `scan/transcript-cursor.ts` and
   `scan/local-collector.ts` name `claudeUsageReports`, `codexCallClaims` and `codexCallAliases`,
   because they are fields of `Batch`. `scan/source-presence.ts` reads `currentFileCwd` of a
   `SourceLocation`. These are fields of the storage contract, not provider decisions.
-- **Imports from `providers/` to `scan/`.** Sixteen provider files import seven `scan/` files:
+- **Imports from `providers/` to `scan/`.** Sixteen provider files import eight `scan/` files:
   `parser-state.ts`, `decoded-chat.ts`, `transcript-cursor.ts`, `scan-provider.ts`, `scan-recovery.ts`,
-  `scan-pending.ts` and `source-sightings.ts`. No rule forbids this direction.
-- **`watch/` imports `scan/`.** The two `watch/` files import six `scan/` files. `scan/` imports nothing
-  from `watch/`, because the type `ScanProgress` is in `scan/scan-progress.ts` now.
+  `checkpoint-proof.ts`, `scan-pending.ts` and `source-sightings.ts`. No rule forbids this direction.
+- **`watch/` imports `scan/`.** The two `watch/` files import six `scan/` files: `checkpoint-proof.ts`,
+  `parser-state.ts`, `scan-pending.ts`, `scan-progress.ts`, `scan-recovery.ts` and `scan-rejected.ts`.
+  `scan/` imports nothing from `watch/`, because the type `ScanProgress` is in `scan/scan-progress.ts`
+  now.
 - **The package export `./scan`.** It exports `LocalCollectorOptions` and the port types that a
   provider needs: `ScanProvider`, `ProviderScan`, `LocatedSource`, `IdentityInventory`, `ParserFormat`,
   `ProviderCheckpointFields`, `ReplacedCheckpointFields`, `UsageCorrection`, `SavedDecoder`,
@@ -195,15 +289,23 @@ The later steps must know these points:
 - **Test fixtures of step 3.** `ConfiguredCollector` builds a collector from a configuration.
   `MockScanProvider` and `RecordingCollectorStorage` are the mock adapters for a unit test of the
   engine. `ScanPassFixture` and `ProviderHistoryStub` are for a unit test of a pass class.
-- **The trace comparison is the check for step 4c.** Step 4c changes the engine again. Record each
-  file operation and each storage call on a frozen sample before the change and after it. The
-  scenarios in the results of step 3 reach the paths that the CLI output does not show.
+- **The trace comparison is the check for a change to the engine or to storage.** Record each file
+  operation and each storage call on a frozen sample before the change and after it. The scenarios in
+  the results of step 3 reach the paths that the CLI output does not show.
 - **Shared leaf modules.** `recorded-instant.ts` and `claude-transcript-copy.ts` are in
-  `packages/shared/src`, and `@tracerelic/shared` exports their six names. The structure rule applies
-  only to `apps/collector/src`, so it does not see their four functions. Step 4 makes
-  `RecordedInstant` and `ClaudeTranscriptCopy` and must extend the rule to these two files. Bun and
-  Node.js load `@tracerelic/shared` from `packages/shared/dist`. Run `bun run build` after a change to
-  the shared package and before `bun run collector`.
+  `packages/shared/src`. `@tracerelic/shared` exports the classes `RecordedInstant` and
+  `ClaudeTranscriptCopy` and the constant `isRecordedTimestamp`. The structure rule applies to these
+  two files. It does not apply to `recorded-path.ts`, which has two functions. Bun and Node.js load
+  `@tracerelic/shared` from `packages/shared/dist`. Run `bun run build` after a change to the shared
+  package and before `bun run collector`.
+- **The structure rule is complete.** It applies to all of `apps/collector/src`, so item 3 of the first
+  version of step 5 is done. The rule does not apply to `apps/api/src`, which has top-level functions.
+- **Two functions that the rule does not see.** The rule sees a function that is a top-level
+  declaration or the value of a top-level variable. The object `systemClock` in
+  `watch/scheduled-scanner.ts` implements `ScanClock` with two arrow functions, and the rule does not
+  see them. They are not in the 260 functions of step 4, and they are the only functions of
+  `apps/collector/src` that are not in a class. `isRecordedTimestamp` and `isGlobalConfigFile` are
+  constants that hold a compiled validator.
 - **Stale test names.** `local-llm-history-codex.test.ts`, `local-llm-history-claude.test.ts` and
   `transcript-replay.test.ts` keep the names of files that no longer exist. Step 5 can give them new
   names.
@@ -211,8 +313,9 @@ The later steps must know these points:
   the source and the Node.js run of the compiled files do not give the same bytes. The content is the
   same, but the order of the sessions and of some messages is different. Compare the output of one
   runtime with the output of the same runtime.
-- **`JsonlRecords.isRecord`** is the plain-object check of the transcript layer. The `JsonRecord` class
-  of step 4 takes it over.
+- **`JsonRecord`** in `transcript/json-record.ts` has the plain-object, string and count checks of the
+  readers and the parsers. `BatchValues` has the checks of storage, because `storage/` imports no other
+  collector directory.
 - **`SourceDiscovery`** in `transcript/source-discovery.ts` owns the selection by session and project.
   The package has the exports `./providers` and `./transcript` from step 2.
 
@@ -362,10 +465,11 @@ apps/collector/src/
 │       ├── claude-transcript-files.ts   projects/, subagents/, earlier copies
 │       ├── claude-session-identity.ts   native ID, subagent ID
 │       ├── claude-session-parser.ts, claude-chat.ts, claude-visible-text.ts
-│       └── claude-usage.ts, claude-usage-counts.ts, claude-source-copy.ts
+│       └── claude-usage.ts, claude-usage-counts.ts, claude-assistant-record.ts, claude-source-copy.ts
 ├── transcript/                provider-neutral file reading
 │   ├── captured-transcript-file.ts, transcript-directories.ts
 │   ├── jsonl-records.ts       JsonlRecords: complete lines to JSON objects
+│   ├── json-record.ts         JsonRecord: the checks on one decoded JSON value
 │   ├── transcript-batches.ts  TranscriptBatches: byte-bounded batches with prefix digests
 │   └── transcript-source.ts   TranscriptSource, RecordBatch, ReadPosition, ScanSelection
 ├── scan/                      provider-neutral import engine
@@ -382,9 +486,9 @@ apps/collector/src/
     ├── in-memory-collector-storage.ts, checkpoint-transition.ts, batch-values.ts
     ├── session-messages.ts, session-metadata.ts, session-usage.ts
     ├── source-inventory.ts, source-usage-diagnostics.ts
-    ├── http/                  HttpCollectorStorage, CollectorWireContract, PackedBatch
+    ├── http/                  HttpCollectorStorage, CollectorWireContract, PackedBatches
     ├── claude/                usage ledger, call owners, origin reports, advisor iterations
-    └── codex/                 call aliases, call owners, source identity, usage windows
+    └── codex/                 call aliases, call owners, source identity, usage windows, usage intervals
 ```
 
 ### The date reader
@@ -598,7 +702,7 @@ the rule applies to all of `providers/` again.
 Step 4 changes the form of the rule in its first commit. The rule has no `cleaned` list. It applies to
 all of `apps/collector/src` and to the two shared leaf modules, and the `pending` list names each
 file that step 4 has not cleaned. `bun run check:collector-structure` reads `apps/collector/src` and
-`packages/shared/src`.
+`packages/shared/src`. At the end of step 4 the rule has no `pending` list.
 
 ## Steps
 
@@ -699,7 +803,7 @@ For example, the loop that imports an earlier copy stays in `LocalCollector`.
 | 4 | Logical file name | `ProviderScan.logicalName`, optional | The rollout name without `.zst` | Absent |
 | 5 | Stream ID, path and location | `ProviderScan.locate` | Path: the logical name. Root-based stream ID: the JSON array of the root and the path | Path: relative to the root. Root-based stream ID: the absolute file |
 | 6 | Identity repair | `ProviderScan.repairIdentities`, optional | `CodexIdentityRepair` | Absent |
-| 7 | Earlier copies of an absent file | `ProviderScan.earlierCopies`, optional | Absent | `recoveryCandidates`, `assessClaudeCopies`, `unreadableCopy`, `ClaudeSourceCopy` |
+| 7 | Earlier copies of an absent file | `ProviderScan.earlierCopies`, optional | Absent | `recoveryCandidates`, `ClaudeEarlierCopies`, `ClaudeSourceCopy` |
 | 8 | A batch of an earlier copy | `ParserFormat.prepareBatch`, optional | Absent | The format of an earlier copy |
 | 9 | Provider fields of a source, and the record types that get a prefix digest | The source type of each provider, and `SelectedFile.isConversation` | `CodexRolloutSource`; `response_item` and `event_msg` | `ClaudeTranscriptSource`; `user` and `assistant` |
 | 10 | Provider fields of a checkpoint, and the correction of accepted usage | `ParserFormat.checkpointFields` and `ParserFormat.correction` | `codexFork` and `reconcileCodexForkFrom` | `claudeCallOrigins` and `backfillClaudeOriginsFrom` |
@@ -905,8 +1009,10 @@ The checks for each code commit:
 1. Tests import public classes through the package exports and internal classes through `#src/…`.
    Remove the relative `../src` imports. Fix the Knip resolution of `#src/…`.
 2. Remove the four test-only methods from production code (decision 2).
-3. Apply the ESLint rule to all of `apps/collector/src`.
-4. Update the README, the specification links and both component manifests.
+3. Update the README, the specification links and both component manifests.
+
+Step 4 applied the ESLint rule to all of `apps/collector/src`, so that item of the first version of
+this list is done.
 
 ## Risks
 
