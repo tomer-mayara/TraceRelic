@@ -2,11 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { appendFile, open, readFile, utimes, writeFile } from "node:fs/promises";
 import { test } from "node:test";
-import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryClaude, LocalLLMHistoryCodex } from "@tracerelic/collector/history";
+import { ClaudeHistory, CodexHistory } from "@tracerelic/collector/providers";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
-import { CapturedTranscriptFile } from "#src/history/captured-transcript-file";
+import { CapturedTranscriptFile } from "#src/transcript/captured-transcript-file";
 
 test("a genuine append during discovery and again during batching keeps the selected bytes and avoids rereading them per batch", async t => {
   const root = await Rollout.create();
@@ -19,7 +18,7 @@ test("a genuine append during discovery and again during batching keeps the sele
   });
   assert.equal(file.fileSize, before.length);
   assert.equal(await file.completeEnd(), before.length);
-  const source = (await Array.fromAsync(new LocalLLMHistoryCodex(new GlobalConfig(root.home)).discoverSources()))[0];
+  const source = (await Array.fromAsync(new CodexHistory(root.home).discoverSources()))[0];
   const batches = source.readBatches({ offset: 0, lineNumber: 0 }, 1)[Symbol.asyncIterator]();
   const first = await batches.next();
   assert(!first.done);
@@ -39,7 +38,7 @@ test("a provisional batch must match the seal even if an overlapping rewrite res
   t.after(() => root.close());
   const path = await root.write([Rollout.header("one"), { text: "first" }]);
   const bytes = await readFile(path, "utf8");
-  const [source] = await Array.fromAsync(new LocalLLMHistoryCodex(new GlobalConfig(root.home)).discoverSources());
+  const [source] = await Array.fromAsync(new CodexHistory(root.home).discoverSources());
   const handle = await open(path, "r");
   t.after(() => handle.close());
   const prototype = Object.getPrototypeOf(handle) as typeof handle;
@@ -62,7 +61,7 @@ test("a growing in-place replacement cannot change the selected header or a capt
   const path = await root.write([Rollout.header("one"), { text: "retained" }, { text: "suffix" }]);
   const before = await readFile(path);
   const changed = (part: string, next: string) => before.toString().replace(part, next) + "extra bytes\n";
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(root.home));
+  const reader = new CodexHistory(root.home);
   const [captured] = await Array.fromAsync(reader.discoverSources({ sessionIds: ["one"] }));
   await writeFile(path, changed('"one"', '"two"'));
   await assert.rejects(Array.fromAsync(captured.readBatches({ offset: 0, lineNumber: 0 })), { name: "TranscriptChangedError" });
@@ -94,7 +93,7 @@ test("verifies several positions in one pass and resumes each session from the v
   const bytes = Buffer.concat([complete, Buffer.from('{"unfinished":')]);
   const path = await fixture.write("project", "both", []);
   await writeFile(path, bytes);
-  const reader = new LocalLLMHistoryClaude(new GlobalConfig("/codex", fixture.home));
+  const reader = new ClaudeHistory(fixture.home);
   const [first, second] = await Array.fromAsync(reader.discoverSources());
   assert.deepEqual([first.sessionId, second.sessionId], ["first", "second"]);
   const throughFirst = rows[0].length;
@@ -133,7 +132,7 @@ test("a same-size edit invalidates a captured prefix even when the tail is ident
   const after = [{ text: "new" }, before[1]];
   const path = await fixture.write([header, ...before]);
   await utimes(path, new Date(0), new Date(0));
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const reader = new CodexHistory(fixture.home);
   const [original] = await Array.fromAsync(reader.discoverSources());
   const [oldPrefix] = await original.prefixDigests([original.fileSize]);
   await fixture.write([header, ...after]);

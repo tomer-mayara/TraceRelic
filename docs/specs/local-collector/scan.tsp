@@ -130,7 +130,8 @@ interface SourceBatches<Entry extends {}> {
   readBatches(position: ReadPosition, maxBatchBytes?: SourceOrder, endOffset?: Count): RecordBatch<Entry>[];
 }
 
-interface LocalLLMHistoryCodex extends LocalLLMHistory {
+/** The Codex provider. It receives the Codex root directory. */
+interface CodexHistory extends HistoryProvider {
   /** Check rollout basenames in the active and archive directories of an accessible root. */
   confirmedAbsent(paths: Identifier[]): Identifier[];
   discoverSources(selection?: ScanSelection): TranscriptSourceInfo[];
@@ -138,15 +139,16 @@ interface LocalLLMHistoryCodex extends LocalLLMHistory {
   readRollouts(selection?: ScanSelection): CodexRollout[];
 }
 
-interface LocalLLMHistoryClaude extends LocalLLMHistory {
+/** The Claude Code provider. It receives the Claude Code root directory.
+ * A collector with no Claude Code root has no Claude Code provider. */
+interface ClaudeHistory extends HistoryProvider {
   /** Ignore a backup's current-name alias only when its identity or accepted prefix has been disproved. */
   confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
   /** Identify every readable session in backups of the acknowledged relative paths. */
   recoveryCandidates(paths: Identifier[]): ClaudeRecoveryCandidate[];
   discoverSources(selection?: ScanSelection): TranscriptSourceInfo[];
   /** Yield complete records grouped by file and effective session ID.
-   * Include earlier copies of a selected file for the same session.
-   * An omitted Claude root yields no transcripts. */
+   * Include earlier copies of a selected file for the same session. */
   readTranscripts(selection?: ScanSelection): ClaudeTranscript[];
 }
 

@@ -1,8 +1,8 @@
 import type { GlobalConfig } from "../config/global-config.ts";
 import { claudeCopyFallbackFields } from "../claude-transcript-copy.ts";
-import {
-  LocalLLMHistoryClaude, LocalLLMHistoryCodex, TranscriptChangedError, codexRolloutName, type ClaudeTranscriptEntry, type CodexRolloutEntry, type ScanSelection, type TranscriptSource,
-} from "../history/index.ts";
+import { CodexRolloutFiles } from "../providers/codex/codex-rollout-files.ts";
+import { ClaudeHistory, CodexHistory, type ClaudeTranscriptEntry, type CodexRolloutEntry } from "../providers/index.ts";
+import { TranscriptChangedError, type ScanSelection, type TranscriptSource } from "../transcript/index.ts";
 import {
   StorageAuthenticationError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
   type Harness, type MissingSource, type SessionView, type StreamKey,
@@ -81,7 +81,7 @@ async function* files<Entry>(harness: Harness, transcripts: AsyncIterable<Transc
 async function scanFiles<Entry>(
   presence: SourcePresenceScan<Entry>, discover: Discover<Entry>, importFile: (group: TranscriptSource<Entry>[]) => Promise<void>,
 ): Promise<ScanPendingError[]> {
-  const logical = (path: string) => presence.scope.harness === "codex" ? codexRolloutName(path) : path;
+  const logical = (path: string) => presence.scope.harness === "codex" ? CodexRolloutFiles.logicalName(path) : path;
   const retry = new Map<string, string>();
   const affected = new Map<string, StreamKey>();
   const failed = new Map<string, string>();
@@ -131,10 +131,10 @@ export class LocalCollector {
 
   private async scan(selection: ScanSelection, returnViews: boolean): Promise<SessionView[]> {
     const { codexPath, claudePath, installationId } = this.config;
-    const codex = new LocalLLMHistoryCodex(this.config);
-    const claude = new LocalLLMHistoryClaude(this.config);
+    const codex = new CodexHistory(codexPath);
+    const claude = claudePath ? new ClaudeHistory(claudePath) : undefined;
     const codexPresence = new SourcePresenceScan<CodexRolloutEntry>({ ...selection, harness: "codex", root: codexPath, installationId }, codex, this.sightings);
-    const claudePresence = claudePath && new SourcePresenceScan<ClaudeTranscriptEntry>({ ...selection, harness: "claude", root: claudePath, installationId }, claude, this.sightings);
+    const claudePresence = claudePath && claude && new SourcePresenceScan<ClaudeTranscriptEntry>({ ...selection, harness: "claude", root: claudePath, installationId }, claude, this.sightings);
     const rejections: RejectedBatch[] = [];
     const sessions: SessionView[] = [];
     const changing: ScanPendingError[] = [];
@@ -145,7 +145,7 @@ export class LocalCollector {
         sources = new CodexForkSources(codex.discoverSources(selection, options), related);
         return sources.sources();
       }, (source, checkpoint) => sources.format(source, checkpoint), rejections, changing);
-      const selectedClaude = claudePresence && await this.scanProvider(claudePresence, options => claude.discoverSources(selection, options),
+      const selectedClaude = claudePresence && claude && await this.scanProvider(claudePresence, options => claude.discoverSources(selection, options),
         source => ClaudeSessionParser.forSource(source.previousCopy, source.claudeSubagent), rejections, changing);
       sessions.push(...await this.views(codexPresence, selected, returnViews));
       if (claudePresence && selectedClaude) sessions.push(...await this.views(claudePresence, selectedClaude, returnViews,

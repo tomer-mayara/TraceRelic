@@ -3,7 +3,7 @@ import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
-import { LocalLLMHistoryCodex } from "@tracerelic/collector/history";
+import { CodexHistory } from "@tracerelic/collector/providers";
 import { CodexSessionParser } from "#src/scan/codex-session-parser";
 import { TranscriptCursor } from "#src/scan/transcript-cursor";
 import type { CollectorStorage, SessionView, StreamKey } from "../../src/storage/collector-storage.ts";
@@ -127,7 +127,7 @@ export class CodexForkScanFixture {
   }
 
   async discover() {
-    const reader = new LocalLLMHistoryCodex(await GlobalConfigLoader.load(this.configFile));
+    const reader = new CodexHistory((await GlobalConfigLoader.load(this.configFile)).codexPath);
     return Array.fromAsync(reader.discoverSources());
   }
 

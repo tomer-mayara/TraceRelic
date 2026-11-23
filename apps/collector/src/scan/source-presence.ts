@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { TranscriptSource } from "../history/index.ts";
+import type { TranscriptSource } from "../transcript/index.ts";
 import { StorageBackoffError, StorageUnavailableError, type AcknowledgedSource, type CommitResult, type MissingSource, type PresenceWrite,
   type ObservedExtent, type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";

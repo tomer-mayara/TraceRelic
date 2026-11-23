@@ -16,21 +16,22 @@ From the repository root, run the history command with an inclusive start and ex
 bun run collector history --config ./tracerelic.config.json --from 2026-02-01T00:00:00Z --to 2026-02-02T00:00:00Z
 ```
 
-The CLI resolves `--config` from the working directory. Within the file, each provider path can be absolute, relative to the file's directory, or start with `~/` for the current user's home. From TypeScript, pass the resolved configuration to `LocalLLMHistoryCodex` or `LocalLLMHistoryClaude`.
+The CLI resolves `--config` from the working directory. Within the file, each provider path can be absolute, relative to the file's directory, or start with `~/` for the current user's home. From TypeScript, give the resolved configuration to `LocalProviders.fromConfig`, and give the providers to `LocalLLMHistory`. The reader returns the Codex records first, then the Claude Code records. To read one provider, give the reader only that provider, for example `new LocalLLMHistory([new CodexHistory(config.codexPath)])`.
 
 ```ts
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
-import { LocalLLMHistoryClaude } from "@tracerelic/collector/history";
+import { LocalLLMHistory } from "@tracerelic/collector/history";
+import { LocalProviders } from "@tracerelic/collector/providers";
 
 const config = await GlobalConfigLoader.load("./tracerelic.config.json");
-const reader = new LocalLLMHistoryClaude(config);
+const reader = new LocalLLMHistory(LocalProviders.fromConfig(config));
 const entries = await reader.readLocalHistory(
   new Date("2026-02-01T00:00:00Z"),
   new Date("2026-02-02T00:00:00Z"),
 );
 ```
 
-Run `bun run check:collector-history` to check startup and both readers.
+Run `bun run check:collector-history` to check startup, the reader and the two providers.
 
 ## Scan Codex and Claude Code conversations
 
@@ -147,6 +148,8 @@ Run `bun run check:collector-postgres` to check competing writes, rollback and r
 Database tests start disposable PostgreSQL 18.7 containers on loopback. To reuse a test server, set `TRACERELIC_TEST_DATABASE_URL` to a database where the test role can create databases. Each fixture creates a uniquely named database and removes it when it finishes.
 
 Run `bun run check:shared-logging` to build the log record schema, check package dependencies, and run the logging scenarios on Bun and Node. [Shared logging plan](docs/specs/shared-logging.md)
+
+Run `bun run check:collector-structure` to check that the cleaned collector directories declare no top-level function. The PR workflow runs the same check. [Cleanup plan](docs/specs/local-collector-structure-cleanup.md)
 
 For a suite that spans components, place it in `test/acceptance/` at the repository root. Declare the workspace packages it imports in the root `devDependencies`. The same `bun run test` command runs it.
 

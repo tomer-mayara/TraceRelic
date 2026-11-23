@@ -1,4 +1,4 @@
-import type { DamagedLine } from "../history/index.ts";
+import type { DamagedLine } from "../transcript/index.ts";
 import type { TokenCounts, Usage, UsageDiagnostic, UsageWindow } from "../storage/collector-storage.ts";
 import { invalidState, jsonDigest, stateRecord, stateString } from "./chat-parser-state.ts";
 import type { CodexForkUsage } from "./codex-fork-usage.ts";

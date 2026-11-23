@@ -2,13 +2,15 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { recordedPathDialect } from "@tracerelic/shared";
 import { GlobalConfigLoader } from "../config/global-config-loader.ts";
-import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type LocalHistoryEntry, type ScanSelection } from "../history/index.ts";
+import { LocalLLMHistory, type LocalHistoryEntry } from "../history/index.ts";
+import { LocalProviders } from "../providers/index.ts";
 import { isHistoryTimestamp } from "../recorded-timestamp.ts";
 import { LocalCollector, type RejectedBatch } from "../scan/local-collector.ts";
 import { ScanActivity, type ScheduledScanReport } from "../scan/scan-activity.ts";
 import type { PendingScan } from "../scan/scan-pending.ts";
 import { checkedScanIntervalMs, ScheduledScanner, type ScanClock } from "../scan/scheduled-scanner.ts";
 import type { CollectorStorage, MissingSource, SessionView } from "../storage/collector-storage.ts";
+import type { ScanSelection } from "../transcript/index.ts";
 
 const usage = "Usage: collector history --config <file> --from <instant> --to <instant>\n"
   + "       collector scan --once --config <file> [--session <id>] [--project <directory>]\n"
@@ -78,9 +80,7 @@ export class CollectorCommand {
       const from = instant("--from", values.from);
       const to = instant("--to", values.to);
       const config = await GlobalConfigLoader.load(values.config);
-      const readers = [new LocalLLMHistoryCodex(config), new LocalLLMHistoryClaude(config)];
-      const entries = await Promise.all(readers.map(reader => reader.readLocalHistoryInstants(from, to)));
-      return entries.flat();
+      return new LocalLLMHistory(LocalProviders.fromConfig(config)).readLocalHistoryInstants(from, to);
     }
     const once = positionals[0] === "scan" && values.once && values["interval-ms"] === undefined;
     const watch = positionals[0] === "watch" && !values.once ? runtime : undefined;

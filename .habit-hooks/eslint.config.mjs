@@ -1,5 +1,6 @@
 import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
+import collectorStructure from "./collector-structure.eslint.mjs";
 
 const functionLines = (max) => [
   "error",
@@ -54,4 +55,5 @@ export default [
       "max-lines-per-function": functionLines(200),
     },
   },
+  ...collectorStructure,
 ];

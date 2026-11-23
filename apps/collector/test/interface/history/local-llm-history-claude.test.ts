@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { copyFile, utimes } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryClaude, type LocalLLMHistory } from "@tracerelic/collector/history";
+import { LocalLLMHistory } from "@tracerelic/collector/history";
+import { ClaudeHistory } from "@tracerelic/collector/providers";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 
 const start = new Date("2026-02-01T00:00:00Z");
@@ -21,7 +21,7 @@ test("reads the original Claude user string, assistant blocks, and usage within 
   const lastModified = new Date("2026-03-01T00:00:00Z");
   await utimes(sourceFile, lastModified, lastModified);
 
-  const reader: LocalLLMHistory = new LocalLLMHistoryClaude(new GlobalConfig(join(fixture.home, "codex"), fixture.home));
+  const reader = new LocalLLMHistory([new ClaudeHistory(fixture.home)]);
   assert.deepEqual(await reader.readLocalHistory(start, end), [
     { harness: "claude", sessionId: "h1", sourceFile, lineNumber: 2, timestamp: prompt.timestamp, record: prompt },
     { harness: "claude", sessionId: "h1", sourceFile, lineNumber: 3, timestamp: answer.timestamp, record: answer },
@@ -39,7 +39,7 @@ test("reads both projects and gives a subagent that repeats its parent's ID a di
   const peerFile = await fixture.write("-work-two", "h2", [peer]);
   const childFile = await fixture.write("-work-one", "h1/subagents/agent-worker", [child]);
 
-  const reader: LocalLLMHistory = new LocalLLMHistoryClaude(new GlobalConfig(join(fixture.home, "codex"), fixture.home));
+  const reader = new LocalLLMHistory([new ClaudeHistory(fixture.home)]);
   const entries = await reader.readLocalHistory(start, end);
   assert.deepEqual([...entries].sort((a, b) => a.sessionId.localeCompare(b.sessionId)), [
     { harness: "claude", sessionId: "h1", sourceFile: parentFile, lineNumber: 1, timestamp: at, record: parent },
@@ -58,7 +58,7 @@ test("reads a subagent without its parent file and keeps independent native sess
     { type: "progress", timestamp: at }, repeated, independent,
   ]);
 
-  const reader: LocalLLMHistory = new LocalLLMHistoryClaude(new GlobalConfig(join(fixture.home, "codex"), fixture.home));
+  const reader = new LocalLLMHistory([new ClaudeHistory(fixture.home)]);
   assert.deepEqual(await reader.readLocalHistory(start, end), [
     { harness: "claude", sessionId: "parent%251/subagents/helper", sourceFile, lineNumber: 2, timestamp: at, record: repeated },
     { harness: "claude", sessionId: "child-7", sourceFile, lineNumber: 3, timestamp: at, record: independent },
@@ -74,6 +74,6 @@ test("skips prompt history, tool-result files, and unrelated files inside the su
   await fixture.write("-work-one", "h1/subagents/other", rows);
   await fixture.write("-work-one", "h1/subagents/archive/agent-worker", rows);
 
-  const reader: LocalLLMHistory = new LocalLLMHistoryClaude(new GlobalConfig(join(fixture.home, "codex"), fixture.home));
+  const reader = new LocalLLMHistory([new ClaudeHistory(fixture.home)]);
   assert.deepEqual(await reader.readLocalHistory(start, end), []);
 });

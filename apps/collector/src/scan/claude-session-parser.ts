@@ -1,4 +1,5 @@
-import type { ClaudeSubagent, ClaudeTranscriptEntry } from "../history/index.ts";
+import type { ClaudeTranscriptEntry } from "../providers/index.ts";
+import type { ClaudeSubagent } from "../transcript/index.ts";
 import { ClaudeChat } from "./claude-chat.ts";
 import { ClaudeUsage } from "./claude-usage.ts";
 import type { ChatParser, DecodedChat } from "./decoded-chat.ts";

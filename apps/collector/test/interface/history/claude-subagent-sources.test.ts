@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryClaude } from "@tracerelic/collector/history";
+import { ClaudeHistory } from "@tracerelic/collector/providers";
 import { ClaudeProjectFixture } from "../../fixtures/claude-project-fixture.ts";
 
 test("a shared Claude subagent file exposes the selected native agents and keeps other sessions independent", async t => {
@@ -11,7 +10,7 @@ test("a shared Claude subagent file exposes the selected native agents and keeps
     { sessionId: "parent", agentId: "a/1" }, { sessionId: "parent", agentId: "b" },
     { sessionId: "parent" }, { sessionId: "neighbor" }, { sessionId: "native-child", agentId: "worker", isSidechain: true },
   ]);
-  const reader = new LocalLLMHistoryClaude(new GlobalConfig(fixture.home, fixture.home));
+  const reader = new ClaudeHistory(fixture.home);
   const all = await Array.fromAsync(reader.discoverSources());
   const agents = all.map(({ sessionId, claudeSubagent }) => [sessionId, claudeSubagent]);
   assert.deepEqual(agents, [
@@ -32,7 +31,7 @@ test("an ID-only selection finds a native child's agent identity after rows copi
   await fixture.write("project", "parent/subagents/agent-worker", [
     { sessionId: "child", isSidechain: false }, { sessionId: "child", isSidechain: true, agentId: "worker" },
   ]);
-  const reader = new LocalLLMHistoryClaude(new GlobalConfig(fixture.home, fixture.home));
+  const reader = new ClaudeHistory(fixture.home);
   const [child] = await Array.fromAsync(reader.discoverSources({ sessionIds: ["child"] }));
   assert.deepEqual(child.claudeSubagent, { parentSessionId: "parent", agentId: "worker" });
 });

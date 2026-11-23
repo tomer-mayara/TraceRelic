@@ -11,6 +11,8 @@
     "./scan": { "types": "./src/scan/local-collector.ts", "import": "./dist/scan/local-collector.js" },
     "./config": { "types": "./src/config/index.ts", "import": "./dist/config/index.js" },
     "./history": { "types": "./src/history/index.ts", "import": "./dist/history/index.js" },
+    "./providers": { "types": "./src/providers/index.ts", "import": "./dist/providers/index.js" },
+    "./transcript": { "types": "./src/transcript/index.ts", "import": "./dist/transcript/index.js" },
     "./*": "./*"
   },
   "imports": {

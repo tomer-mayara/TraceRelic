@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { TranscriptChangedError, type TranscriptSource, type VerifiedPrefix } from "../history/index.ts";
+import { TranscriptChangedError, type TranscriptSource, type VerifiedPrefix } from "../transcript/index.ts";
 import {
   type Batch, type ByteRange, type Checkpoint, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
   type SourceScope, type StreamKey, StorageBackoffError, StorageUnavailableError,

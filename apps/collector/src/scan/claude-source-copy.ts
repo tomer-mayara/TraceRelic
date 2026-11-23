@@ -1,5 +1,6 @@
 import { join } from "node:path";
-import { TranscriptChangedError, type ClaudeTranscriptEntry, type TranscriptSource } from "../history/index.ts";
+import type { ClaudeTranscriptEntry } from "../providers/index.ts";
+import { TranscriptChangedError, type TranscriptSource } from "../transcript/index.ts";
 import type { AcknowledgedSource, Checkpoint, ObservedExtent, SourceLocation } from "../storage/collector-storage.ts";
 import { captureProof, checkpointPrefixes, verifiedCheckpoint } from "./scan-recovery.ts";
 

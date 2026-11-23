@@ -1,4 +1,4 @@
-import { TranscriptChangedError, type TranscriptSource } from "../history/index.ts";
+import { TranscriptChangedError, type TranscriptSource } from "../transcript/index.ts";
 import { legacyScannerLine, needsHistoryVerification, type AcknowledgedSource, type Checkpoint, type CodexIdentityProof, type CollectorStorage,
   type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";

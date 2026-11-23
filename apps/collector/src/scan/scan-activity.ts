@@ -1,4 +1,4 @@
-import type { TranscriptSource } from "../history/index.ts";
+import type { TranscriptSource } from "../transcript/index.ts";
 import {
   StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
   type PresenceWrite, type SessionKey, type SourceLocation, type SourceScope, type StreamKey,

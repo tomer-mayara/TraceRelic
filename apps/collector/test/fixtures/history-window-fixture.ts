@@ -1,6 +1,5 @@
-import { join } from "node:path";
-import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type LocalLLMHistory } from "@tracerelic/collector/history";
+import { LocalLLMHistory } from "@tracerelic/collector/history";
+import { ClaudeHistory, CodexHistory } from "@tracerelic/collector/providers";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { CodexRolloutFixture } from "./codex-rollout-fixture.ts";
 
@@ -19,8 +18,8 @@ export class HistoryWindowFixture {
 
   reader(root = this.source.home): LocalLLMHistory {
     return this.source instanceof CodexRolloutFixture
-      ? new LocalLLMHistoryCodex(new GlobalConfig(root, join(this.source.home, "claude")))
-      : new LocalLLMHistoryClaude(new GlobalConfig(join(this.source.home, "codex"), root));
+      ? new LocalLLMHistory([new CodexHistory(root)])
+      : new LocalLLMHistory([new ClaudeHistory(root)]);
   }
 
   message(timestamp: string, text: string) {

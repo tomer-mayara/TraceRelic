@@ -1,4 +1,5 @@
-import type { CodexRolloutEntry, DamagedLine, ReadPosition, RecordBatch, TranscriptSource } from "../history/index.ts";
+import type { CodexRolloutEntry } from "../providers/index.ts";
+import type { DamagedLine, ReadPosition, RecordBatch, TranscriptSource } from "../transcript/index.ts";
 import { recordedInstant } from "../recorded-timestamp.ts";
 import type { CodexForkCheckpoint, TokenCounts } from "../storage/collector-storage.ts";
 import { jsonDigest } from "./chat-parser-state.ts";
