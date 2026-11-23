@@ -11,13 +11,6 @@ const files = [
 // The files that step 4 of the cleanup has not cleaned. The rule does not apply to them.
 // Each task of step 4 removes its names. The list goes away at the end of step 4.
 const pending = [
-  // Task 4a
-  "apps/collector/src/providers/codex/codex-chat.ts",
-  "apps/collector/src/providers/codex/codex-fork-evidence.ts",
-  "apps/collector/src/providers/codex/codex-fork-sources.ts",
-  "apps/collector/src/providers/codex/codex-token-counts.ts",
-  "apps/collector/src/providers/codex/codex-usage-report.ts",
-  "apps/collector/src/providers/codex/codex-usage.ts",
   // Task 4b
   "apps/collector/src/providers/claude/claude-chat.ts",
   "apps/collector/src/providers/claude/claude-source-copy.ts",

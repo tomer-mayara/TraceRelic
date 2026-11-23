@@ -1,7 +1,7 @@
 import { RecordedInstant } from "@tracerelic/shared";
 import type { CodexForkCheckpoint } from "../../storage/collector-storage.ts";
 import { ParserState } from "../../scan/parser-state.ts";
-import { sameTotals, zero } from "./codex-token-counts.ts";
+import { CodexTokenCounts, zero } from "./codex-token-counts.ts";
 import type { Fields, Report, UsageEntry } from "./codex-usage-report.ts";
 
 /** Native events tie a turn to the child even when the parent is unavailable. */
@@ -95,8 +95,8 @@ export class CodexForkUsage {
     const first = this.firstCounter;
     this.firstCounter = false;
     if (!first || !report.end) return false;
-    if (sameTotals(report.end, zero)) return pending.size === 0;
-    if (!report.last || !report.independent || !sameTotals(report.end, report.last)) return false;
+    if (CodexTokenCounts.sameTotals(report.end, zero)) return pending.size === 0;
+    if (!report.last || !report.independent || !CodexTokenCounts.sameTotals(report.end, report.last)) return false;
     return pending.size === 0 ? !known : pending.size === 1 && pending.has(report.last.id);
   }
 }

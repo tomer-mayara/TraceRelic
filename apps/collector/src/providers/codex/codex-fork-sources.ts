@@ -6,12 +6,6 @@ import type { ParserFormat } from "../../scan/transcript-cursor.ts";
 
 type Source = CodexRolloutSource;
 
-function strongestBoundary(previous: CodexForkCheckpoint | undefined, current: Awaited<ReturnType<CodexForkEvidence["assess"]>>) {
-  const before = previous?.inheritedThrough, after = current?.fork.inheritedThrough;
-  if (before && !current?.contradicted && (!after || after.offset < before.offset)) return previous;
-  return current?.fork;
-}
-
 /** Keep ordinary scans streaming. A fork also needs the headers of later selected files. */
 export class CodexForkSources {
   private evidence?: CodexForkEvidence;
@@ -63,7 +57,7 @@ export class CodexForkSources {
     }
     const current = await decision;
     // Missing evidence preserves an accepted boundary. A changed provider identity can revoke it.
-    const plan = strongestBoundary(verified ? saved : undefined, current);
+    const plan = CodexForkSources.strongestBoundary(verified ? saved : undefined, current);
     return plan ? CodexSessionParser.forFork(plan, header.forkedAt) : CodexSessionParser;
   }
 
@@ -73,5 +67,11 @@ export class CodexForkSources {
     if (!assessment || !boundary) return assessment;
     const [proof] = await source.prefixDigests([boundary.offset]);
     return { ...assessment, fork: { ...assessment.fork, inheritedThrough: { ...boundary, prefixDigest: proof.prefixDigest } } };
+  }
+
+  private static strongestBoundary(previous: CodexForkCheckpoint | undefined, current: Awaited<ReturnType<CodexForkEvidence["assess"]>>) {
+    const before = previous?.inheritedThrough, after = current?.fork.inheritedThrough;
+    if (before && !current?.contradicted && (!after || after.offset < before.offset)) return previous;
+    return current?.fork;
   }
 }
