@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalCollector } from "@tracerelic/collector/scan";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { ClaudeUsageFixture } from "../../fixtures/claude-usage-fixture.ts";
+import { ConfiguredCollector } from "../../fixtures/configured-collector.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { appendTranscriptBytes } from "../../fixtures/transcript-gap-fixture.ts";
 
@@ -13,7 +13,7 @@ test("shared Claude files report unreadable ranges to each selected session and 
   t.after(() => root.close());
   const store = new InMemoryCollectorStorage();
   const config = new GlobalConfig(join(root.home, "codex"), root.home);
-  const scan = (sessionIds?: string[]) => new LocalCollector(config, store).scanOnce({ sessionIds });
+  const scan = (sessionIds?: string[]) => ConfiguredCollector.from(config, store).scanOnce({ sessionIds });
   const at = "2026-01-01T00:00:00Z";
   const file = await root.write("group", "mixed", [Claude.user("a", at, "é"), Claude.assistant("b", at, "reply")]);
   await scan();

@@ -5,9 +5,9 @@ import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
 import { CodexHistory } from "@tracerelic/collector/providers";
 import type { ReadPosition, ScanSelection } from "@tracerelic/collector/transcript";
-import { LocalCollector } from "@tracerelic/collector/scan";
 import type { Batch } from "../../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
+import { ConfiguredCollector } from "../../fixtures/configured-collector.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
 const at = "2026-02-01T12:00:00Z";
@@ -18,7 +18,7 @@ test("a fresh scanner seeks to the last committed byte after an oversized batch 
   t.after(() => root.close());
   const config = new GlobalConfig(root.home, undefined, "workstation");
   const storage = new InMemoryCollectorStorage();
-  const scan = () => new LocalCollector(config, storage).scanOnce();
+  const scan = () => ConfiguredCollector.from(config, storage).scanOnce();
   const prompt = Rollout.message(at, "Same question");
   const file = await root.write([Rollout.header(session.sessionId), Rollout.turnContext(at, "first turn"), prompt]);
   const { size: acceptedBytes } = await stat(file);
@@ -65,7 +65,7 @@ test("Codex imports the same native text blocks when paired rows cross several b
   const root = await Rollout.create();
   t.after(() => root.close());
   const config = new GlobalConfig(root.home);
-  const scan = () => new LocalCollector(config, new InMemoryCollectorStorage()).scanOnce();
+  const scan = () => ConfiguredCollector.from(config, new InMemoryCollectorStorage()).scanOnce();
   const event = { timestamp: at, type: "event_msg", payload: { type: "user_message", message: "a🌍b" } };
   const typed = { timestamp: at, type: "response_item", payload: {
     type: "message", role: "user", id: "native-item", request_id: "r1",
@@ -93,10 +93,10 @@ test("a legacy empty parser state is rebuilt through its accepted byte before im
   const commit = storage.commit.bind(storage);
   const legacy = t.mock.method(storage, "commit", (batch: Batch) =>
     commit({ ...batch, checkpoint: { ...batch.checkpoint, parserState: "{}" } }));
-  const [first] = await new LocalCollector(config, storage).scanOnce();
+  const [first] = await ConfiguredCollector.from(config, storage).scanOnce();
   legacy.mock.restore();
   await appendFile(file, JSON.stringify(prompt) + "\n");
-  const [next] = await new LocalCollector(config, storage).scanOnce();
+  const [next] = await ConfiguredCollector.from(config, storage).scanOnce();
   assert.deepEqual(next.messages[0], first.messages[0]);
   assert.deepEqual(next.messages.map(row => [row.text, row.turnId, row.sourceOrder]), [
     ["Same question", "first turn", 3], ["Same question", "first turn", 4],
@@ -115,7 +115,7 @@ test("two installations can read the same transcript with independent offsets an
   const file = await root.write([Rollout.header(session.sessionId), Rollout.message(at, "Hello")]);
   const storage = new InMemoryCollectorStorage();
   const source = { ...session, streamId: basename(file) };
-  const scan = (id: string) => new LocalCollector(new GlobalConfig(root.home, undefined, id), storage).scanOnce();
+  const scan = (id: string) => ConfiguredCollector.from(new GlobalConfig(root.home, undefined, id), storage).scanOnce();
   const [first] = await scan("desktop");
   assert.deepEqual(await storage.readCheckpoint({ ...source, installationId: "laptop" }), { version: 1, checkpoint: null });
   assert.deepEqual(await scan("laptop"), [first]);
@@ -136,7 +136,7 @@ test("an unreadable or newer parser state leaves the accepted position and chat 
   const file = await root.write([Rollout.header(session.sessionId), Rollout.message(at, "First")]);
   const config = new GlobalConfig(root.home);
   const storage = new InMemoryCollectorStorage();
-  const scan = () => new LocalCollector(config, storage).scanOnce();
+  const scan = () => ConfiguredCollector.from(config, storage).scanOnce();
   const [accepted] = await scan();
   const source = { ...session, streamId: JSON.stringify([root.home, basename(file)]) };
   const before = await storage.readCheckpoint(source);

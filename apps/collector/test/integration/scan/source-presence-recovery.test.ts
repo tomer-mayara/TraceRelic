@@ -3,10 +3,11 @@ import { copyFile, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalCollector, ScanPendingError } from "@tracerelic/collector/scan";
+import { ScanPendingError } from "@tracerelic/collector/scan";
 import { StorageBackoffError } from "@tracerelic/collector/storage";
 import type { MissingSource } from "../../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
+import { ConfiguredCollector } from "../../fixtures/configured-collector.ts";
 import { PresenceConnection } from "../../fixtures/presence-connection.ts";
 
 for (const lost of ["request", "reply"] as const) {
@@ -19,7 +20,7 @@ for (const lost of ["request", "reply"] as const) {
     const config = new GlobalConfig(root.home, undefined, "home");
     const storage = new PresenceConnection();
     const reports: MissingSource[] = [];
-    const scanner = new LocalCollector(config, storage, undefined, report => reports.push(report));
+    const scanner = ConfiguredCollector.from(config, storage, { onMissing: report => reports.push(report) });
     storage.loseFirstUpload = lost;
     await assert.rejects(scanner.scanOnce(), ScanPendingError);
 
@@ -36,7 +37,7 @@ for (const lost of ["request", "reply"] as const) {
     const views = await scanner.scanOnce();
     assert.equal(views.length, lost === "request" ? 0 : 1);
     assert.deepEqual(reports, [{ ...local, acceptedOffset: lost === "request" ? 0 : observedEnd }]);
-    await new LocalCollector(config, storage, undefined, report => reports.push(report)).scanOnce();
+    await ConfiguredCollector.from(config, storage, { onMissing: report => reports.push(report) }).scanOnce();
     assert.equal(reports.length, 1);
   });
 }
@@ -50,7 +51,7 @@ test("a running scanner names a vanished source while its first checkpoint is st
   const observedEnd = (await stat(file)).size;
   const reports: MissingSource[] = [];
   const storage = new PresenceConnection();
-  const scanner = new LocalCollector(new GlobalConfig(root.home, undefined, "desktop"), storage, undefined, report => reports.push(report));
+  const scanner = ConfiguredCollector.from(new GlobalConfig(root.home, undefined, "desktop"), storage, { onMissing: report => reports.push(report) });
   storage.offline = true;
   await assert.rejects(scanner.scanOnce(), ScanPendingError);
   await rm(file);
@@ -76,7 +77,7 @@ test("a lost presence reply is confirmed from storage and the disappearance is e
   const path = await root.write([Rollout.header("work")]);
   const storage = new PresenceConnection();
   const reports: MissingSource[] = [];
-  const scanner = new LocalCollector(new GlobalConfig(root.home), storage, undefined, report => reports.push(report));
+  const scanner = ConfiguredCollector.from(new GlobalConfig(root.home), storage, { onMissing: report => reports.push(report) });
   await scanner.scanOnce();
   await rm(path);
   storage.losePresenceReply = true;
@@ -96,7 +97,7 @@ test("two disappearing streams of one session are reported once each and both ca
   const data = await readFile(path);
   const storage = new PresenceConnection();
   const reports: MissingSource[] = [];
-  const scanner = new LocalCollector(new GlobalConfig(root.home), storage, undefined, report => reports.push(report));
+  const scanner = ConfiguredCollector.from(new GlobalConfig(root.home), storage, { onMissing: report => reports.push(report) });
   const [before] = await scanner.scanOnce();
   await Promise.all([rm(path), rm(second)]);
   const [gone] = await scanner.scanOnce();
@@ -114,7 +115,7 @@ test("a presence conflict requires a fresh search before reporting a disappearan
   const path = await root.write([Rollout.header("work")]);
   const storage = new PresenceConnection();
   const reports: MissingSource[] = [];
-  const scanner = new LocalCollector(new GlobalConfig(root.home), storage, undefined, report => reports.push(report));
+  const scanner = ConfiguredCollector.from(new GlobalConfig(root.home), storage, { onMissing: report => reports.push(report) });
   const [before] = await scanner.scanOnce();
   const bytes = await readFile(path);
   await rm(path);
@@ -130,7 +131,7 @@ test("a missing write retried after a reset uses the replacement's complete end 
   const path = await root.write([Rollout.header("work")]);
   const storage = new PresenceConnection();
   const reports: MissingSource[] = [];
-  const scanner = new LocalCollector(new GlobalConfig(root.home, undefined, "station"), storage, undefined, report => reports.push(report));
+  const scanner = ConfiguredCollector.from(new GlobalConfig(root.home, undefined, "station"), storage, { onMissing: report => reports.push(report) });
   await scanner.scanOnce();
   const source = { harness: "codex" as const, sessionId: "work", streamId: basename(path), installationId: "station" };
   const location = { root: root.home, path: source.streamId };

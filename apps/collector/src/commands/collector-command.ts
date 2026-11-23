@@ -108,7 +108,10 @@ export class CollectorCommand {
 
   private async scanHandler(configFile: string, selection: ScanSelection, activity?: ScanActivity) {
     const config = await GlobalConfigLoader.load(configFile);
-    const collector = new LocalCollector(config, activity ?? await this.storage(), this.onRejected, this.onMissing, activity);
+    const collector = new LocalCollector({
+      providers: LocalProviders.fromConfig(config), storage: activity ?? await this.storage(), installationId: config.installationId,
+      onRejection: this.onRejected, onMissing: this.onMissing, progress: activity,
+    });
     return activity ? () => collector.scanForChanges(selection) : () => collector.scanOnce(selection);
   }
 }

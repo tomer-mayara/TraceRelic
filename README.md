@@ -56,6 +56,23 @@ Diagnostics go to standard error. Each line begins with a UTC timestamp, a level
 
 By default, the standalone CLI keeps its workspace in memory for the life of the process. Each `watch` pass uses that same workspace. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state, next byte and prefix digest together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
 
+The scanner receives its providers and its storage in one options object. It reads the providers in the sequence that it receives them.
+
+```ts
+import { GlobalConfigLoader } from "@tracerelic/collector/config";
+import { InMemoryCollectorStorage } from "@tracerelic/collector/memory-storage";
+import { LocalProviders } from "@tracerelic/collector/providers";
+import { LocalCollector } from "@tracerelic/collector/scan";
+
+const config = await GlobalConfigLoader.load("./tracerelic.config.json");
+const scanner = new LocalCollector({
+  providers: LocalProviders.fromConfig(config),
+  storage: new InMemoryCollectorStorage(),
+  installationId: config.installationId,
+});
+const sessions = await scanner.scanOnce();
+```
+
 If a write loses its connection, the scanner checks which bytes storage accepted. When the outcome is still unknown, `scan --once` logs the pending report at `WARN` and exits with status 75. The report gives the source, the attempted byte range when available, and a suggested retry time. If storage cannot list the acknowledged sources, the report identifies the affected selection in `scope`. Run the scan again after reconnecting to resume from storage’s checkpoint.
 
 If storage rejects a batch, the scanner stops reading that file and continues with the other selected files. The CLI logs each rejected batch at `ERROR` with its source and byte range. When the scan finishes, it prints the accepted session views to standard output and exits with status 1. TypeScript callers can read the views and diagnostics from `ScanRejectedError.sessions` and `.rejections`. After you correct the file, a scan using the same storage resumes from the last accepted checkpoint.

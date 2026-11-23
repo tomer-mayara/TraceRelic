@@ -68,12 +68,9 @@
     },
     {
       "name": "scan-engine-is-provider-neutral",
-      "comment": "The scanner and the schedule know a provider only through the ScanProvider port. pathNot names local-collector.ts, which builds the two providers until step 3 gives them to it. Step 3 removes pathNot.",
+      "comment": "The scanner and the schedule know a provider only through the ScanProvider port.",
       "severity": "error",
-      "from": {
-        "path": "^apps/collector/src/(scan|watch)/",
-        "pathNot": "^apps/collector/src/scan/local-collector\\.ts$"
-      },
+      "from": { "path": "^apps/collector/src/(scan|watch)/" },
       "to": { "path": "^apps/collector/src/providers/" }
     },
     {

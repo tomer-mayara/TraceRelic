@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import { appendFile, mkdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalCollector, ScanPendingError } from "@tracerelic/collector/scan";
+import { ScanPendingError } from "@tracerelic/collector/scan";
 import type { SessionKey, StreamKey } from "../../src/storage/collector-storage.ts";
 import { ClaudeProjectFixture as Claude } from "./claude-project-fixture.ts";
 import { CodexRolloutFixture as Codex } from "./codex-rollout-fixture.ts";
+import { ConfiguredCollector } from "./configured-collector.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 import type { MissingSourceFixture } from "./missing-source-fixture.ts";
 import { PresenceConnection } from "./presence-connection.ts";
@@ -22,7 +23,7 @@ export class CountSessionReads extends InMemoryCollectorStorage {
 export async function unacceptedAppend(files: MissingSourceFixture, lost: "request" | "reply" = "request") {
   const store = new PresenceConnection();
   const f = files.transcript;
-  const scanner = new LocalCollector(new GlobalConfig(f.root.home, undefined, "desktop"), store, undefined, r => files.reports.push(r));
+  const scanner = ConfiguredCollector.from(new GlobalConfig(f.root.home, undefined, "desktop"), store, { onMissing: r => files.reports.push(r) });
   await f.write([f.call("original", 70)]);
   await scanner.scanOnce();
   const accepted = (await stat(f.file)).size;

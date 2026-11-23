@@ -6,8 +6,8 @@ import { zstdCompressSync } from "node:zlib";
 import { GlobalConfig } from "@tracerelic/collector/config";
 import { LocalLLMHistory } from "@tracerelic/collector/history";
 import { CodexHistory } from "@tracerelic/collector/providers";
-import { LocalCollector } from "@tracerelic/collector/scan";
 import { CodexRolloutFixture as Rollout } from "../../../fixtures/codex-rollout-fixture.ts";
+import { ConfiguredCollector } from "../../../fixtures/configured-collector.ts";
 import { InMemoryCollectorStorage } from "../../../fixtures/in-memory-collector-storage.ts";
 
 for (const archived of [false, true]) test("compressed copies deduplicate by bytes and independent headers remain visible; archived = " + archived, async t => {
@@ -37,7 +37,7 @@ test("compression keeps the logical Codex bytes, checkpoint and chat through res
   const config = new GlobalConfig(root.home, undefined, "desktop");
   const reader = new CodexHistory(config.codexPath);
   const storage = new InMemoryCollectorStorage();
-  const scan = () => new LocalCollector(config, storage).scanOnce();
+  const scan = () => ConfiguredCollector.from(config, storage).scanOnce();
   await scan();
   const source = { harness: "codex", sessionId: "one", installationId: "desktop", streamId: basename(file) } as const;
   const checkpoint = await storage.readCheckpoint(source);
@@ -78,7 +78,7 @@ for (const longer of ["plain", "compressed"] as const) test("a compatible older 
   assert.deepEqual((await new LocalLLMHistory([reader]).readLocalHistory(new Date(at), new Date("2026-02-02"))).map(row => row.sourceFile), [chosen, chosen]);
   assert.deepEqual((await Array.fromAsync(reader.discoverSources())).map(row => row.sourceFile), [chosen]);
   const storage = new InMemoryCollectorStorage();
-  const scan = () => new LocalCollector(config, storage).scanOnce();
+  const scan = () => ConfiguredCollector.from(config, storage).scanOnce();
   const [view] = await scan();
   assert.deepEqual(view.messages.map(row => row.text), ["One", "Two"]);
   const key = { harness: "codex", sessionId: "one", streamId: basename(plain), installationId: "desktop" } as const;

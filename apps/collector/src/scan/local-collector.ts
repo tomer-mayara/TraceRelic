@@ -1,14 +1,12 @@
-import type { GlobalConfig } from "../config/global-config.ts";
-import { ClaudeHistory, CodexHistory } from "../providers/index.ts";
 import { TranscriptChangedError, type ScanSelection, type TranscriptSource } from "../transcript/index.ts";
 import {
   StorageAuthenticationError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
   type MissingSource, type SessionView, type StreamKey,
 } from "../storage/collector-storage.ts";
-import type { ScanProgress } from "../watch/scan-activity.ts";
 import { ScanRecovery, checkpointPrefixes, readStorage, verifiedCheckpoint, type ScanRestart } from "./scan-recovery.ts";
 import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 import { ScanPendingError } from "./scan-pending.ts";
+import type { ScanProgress } from "./scan-progress.ts";
 import type { EarlierCopies, ProviderScan, ScanProvider } from "./scan-provider.ts";
 import { SourcePresenceScan, type RestoreCopy, type RestoredSource } from "./source-presence.ts";
 import { sourceId, SourceSighting, SourceSightings } from "./source-sightings.ts";
@@ -17,6 +15,21 @@ import { TranscriptCursor, type ParserFormat, type SourceLine } from "./transcri
 export { ScanPendingError, type PendingScan } from "./scan-pending.ts";
 export { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 export type { MissingSource } from "../storage/collector-storage.ts";
+export type { IdentityInventory, LocatedSource, ProviderScan, ScanProvider } from "./scan-provider.ts";
+export type { ParserFormat } from "./transcript-cursor.ts";
+export type { ChatParser, DecodedChat } from "./decoded-chat.ts";
+
+/** What the scanner receives. Only the providers and the storage are required. */
+export interface LocalCollectorOptions {
+  /** The scanner reads these providers in this order. */
+  providers: readonly ScanProvider[];
+  storage: CollectorStorage;
+  /** The installation ID of the configuration. Without it, each stream ID is root-based. */
+  installationId?: string;
+  onRejection?: (report: RejectedBatch) => void;
+  onMissing?: (report: MissingSource) => void;
+  progress?: ScanProgress;
+}
 
 interface TranscriptResult {
   hasStoredSession: boolean;
@@ -82,24 +95,28 @@ async function scanFiles<Entry extends SourceLine>(
 }
 
 export class LocalCollector {
+  private readonly providers: readonly ScanProvider[];
+  private readonly storage: CollectorStorage;
+  private readonly installationId?: string;
+  private readonly onRejection?: (report: RejectedBatch) => void;
+  private readonly progress?: ScanProgress;
   private readonly sightings: SourceSightings;
 
-  constructor(
-    private readonly config: GlobalConfig, private readonly storage: CollectorStorage,
-    private readonly onRejection?: (report: RejectedBatch) => void,
-    onMissing?: (report: MissingSource) => void,
-    private readonly progress?: ScanProgress,
-  ) { this.sightings = new SourceSightings(storage, onMissing); }
+  constructor({ providers, storage, installationId, onRejection, onMissing, progress }: LocalCollectorOptions) {
+    this.providers = providers;
+    this.storage = storage;
+    this.installationId = installationId;
+    this.onRejection = onRejection;
+    this.progress = progress;
+    this.sightings = new SourceSightings(storage, onMissing);
+  }
 
   scanOnce(selection: ScanSelection = {}): Promise<SessionView[]> { return this.scan(selection, true); }
 
   async scanForChanges(selection: ScanSelection = {}): Promise<void> { await this.scan(selection, false); }
 
   private async scan(selection: ScanSelection, returnViews: boolean): Promise<SessionView[]> {
-    const { codexPath, claudePath, installationId } = this.config;
-    // The next commit of step 3 gives these providers to the scanner.
-    const providers: ScanProvider[] = [new CodexHistory(codexPath)];
-    if (claudePath) providers.push(new ClaudeHistory(claudePath));
+    const { providers, installationId } = this;
     const passes = providers.map(provider => {
       const scan = provider.openScan(selection);
       return { scan, presence: new SourcePresenceScan({ ...selection, harness: provider.harness, root: provider.root, installationId }, scan, this.sightings) };

@@ -1,10 +1,10 @@
-import type { TranscriptSource } from "../transcript/index.ts";
 import {
   StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
   type PresenceWrite, type SessionKey, type SourceLocation, type SourceScope, type StreamKey,
 } from "../storage/collector-storage.ts";
 import { jsonDigest } from "../scan/parser-state.ts";
 import type { PendingScan } from "../scan/scan-pending.ts";
+import type { PrefixReader, ScanProgress } from "../scan/scan-progress.ts";
 import { readStorage, sameCheckpoint } from "../scan/scan-recovery.ts";
 import { sourceId } from "../scan/source-sightings.ts";
 
@@ -15,13 +15,6 @@ export type ScheduledScanReport = ScheduledScanOutcome & {
   newSessions: number;
   oldestPendingAgeMs: number | null;
 };
-
-type PrefixReader = Pick<TranscriptSource<unknown>, "prefixDigests">;
-export interface ScanProgress {
-  now(): number;
-  verified(source: StreamKey, snapshot: CheckpointSnapshot, transcript?: PrefixReader): Promise<void>;
-  finishedSource(source: StreamKey): void;
-}
 
 interface OutstandingSource {
   since: number;
