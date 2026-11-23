@@ -3,8 +3,7 @@ import { JsonRecord } from "../../transcript/json-record.ts";
 import type { Metadata } from "../../storage/collector-storage.ts";
 import { ParserState, TextOccurrences } from "../../scan/parser-state.ts";
 import type { ChatParser, DecodedChat } from "../../scan/decoded-chat.ts";
-
-type TextBlock = { text: string; blockIndex: number };
+import { ClaudeVisibleText } from "./claude-visible-text.ts";
 
 export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
   private readonly previousCopy: boolean;
@@ -55,7 +54,7 @@ export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
     if (!timestamp || (role !== "user" && role !== "assistant") || !message) return;
     if (message.role !== undefined && role !== message.role) return;
     if (record.isMeta === true || record.isCompactSummary === true || message.model === "<synthetic>") return;
-    const blocks = visibleBlocks(message.content, role === "user");
+    const blocks = ClaudeVisibleText.blocks(message.content, role === "user");
     if (!blocks.length) return;
     const turnId = JsonRecord.identifier(record.turnId);
     const requestId = JsonRecord.identifier(record.requestId);
@@ -68,24 +67,4 @@ export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
       });
     }
   }
-}
-
-function visibleBlocks(content: unknown, user: boolean): TextBlock[] {
-  const parts = typeof content === "string" ? [{ type: "text", text: content }] : content;
-  if (!Array.isArray(parts)) return [];
-  const blocks: TextBlock[] = [];
-  for (const [blockIndex, part] of parts.entries()) {
-    const block = JsonRecord.object(part);
-    if (block?.type !== "text" || typeof block.text !== "string" || !block.text.length) continue;
-    if (user && injectedText(block.text)) continue;
-    blocks.push({ blockIndex, text: block.text });
-  }
-  return blocks;
-}
-
-function injectedText(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed === "[Request interrupted by user]" || trimmed === "[Request interrupted by user for tool use]") return true;
-  return /^<(tick|goal|ide_opened_file|ide_selection|session-start-hook|system-reminder|local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*<\/\1>$/.test(trimmed)
-    || /^<command-name>[^<]*<\/command-name>(?:\s*<command-message>[^<]*<\/command-message>)?(?:\s*<command-args>[\s\S]*<\/command-args>)?$/.test(trimmed);
 }

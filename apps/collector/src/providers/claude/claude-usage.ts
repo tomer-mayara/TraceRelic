@@ -2,6 +2,7 @@ import type { ClaudeTranscriptEntry } from "../index.ts";
 import { JsonRecord } from "../../transcript/json-record.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { ClaudeCallOrigin, ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../../storage/collector-storage.ts";
+import { ClaudeAssistantRecord } from "./claude-assistant-record.ts";
 import type { ClaudeSubagent } from "./claude-session-identity.ts";
 import { ClaudeUsageCounts, type ReportIssue } from "./claude-usage-counts.ts";
 
@@ -10,49 +11,42 @@ type Request = Pick<ClaudeUsageReport, "at" | "status" | "messageId" | "requestI
 type Entry = ClaudeTranscriptEntry & { readonly startOffset?: number };
 type Fork = Pick<ClaudeCallOrigin, "parentSessionId" | "parentMessageUuid">;
 
-function text(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function assistant(record: Fields): Fields | undefined {
-  const message = record.message;
-  if (record.type !== "assistant" || !JsonRecord.is(message) || (message.role !== undefined && message.role !== "assistant")) return;
-  if (record.isMeta === true || record.isCompactSummary === true || message.model === "<synthetic>") return;
-  return message;
-}
-
-function forkOrigin(value: unknown): Fork | undefined {
-  if (value === undefined || value === null) return;
-  if (!JsonRecord.is(value) || !text(value.sessionId)) return {};
-  return { parentSessionId: value.sessionId, ...(text(value.messageUuid) && { parentMessageUuid: value.messageUuid }) };
-}
-
-function callOrigin(entry: Entry, fork: Fork | undefined, subagent?: ClaudeSubagent): ClaudeCallOrigin | undefined {
-  if (entry.startOffset === undefined) return;
-  const { record, lineNumber, startOffset, endOffset } = entry;
-  const row = {
-    sourceOrder: lineNumber, byteRange: { startOffset, endOffset }, ...(text(record.uuid) && { transcriptUuid: record.uuid }),
-    ...(subagent && { parentSessionId: subagent.parentSessionId }),
-  };
-  if (fork) return { ...row, kind: "copy", ...fork };
-  const own = !subagent || (record.isSidechain !== false
-    && (text(record.agentId) ? record.agentId === subagent.agentId : record.isSidechain === true));
-  return { ...row, kind: own ? "own" : "subagent" };
-}
-
 export class ClaudeUsage {
   private readonly reports: ClaudeUsageReport[] = [];
   private readonly diagnostics: UsageDiagnostic[] = [];
   private hasGap = false;
 
+  private static text(value: unknown): value is string {
+    return typeof value === "string" && value.trim().length > 0;
+  }
+
+  private static forkOrigin(value: unknown): Fork | undefined {
+    if (value === undefined || value === null) return;
+    if (!JsonRecord.is(value) || !ClaudeUsage.text(value.sessionId)) return {};
+    return { parentSessionId: value.sessionId, ...(ClaudeUsage.text(value.messageUuid) && { parentMessageUuid: value.messageUuid }) };
+  }
+
+  private static callOrigin(entry: Entry, fork: Fork | undefined, subagent?: ClaudeSubagent): ClaudeCallOrigin | undefined {
+    if (entry.startOffset === undefined) return;
+    const { record, lineNumber, startOffset, endOffset } = entry;
+    const row = {
+      sourceOrder: lineNumber, byteRange: { startOffset, endOffset }, ...(ClaudeUsage.text(record.uuid) && { transcriptUuid: record.uuid }),
+      ...(subagent && { parentSessionId: subagent.parentSessionId }),
+    };
+    if (fork) return { ...row, kind: "copy", ...fork };
+    const own = !subagent || (record.isSidechain !== false
+      && (ClaudeUsage.text(record.agentId) ? record.agentId === subagent.agentId : record.isSidechain === true));
+    return { ...row, kind: own ? "own" : "subagent" };
+  }
+
   static decodeBatch(entries: readonly Entry[], subagent?: ClaudeSubagent, previousCopy = false) {
     const batch = new ClaudeUsage();
     let parentSessionId: string | undefined;
     for (const entry of entries) {
-      const fork = forkOrigin(entry.record.forkedFrom);
+      const fork = ClaudeUsage.forkOrigin(entry.record.forkedFrom);
       const count = batch.reports.length;
       batch.read(entry, fork, subagent);
-      if (!previousCopy || text(entry.record.uuid) || count !== batch.reports.length) {
+      if (!previousCopy || ClaudeUsage.text(entry.record.uuid) || count !== batch.reports.length) {
         parentSessionId ??= subagent?.parentSessionId ?? fork?.parentSessionId;
       }
     }
@@ -71,11 +65,11 @@ export class ClaudeUsage {
 
   private read(entry: Entry, fork: Fork | undefined, subagent?: ClaudeSubagent): void {
     const { record, timestamp, lineNumber } = entry;
-    const message = assistant(record);
+    const message = ClaudeAssistantRecord.message(record);
     const usage = message?.usage;
     if (!message || usage === undefined || usage === null || (JsonRecord.is(usage) && !Object.keys(usage).length)) return;
     const issue = this.reportIssues(lineNumber);
-    if (!text(message.id) && !text(record.requestId)) {
+    if (!ClaudeUsage.text(message.id) && !ClaudeUsage.text(record.requestId)) {
       issue("unidentified-claude-call", true);
       return;
     }
@@ -83,11 +77,11 @@ export class ClaudeUsage {
       issue("invalid-claude-usage", true);
       return;
     }
-    const origin = callOrigin(entry, fork, subagent);
+    const origin = ClaudeUsage.callOrigin(entry, fork, subagent);
     const request: Request = {
-      at: timestamp, status: text(message.stop_reason) ? "final" : "provisional",
-      ...(text(message.id) && { messageId: message.id }), ...(text(record.requestId) && { requestId: record.requestId }),
-      ...(text(record.turnId) && { turnId: record.turnId }), ...(origin && { origin }),
+      at: timestamp, status: ClaudeUsage.text(message.stop_reason) ? "final" : "provisional",
+      ...(ClaudeUsage.text(message.id) && { messageId: message.id }), ...(ClaudeUsage.text(record.requestId) && { requestId: record.requestId }),
+      ...(ClaudeUsage.text(record.turnId) && { turnId: record.turnId }), ...(origin && { origin }),
     };
     this.observe(usage, request, message.model, issue);
     this.readIterations(usage.iterations, request, issue);
@@ -106,8 +100,8 @@ export class ClaudeUsage {
         issue("unsupported-claude-iteration", true);
         continue;
       }
-      const native = text(item.id) ? item.id : item.iteration_id;
-      const iterationId = text(native) ? `native:${native}` : `index:${index}`;
+      const native = ClaudeUsage.text(item.id) ? item.id : item.iteration_id;
+      const iterationId = ClaudeUsage.text(native) ? `native:${native}` : `index:${index}`;
       this.observe(item, request, item.model, issue, { iterationId, iterationPosition: index });
     }
   }
@@ -116,6 +110,6 @@ export class ClaudeUsage {
     iteration?: Pick<ClaudeUsageReport, "iterationId" | "iterationPosition">): void {
     const counts = ClaudeUsageCounts.read(usage, issue);
     if (!counts) return;
-    this.reports.push({ ...request, ...counts, ...(text(model) && { model }), ...iteration });
+    this.reports.push({ ...request, ...counts, ...(ClaudeUsage.text(model) && { model }), ...iteration });
   }
 }
