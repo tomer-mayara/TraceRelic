@@ -169,14 +169,18 @@ through its own configuration.
 | `this` in a static method | The same files | Each `this` in a static method or a static accessor, also in a function that is in that method |
 | A relative import of the source | `apps/collector/test` | An import, a re-export, a dynamic import or an import type whose module is `../src` |
 
-The second selector does not look at a static field. No static field of these files holds a function
-that uses `this`. The rule does not apply to `apps/api`, and it does not apply to the other files of
-`packages/shared/src`: `recorded-path.ts` has two functions, and `logging/console-logger.ts` has a static
-method that uses `this`.
+The second selector looks only at methods and accessors. It does not look at a static field or at a
+static block, and none of these files has a `this` there. The rule does not apply to `apps/api`, and it
+does not apply to the other files of `packages/shared/src`: `recorded-path.ts` has two functions, and
+`logging/console-logger.ts` has a static method that uses `this`.
+
+**Test imports.** `apps/collector/package.json` has ten named exports, such as `./storage` and `./scan`.
+A test imports a name that one of them has through the package: `@tracerelic/collector/…`. A test
+imports each other name through `#src/…`. The third selector checks only that no test imports `../src`.
 
 ## Constraint decisions
 
-These decisions apply to all the steps. Step 4 and step 5 add to them in their own sections.
+These decisions apply to all the steps. Step 4 adds to them in its own section.
 
 | Constraint | Decision | Check |
 | --- | --- | --- |
@@ -202,7 +206,7 @@ These decisions apply to all the steps. Step 4 and step 5 add to them in their o
 | Step 3, after each code commit | 13 commands, identical | 12 scenarios, identical |
 | Steps 1 to 3 together: `main` and the commit of step 3 | 13 commands, identical | 12 scenarios, identical |
 | Step 4, after each code commit | 13 commands, identical | 12 scenarios, identical |
-| Step 5, after each commit that changes a production file, and at the last code commit | 13 commands, identical | 12 scenarios, identical |
+| Step 5, after each change of the production source | 13 commands, identical | 12 scenarios, identical |
 
 The 13 commands are: a full scan with an installation ID and one without; a full history window and a
 window with fractional seconds; a scan with `--session` and one with `--project`; a Codex fork child
@@ -229,7 +233,7 @@ before the code changes.
 
 Done in PR 28.
 
-- **Step 0.** The golden tests. A swap of two keys in one `snapshot()` fails 16 of them and no other
+- **Step 0.** The golden tests. A swap of two keys in one `snapshot()` failed 16 of them and no other
   test.
 - **Step 1.** `LocalLLMHistory` was an abstract class with one subclass for each provider. It is now a
   concrete class that receives a list of `HistoryProvider`. `CodexHistory` and `ClaudeHistory` implement
@@ -394,55 +398,24 @@ exported classes:
 
 ### Step 5. Finish
 
-Done in PR 32. A test reaches the source in two ways, and each test file has the name of its subject. Six
-members that only tests read are in test fixtures. A user of the CLI sees no change.
+Done in PR 32. No scenario is new, and no golden text that was there changed.
 
-Affected components: `apps/collector`, the contract [scan.tsp](local-collector/scan.tsp) and the
-structure rule.
-
-| Constraint | Decision and check |
-| --- | --- |
-| Behavior | No change for a user of the CLI. No scenario is new, because a caller can do nothing new. One golden test is new (item 4). It pins the text that the parser writes now. No golden text that exists changes. After each commit that changes a production file, run the output comparison and the trace comparison. |
-| Observability | Out of scope. No signal is added or changed. Each logger call stays in `cli.ts`, on its line. |
-| Architecture | The structure rule gets two selectors. A static method does not contain `this` (item 5). A test does not import `../src` (item 1). `check:collector-structure` checks both, and it also reads `apps/collector/test`. The dependency rules do not change. |
-| Interface | [scan.tsp](local-collector/scan.tsp) loses two operations, three models and one field that only a test reads (item 2). The package export `./scan` gets the four port types of the earlier copies. `./providers` and `./transcript` lose the types of the two removed readers. Checks: `schema:collector-scan`, `check:collector-scan` and `bun run typecheck`. |
-
-1. **Two import forms for a test.** A test imports a name that a package export has through the
-   package: `@tracerelic/collector/…`. A test imports each other name through `#src/…`. No test imports
-   `../src`. Before, 63 type imports did. The structure rule checks only the last of the three
-   sentences. `./scan` now exports the port types of the earlier copies, because
-   `ProviderScan.earlierCopies` names them. One part of this item is not done: Knip does not follow
-   `#src/…`. [Points that later work must know](#points-that-later-work-must-know) gives the reason.
-2. **Six members that only tests read are in test fixtures.** They are `CodexHistory.readRollouts`,
-   `ClaudeHistory.readTranscripts`, `TranscriptBatches.snapshot`, `ClaudeChat.decode`, `CodexChat.decode`
-   and `UsageWindows.mayCover`. Each fixture has the same statements. The source field `currentFilePath`
-   is gone, because no production code read it. [scan.tsp](local-collector/scan.tsp) lost the two
-   readers, their three models and the field. Five assertions went away with their subject. Two checked
-   a rollout and a transcript against the removed models. Two checked `currentFilePath`. One checked a
-   key that only `TranscriptBatches.snapshot` removed.
-3. **Each test file has the name of its subject.** No test name and no test body changed.
-
-   | Before | Now |
-   | --- | --- |
-   | `test/interface/providers/codex/local-llm-history-codex.test.ts` | `codex-history.test.ts` |
-   | `test/interface/providers/claude/local-llm-history-claude.test.ts` | `claude-history.test.ts` |
-   | `test/unit/scan/transcript-replay.test.ts` and its fixture `transcript-replay-fixture.ts` | `replay-occurrences.test.ts` and `replay-occurrences-fixture.ts` |
-   | `test/interface/transcript/source-presence.test.ts`, three tests of the complete end of a captured file | `test/interface/transcript/captured-transcript-file.test.ts` |
-   | The same file, four tests of the search for an absent file | `test/interface/transcript/transcript-directories.test.ts` |
-   | The same file, two tests of the fields of a Claude Code source | `test/interface/providers/claude/claude-transcripts.test.ts`, which was there before |
-
-4. **A golden test with the lookahead for the main Codex fixture.** `TranscriptCursor.decode` prepares
-   a lookahead when the first batch of a read ends before the end of the captured file. One parser now
-   prepares the lookahead and then reads each batch of the main fixture. The lookahead changes one text:
-   in the first batch, one prompt gets the native ID of its typed copy. The test pins the parser. One
-   integration test, in `resume.test.ts`, fails when the cursor does not prepare the lookahead.
-5. **No `this` in a static method.** `CodexSessionParser.forFork`, `ClaudeReportEvidence.select` and
-   `ClaudeUsageLedger.merge` used `this`. Each one names its class now.
-
-The compiled production files show the size of the change. Of 102 files, 93 have the same bytes as on
-`main`. The other nine are different only by the removed members and by the six expressions that name a
-class. Three independent reviews found no behavior difference. The description of PR 32 has the result of
-each check.
+- **Test imports.** A test reaches the source in the two forms that
+  [Rules that keep the structure](#rules-that-keep-the-structure) gives. Before, 63 type imports named
+  `../src`.
+- **Members that only tests read.** Six members are in test fixtures now, with the same statements:
+  `CodexHistory.readRollouts`, `ClaudeHistory.readTranscripts`, `TranscriptBatches.snapshot`,
+  `ClaudeChat.decode`, `CodexChat.decode` and `UsageWindows.mayCover`. The source field `currentFilePath`
+  is gone, because no production code read it.
+- **Test file names.** `local-llm-history-codex.test.ts`, `local-llm-history-claude.test.ts` and
+  `transcript-replay.test.ts` have the name of their subject. The nine tests of
+  `source-presence.test.ts` are in `captured-transcript-file.test.ts`, `transcript-directories.test.ts`
+  and `claude-transcripts.test.ts`. The moves changed no test name and no test body.
+- **A golden test with the lookahead.** One parser prepares the lookahead and then reads each batch of
+  the main Codex fixture. The test pins the parser. It does not go through `TranscriptCursor.decode`:
+  one integration test, in `resume.test.ts`, fails when the cursor does not prepare the lookahead.
+- **No `this` in a static method.** `CodexSessionParser.forFork`, `ClaudeReportEvidence.select` and
+  `ClaudeUsageLedger.merge` name their class.
 
 Changes of step 5 for a TypeScript caller:
 
@@ -451,13 +424,9 @@ Changes of step 5 for a TypeScript caller:
   source. `ClaudeTranscriptSource` has no `currentFilePath`.
 - **`@tracerelic/collector/transcript`.** The type `Transcript` is gone.
 - **`@tracerelic/collector/scan`.** `EarlierCopies`, `EarlierCopy`, `SourceCopy` and `CopyAssessment` are
-  new exports.
-
-Two decisions are open for the owner. The contracts state both points as preconditions now.
-
-- Must the constructor of a provider reject a root that is not an absolute path? Before step 1, a reader
-  received a `GlobalConfig`, which rejects such a path.
-- Must the constructor of `LocalCollector` reject two providers that have one harness?
+  new exports, because `ProviderScan.earlierCopies` names them.
+- **[scan.tsp](local-collector/scan.tsp).** The two readers, their three models and the field
+  `currentFilePath` are gone.
 
 ## Points that later work must know
 
@@ -502,19 +471,9 @@ Two decisions are open for the owner. The contracts state both points as precond
   finds the source of a compiled file only through an `outDir` in a `tsconfig.json` of the same
   workspace. The repository has one `tsconfig.json`, at the root. A second one in an app is the
   TypeScript project of that directory for an editor, and TypeScript 6 then reports errors for the files
-  of the other workspaces. Step 5 added such a file to each app and removed it for that reason. Thus
-  Knip reports an export that only a test imports through `#src/…` as not used. That agrees with the
-  rule of step 5: a name that only tests read does not belong in the production code. Run Knip after a
-  build. Without one, it reports the `#…` imports as not resolved.
-- **A static method does not use `this`.** A static method that a caller passes as a value has no
-  `this`. A caller names a static helper through its class, also inside the class. The structure rule
-  checks it.
-- **Names that tests read and that no production file reads.** After step 5 they are
-  `LocalLLMHistory.readLocalHistory` with `HistoryWindow.between`, the field `harness` of a scan entry,
-  and two fields of the storage contract: `coverage` of a session view and `status` of a usage row. The
-  storage writes the two contract fields for the reader of a session.
-  [Left alone on purpose](#left-alone-on-purpose) gives the reason for the others. A helper that only a
-  test needs belongs in `test/fixtures/`.
+  of the other workspaces. Thus Knip reports an export that only a test imports through `#src/…` as not
+  used. That agrees with the rule of step 5: a helper that only a test needs belongs in
+  `test/fixtures/`. Run Knip after a build. Without one, it reports the `#…` imports as not resolved.
 - **Pairs that look alike and stay two rules.** `StreamKeys.stream` and `StreamKeys.sourceId` give
   different text for a source that has no installation ID. `ForkCapture.later` and the comparison in
   `SessionMetadata.selectBranch` are not `RecordedInstant.compare`. `ClaudeUsage.text` ignores a string
@@ -539,12 +498,12 @@ Two decisions are open for the owner. The contracts state both points as precond
 - The Codex and Claude Code parsers stay separate. They share little. A shared base class would bring
   back the inheritance problem of finding 1.
 - Three Codex classes read the same turn events for three different purposes. They stay separate.
-- `LocalLLMHistory.readLocalHistory` and `HistoryWindow.between`, which only it calls. No production file
-  calls them: the CLI calls `readLocalHistoryInstants`, which keeps each fraction digit of its arguments.
-  `readLocalHistory` is the operation of [history.tsp](local-collector/history.tsp) for a TypeScript
-  caller, and the history scenarios use it.
-- The field `harness` of a scan entry. The provider writes it, and no production code reads it. The
-  field makes the entry types of the two providers different types, and the contract has the field.
+- `LocalLLMHistory.readLocalHistory` and `HistoryWindow.between`. No production code calls the first,
+  and only the first calls the second. The CLI calls `readLocalHistoryInstants`, which keeps each
+  fraction digit of its arguments. `readLocalHistory` is the operation of
+  [history.tsp](local-collector/history.tsp) for a TypeScript caller, and the history scenarios use it.
+- The field `harness` of a scan entry. `TranscriptBatches` writes it, and no production code reads it.
+  The field makes the entry types of the two providers different types, and the contract has the field.
 
 ## Decisions
 
@@ -552,15 +511,20 @@ The owner accepted these five decisions.
 
 1. **Provider class names.** `CodexHistory` and `ClaudeHistory`. The configuration key (`claudePath`),
    the stored `harness` value and the specification all say `claude`.
-2. **Test-only methods.** `readRollouts`, `readTranscripts`, `ClaudeChat.decode` and `CodexChat.decode`
-   had test callers only. Step 5 moved them to test fixtures and removed the two readers from the
-   contract. It did the same for `TranscriptBatches.snapshot` and `UsageWindows.mayCover`.
+2. **Test-only methods.** A member that only tests read goes to a test fixture, and the contract loses
+   it. Step 5 did that.
 3. **Scope of `storage/`.** Step 4 includes `storage/`, which had 150 of the 265 functions and which the
    API runs.
 4. **Two shared leaf modules.** `recorded-instant.ts` and `claude-transcript-copy.ts` are in
    `packages/shared`, with `ajv` and `ajv-formats` as its dependencies. `storage/` is then self-contained.
 5. **Enforcement.** The PR workflow runs `check:collector-structure`, so that a new function outside a
    class fails the check.
+
+Two decisions are open for the owner. The contracts state both points as preconditions now.
+
+- Must the constructor of a provider reject a root that is not an absolute path? Before step 1, a reader
+  received a `GlobalConfig`, which rejects such a path.
+- Must the constructor of `LocalCollector` reject two providers that have one harness?
 
 ## The review that started the cleanup
 
