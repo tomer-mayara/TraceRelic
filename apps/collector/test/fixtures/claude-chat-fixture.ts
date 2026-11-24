@@ -1,4 +1,4 @@
-import type { ClaudeTranscript } from "../../src/history/index.ts";
+import type { ClaudeTranscript } from "../../src/providers/index.ts";
 
 type Row = Record<string, unknown>;
 

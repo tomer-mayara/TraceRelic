@@ -2,8 +2,7 @@ import assert from "node:assert/strict";
 import { appendFile, copyFile, rename, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryCodex, type CodexRollout, type CodexSelection } from "@tracerelic/collector/history";
+import { CodexHistory, type CodexRollout, type CodexSelection } from "@tracerelic/collector/providers";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
 
 test("selects Codex rollouts by their first native header within the configured workspace root", async t => {
@@ -24,7 +23,7 @@ test("selects Codex rollouts by their first native header within the configured 
   await copyFile(outside, join(configured.home, "rollout-ignored.jsonl"));
   await symlink(dirname(outside), join(dirname(active), "other-directory"), "dir");
 
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(configured.home));
+  const reader = new CodexHistory(configured.home);
   const sessionIds = async (selection?: CodexSelection) => {
     const ids: string[] = [];
     for await (const rollout of reader.readRollouts(selection)) ids.push(rollout.sessionId);
@@ -47,7 +46,7 @@ test("discovers fork identity and creation time only from the child's own native
   const forkedAt = "2026-02-01T02:00:00.128Z";
   const child = Rollout.header("child");
   const copied = { ...Rollout.header("parent"), payload: { id: "parent", forked_from_id: "grandparent" } };
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(root.home));
+  const reader = new CodexHistory(root.home);
   for (const link of [
     { forked_from_id: "parent" },
     { forked_from: "parent" },
@@ -79,7 +78,7 @@ test("reads Codex batches from the specified byte and physical line, with a larg
   const final = JSON.stringify({ text: "done" }) + "\n";
   await appendFile(sourceFile, first + second + large + final);
 
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const reader = new CodexHistory(fixture.home);
   const [source] = await Array.fromAsync(reader.discoverSources());
   const { readBatches: _readBatches, prefixDigests: _prefixDigests, completeEnd: _completeEnd, ...info } = source;
   assert.deepEqual(info, { sourceFile, sessionId: "one", previousCopy: false, fileSize: (await stat(sourceFile)).size, codexHeaderEnd: start.offset });
@@ -108,7 +107,7 @@ test("marks the native header after a verified blank prefix across batches and r
   const copied = Rollout.header("copied");
   const path = await fixture.write([native, copied]);
   const body = [native, copied].map(record => JSON.stringify(record) + "\n").join("");
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const reader = new CodexHistory(fixture.home);
   for (const [prefix, expected] of [
     [" \r\n\t\n", true], ["", undefined], ["\nnull\n", undefined],
     ["broken JSON\n\n", undefined], ["{}\n", undefined], ["\u00a0\n", undefined],
@@ -133,7 +132,7 @@ test("rejects an equally long replacement between discovery and the batch read",
   const fixture = await Rollout.create();
   t.after(() => fixture.close());
   const sourceFile = await fixture.write([Rollout.header("original")]);
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const reader = new CodexHistory(fixture.home);
   const [source] = await Array.fromAsync(reader.discoverSources());
   await rename(sourceFile, sourceFile + ".old");
   await fixture.write([Rollout.header("replaced")]);
@@ -158,7 +157,7 @@ test("reports only the raw byte ranges of damaged complete records across batch 
   await appendFile(file, Buffer.concat([...physical, Buffer.from('{"pending":')]));
   const ends = [start.offset];
   for (const line of physical) ends.push(ends[ends.length - 1] + line.length);
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const reader = new CodexHistory(fixture.home);
   const [source] = await Array.fromAsync(reader.discoverSources());
 
   for (const budget of [1, 8192, source.fileSize]) {
@@ -181,7 +180,7 @@ test("discards a pending batch when a captured file shrinks between reads", asyn
   const fixture = await Rollout.create();
   t.after(() => fixture.close());
   const sourceFile = await fixture.write([Rollout.header("chat"), { text: "pending" }]);
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const reader = new CodexHistory(fixture.home);
   const [source] = await Array.fromAsync(reader.discoverSources());
   const batches = source.readBatches({ offset: 0, lineNumber: 0 }, 1)[Symbol.asyncIterator]();
   const first = await batches.next();
@@ -207,7 +206,7 @@ test("returns undated Codex metadata and the byte position after the last decode
   const { size } = await stat(sourceFile);
   await appendFile(sourceFile, "null\n" + JSON.stringify(Rollout.message(message.timestamp, "Unfinished")));
 
-  const reader = new LocalLLMHistoryCodex(new GlobalConfig(fixture.home));
+  const reader = new CodexHistory(fixture.home);
   const rollouts: CodexRollout[] = [];
   for await (const rollout of reader.readRollouts()) rollouts.push(rollout);
   assert.equal(rollouts.length, 1);

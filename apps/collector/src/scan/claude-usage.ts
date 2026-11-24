@@ -1,4 +1,5 @@
-import type { ClaudeSubagent, ClaudeTranscriptEntry } from "../history/index.ts";
+import type { ClaudeTranscriptEntry } from "../providers/index.ts";
+import type { ClaudeSubagent } from "../transcript/index.ts";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import type { ClaudeCallOrigin, ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../storage/collector-storage.ts";
 import { ClaudeUsageCounts, isObject, type ReportIssue } from "./claude-usage-counts.ts";

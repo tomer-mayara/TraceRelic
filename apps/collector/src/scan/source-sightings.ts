@@ -1,5 +1,6 @@
 import { relative } from "node:path";
-import { codexRolloutName, type TranscriptSource } from "../history/index.ts";
+import { CodexRolloutFiles } from "../providers/codex/codex-rollout-files.ts";
+import type { TranscriptSource } from "../transcript/index.ts";
 import { matchesSourceScope, type Batch, type CheckpointSnapshot, type CollectorStorage, type MissingSource,
   type ObservedExtent, type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { captureProof, readStorage } from "./scan-recovery.ts";
@@ -56,7 +57,7 @@ export class SourceSightings {
   async capture(scope: SourceScope, transcript: TranscriptSource<unknown>, observedEnd: number): Promise<SourceSighting> {
     const { root, harness, installationId } = scope;
     const { sourceFile, sessionId, selectionCwd: cwd, projectDir, currentFileCwd } = transcript;
-    const path = harness === "codex" ? codexRolloutName(sourceFile) : relative(root, sourceFile);
+    const path = harness === "codex" ? CodexRolloutFiles.logicalName(sourceFile) : relative(root, sourceFile);
     const streamId = installationId ? path : harness === "codex" ? JSON.stringify([root, path]) : sourceFile;
     const key = { harness, sessionId, streamId, ...(installationId && { installationId }) };
     const location = { root, path, ...(cwd && { cwd }), ...(projectDir && { projectDir }), ...(currentFileCwd && { currentFileCwd }) };

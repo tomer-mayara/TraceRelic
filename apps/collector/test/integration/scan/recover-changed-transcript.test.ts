@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, truncate } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { test } from "node:test";
-import { LocalLLMHistoryCodex, type ReadPosition, type ScanSelection } from "@tracerelic/collector/history";
+import { CodexHistory } from "@tracerelic/collector/providers";
+import type { ReadPosition, ScanSelection } from "@tracerelic/collector/transcript";
 import type { Batch } from "../../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
 import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
@@ -25,9 +26,9 @@ test("moving a rollout to the archive verifies the old prefix and resumes at its
   assert.deepEqual(await fixture.storage.readCheckpoint(fixture.source), before);
 
   const reads: ReadPosition[] = [];
-  const discover = LocalLLMHistoryCodex.prototype.discoverSources;
-  t.mock.method(LocalLLMHistoryCodex.prototype, "discoverSources", async function* (
-    this: LocalLLMHistoryCodex, selection?: ScanSelection,
+  const discover = CodexHistory.prototype.discoverSources;
+  t.mock.method(CodexHistory.prototype, "discoverSources", async function* (
+    this: CodexHistory, selection?: ScanSelection,
   ) {
     for await (const source of discover.call(this, selection)) {
       yield { ...source, readBatches(position: ReadPosition, budget?: number, end?: number) {

@@ -1,4 +1,4 @@
-import type { DamagedLine, RecordBatch } from "../history/index.ts";
+import type { DamagedLine, RecordBatch } from "../transcript/index.ts";
 import type {
   BranchObservation, ClaudeUsageReport, CodexCallAlias, CodexCallClaim, Message, Metadata, Usage, UsageAnchor, UsageDiagnostic, UsageWindow,
 } from "../storage/collector-storage.ts";

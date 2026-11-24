@@ -3,7 +3,8 @@ import { appendFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryClaude, type ScanSelection } from "@tracerelic/collector/history";
+import { ClaudeHistory } from "@tracerelic/collector/providers";
+import type { ScanSelection } from "@tracerelic/collector/transcript";
 import { LocalCollector } from "@tracerelic/collector/scan";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
@@ -26,9 +27,9 @@ test("two Claude sessions in one file verify their different saved offsets toget
   await appendFile(file, JSON.stringify(Claude.user("a", at, "New text")) + "\n");
 
   const requests: number[][] = [];
-  const discover = LocalLLMHistoryClaude.prototype.discoverSources;
-  t.mock.method(LocalLLMHistoryClaude.prototype, "discoverSources", async function* (
-    this: LocalLLMHistoryClaude, selection?: ScanSelection,
+  const discover = ClaudeHistory.prototype.discoverSources;
+  t.mock.method(ClaudeHistory.prototype, "discoverSources", async function* (
+    this: ClaudeHistory, selection?: ScanSelection,
   ) {
     for await (const source of discover.call(this, selection)) {
       yield { ...source, prefixDigests(offsets: readonly number[]) {

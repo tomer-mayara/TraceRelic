@@ -1,4 +1,4 @@
-import type { CodexRolloutEntry } from "../history/index.ts";
+import type { CodexRolloutEntry } from "../providers/index.ts";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import type { TokenCounts, Usage } from "../storage/collector-storage.ts";
 import { jsonDigest } from "./chat-parser-state.ts";

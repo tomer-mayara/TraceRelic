@@ -5,6 +5,7 @@ behavior:
   - test/interface/history/codex-history.feature
   - test/interface/history/claude-history.feature
   - test/interface/history/history-windows.feature
+  - test/interface/history/history-providers.feature
   - test/acceptance/config/local-config.feature
   - test/acceptance/scan/codex-planning.feature
   - test/acceptance/scan/claude-conversation.feature
@@ -34,6 +35,8 @@ httpStorage: src/storage/http-collector-storage.ts
 wireContract: src/storage/collector-wire-contract.ts
 storageFixture: test/fixtures/in-memory-collector-storage.ts
 historyReader: src/history/index.ts
+historyProviders: src/providers/index.ts
+transcriptTypes: src/transcript/index.ts
 configFile: ../../tracerelic.config.json
 configSchema: src/config/global-config-schema.ts
 configLoader: src/config/global-config-loader.ts

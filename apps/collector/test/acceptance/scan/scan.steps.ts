@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { After, Before, Given, Then, When, setWorldConstructor } from "@cucumber/cucumber";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
-import { LocalLLMHistoryClaude, LocalLLMHistoryCodex, type ScanSelection } from "@tracerelic/collector/history";
+import { ClaudeHistory, CodexHistory } from "@tracerelic/collector/providers";
+import type { ScanSelection } from "@tracerelic/collector/transcript";
 import type { CollectorStorage, SessionKey, SessionView } from "../../../src/storage/collector-storage.ts";
 import { ClaudeUsageScanFixture } from "../../fixtures/claude-usage-scan-fixture.ts";
 import { CodexUsageScanFixture } from "../../fixtures/codex-usage-scan-fixture.ts";
@@ -52,7 +53,7 @@ class ScanScenario {
   }
 
   async checkSourceAndBatches(
-    reader: LocalLLMHistoryCodex | LocalLLMHistoryClaude, selection: ScanSelection,
+    reader: CodexHistory | ClaudeHistory, selection: ScanSelection,
     batchSchema: "CodexRecordBatch.json" | "ClaudeRecordBatch.json",
   ): Promise<void> {
     let sourceCount = 0;
@@ -95,7 +96,7 @@ Given("a selected Codex session contains the prompt {string} and the reply {stri
   await this.fixture.writePlanningChat(prompt, reply);
   const selection = { sessionIds: [this.fixture.codexKey.sessionId] };
   assert(contract.validate("ScanSelection.json", selection), contract.errorsText());
-  const reader = new LocalLLMHistoryCodex(await GlobalConfigLoader.load(this.fixture.configFile));
+  const reader = new CodexHistory((await GlobalConfigLoader.load(this.fixture.configFile)).codexPath);
   await this.checkSourceAndBatches(reader, selection, "CodexRecordBatch.json");
   const rollouts = await Array.fromAsync(reader.readRollouts(selection));
   assert.equal(rollouts.length, 1);
@@ -135,7 +136,9 @@ Given("a Claude session contains {string} twice and one assistant response has t
   await this.fixture.writeRepeatedClaudePrompt(prompt);
   const selection = { projectPaths: [this.fixture.projectPath] };
   assert(contract.validate("ScanSelection.json", selection), contract.errorsText());
-  const reader = new LocalLLMHistoryClaude(await GlobalConfigLoader.load(this.fixture.configFile));
+  const { claudePath } = await GlobalConfigLoader.load(this.fixture.configFile);
+  assert(claudePath, "the scan configuration names a Claude Code root");
+  const reader = new ClaudeHistory(claudePath);
   await this.checkSourceAndBatches(reader, selection, "ClaudeRecordBatch.json");
   const transcripts = await Array.fromAsync(reader.readTranscripts(selection));
   assert.equal(transcripts.length, 1);

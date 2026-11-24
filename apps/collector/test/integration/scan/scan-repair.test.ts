@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { appendFile, chmod, readFile, rm, writeFile } from "node:fs/promises";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryCodex } from "@tracerelic/collector/history";
+import { CodexHistory } from "@tracerelic/collector/providers";
 import { LocalCollector, ScanPendingError } from "@tracerelic/collector/scan";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { MissingSourceFixture } from "../../fixtures/missing-source-fixture.ts";
@@ -238,7 +238,7 @@ for (const unstable of [false, true]) {
     const files = await MissingSourceFixture.create();
     t.after(() => files.close());
     const moving = await rotateCodex(files.transcript, unstable);
-    const discovery = t.mock.method(LocalLLMHistoryCodex.prototype, "discoverSources");
+    const discovery = t.mock.method(CodexHistory.prototype, "discoverSources");
     if (unstable) await assert.rejects(moving.scan(), e => e instanceof ScanPendingError && e.pending.reason === "source-changed");
     else assert.deepEqual((await moving.scan()).map(view => "key" in view ? view.key.sessionId : view.sessionId).sort(), ["healthy", "s"]);
     assert(await moving.store.readSession({ harness: "codex", sessionId: "healthy" }));

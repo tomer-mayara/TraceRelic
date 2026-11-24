@@ -37,10 +37,34 @@
       "to": { "path": "^apps/collector/src/(history/|storage/(?!collector-storage\\.ts$)|scan/local-collector\\.ts$)" }
     },
     {
-      "name": "scanner-reads-files-through-history",
+      "name": "only-the-transcript-layer-reads-files",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/scan/" },
+      "from": { "path": "^apps/collector/src/(history|providers|scan)/" },
       "to": { "path": "^(node:)?fs(/promises)?$" }
+    },
+    {
+      "name": "history-reads-through-the-provider-port",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/history/" },
+      "to": { "path": "^apps/collector/src/(providers|transcript|scan|watch|storage|config|commands)/" }
+    },
+    {
+      "name": "transcript-layer-is-provider-neutral",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/transcript/" },
+      "to": { "path": "^apps/collector/src/(providers|scan|watch|storage|config|commands)/" }
+    },
+    {
+      "name": "providers-do-not-know-each-other",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/providers/(codex|claude)/" },
+      "to": { "path": "^apps/collector/src/providers/(codex|claude)/", "pathNot": "^apps/collector/src/providers/$1/" }
+    },
+    {
+      "name": "providers-receive-their-paths",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/providers/(codex|claude)/" },
+      "to": { "path": "^apps/collector/src/config/" }
     },
     {
       "name": "scanner-uses-only-the-storage-port",
@@ -66,13 +90,13 @@
     {
       "name": "history-receives-global-config",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/history/" },
+      "from": { "path": "^apps/collector/src/(history|providers|transcript)/" },
       "to": { "path": "^apps/collector/src/config/global-config-loader\\.ts$", "reachable": true }
     },
     {
       "name": "local-history-is-independent-of-storage",
       "severity": "error",
-      "from": { "path": "^apps/collector/src/history/" },
+      "from": { "path": "^apps/collector/src/(history|transcript)/" },
       "to": { "path": "^apps/collector/src/storage/|(^|/)(better-sqlite3|node:sqlite)(/|$)" }
     },
     {

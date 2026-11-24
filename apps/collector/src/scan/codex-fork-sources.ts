@@ -1,4 +1,5 @@
-import type { CodexRolloutEntry, TranscriptSource } from "../history/index.ts";
+import type { CodexRolloutEntry } from "../providers/index.ts";
+import type { TranscriptSource } from "../transcript/index.ts";
 import type { Checkpoint, CodexForkCheckpoint } from "../storage/collector-storage.ts";
 import { CodexForkEvidence } from "./codex-fork-evidence.ts";
 import { CodexSessionParser } from "./codex-session-parser.ts";

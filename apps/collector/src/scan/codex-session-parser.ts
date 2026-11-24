@@ -1,4 +1,5 @@
-import type { CodexRolloutEntry, DamagedLine, RecordBatch } from "../history/index.ts";
+import type { CodexRolloutEntry } from "../providers/index.ts";
+import type { DamagedLine, RecordBatch } from "../transcript/index.ts";
 import type { CodexForkCheckpoint } from "../storage/collector-storage.ts";
 import { invalidState, stateRecord } from "./chat-parser-state.ts";
 import { CodexChat } from "./codex-chat.ts";

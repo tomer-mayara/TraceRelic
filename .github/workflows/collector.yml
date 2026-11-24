@@ -47,6 +47,9 @@ jobs:
       - name: Check collector dependencies
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: bun run check:collector-deps
+      - name: Check collector structure
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bun run check:collector-structure
       - name: Test collector history and configuration
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: bun run --cwd apps/collector check:history-scenarios && bun run --cwd apps/collector check:config-scenarios

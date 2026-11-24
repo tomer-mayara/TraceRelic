@@ -1,4 +1,5 @@
-import type { CodexRolloutEntry, TranscriptSource } from "../../src/history/index.ts";
+import type { CodexRolloutEntry } from "../../src/providers/index.ts";
+import type { TranscriptSource } from "../../src/transcript/index.ts";
 import { CodexUsageFixture as Usage } from "./codex-usage-fixture.ts";
 
 type Row = ReturnType<typeof Usage.record> | null;

@@ -21,6 +21,24 @@ model LocalHistoryEntry extends SessionKey {
   record: Record<unknown>;
 }
 
+/** The half-open interval from an inclusive start to an exclusive end. */
+interface HistoryWindow {
+  /** True for a recorded RFC 3339 timestamp in the interval. Compare instants with their
+   * offsets and all recorded fractional digits. Equal endpoints contain no instant. */
+  contains(timestamp: string): boolean;
+}
+
+/** The local transcripts of one provider. The provider receives its root directory. */
+interface HistoryProvider {
+  /** The harness of each entry that this provider returns. */
+  harness(): Harness;
+  /** Read each source anew, in file order. Return the records whose timestamp is in the window.
+   * A final record becomes readable after its newline. File read errors propagate to the caller. */
+  readHistory(window: HistoryWindow): LocalHistoryEntry[];
+}
+
+/** The reader receives its providers. It returns the entries of each provider in the order
+ * of the providers. A provider that is not configured is not supplied. */
 interface LocalLLMHistory {
   /** Read each source anew, in file order, from the inclusive start to the exclusive end.
    * Equal endpoints return an empty list. A final record becomes readable after its newline.

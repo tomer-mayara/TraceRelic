@@ -3,7 +3,8 @@ import { appendFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalLLMHistoryCodex, type ReadPosition, type ScanSelection } from "@tracerelic/collector/history";
+import { CodexHistory } from "@tracerelic/collector/providers";
+import type { ReadPosition, ScanSelection } from "@tracerelic/collector/transcript";
 import { LocalCollector } from "@tracerelic/collector/scan";
 import type { Batch } from "../../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
@@ -36,9 +37,9 @@ test("a fresh scanner seeks to the last committed byte after an oversized batch 
   assert.deepEqual((await storage.readSession(session))?.messages.map(row => row.text), ["Same question"]);
 
   const starts: ReadPosition[] = [];
-  const discover = LocalLLMHistoryCodex.prototype.discoverSources;
-  t.mock.method(LocalLLMHistoryCodex.prototype, "discoverSources", async function* (
-    this: LocalLLMHistoryCodex, selection?: ScanSelection,
+  const discover = CodexHistory.prototype.discoverSources;
+  t.mock.method(CodexHistory.prototype, "discoverSources", async function* (
+    this: CodexHistory, selection?: ScanSelection,
   ) {
     for await (const source of discover.call(this, selection)) {
       const read = t.mock.method(source, "readBatches");

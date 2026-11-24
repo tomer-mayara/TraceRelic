@@ -1,4 +1,5 @@
-import type { CodexRolloutEntry, DamagedLine } from "../history/index.ts";
+import type { CodexRolloutEntry } from "../providers/index.ts";
+import type { DamagedLine } from "../transcript/index.ts";
 import type { Metadata, Role } from "../storage/collector-storage.ts";
 import { isRecordedTimestamp } from "../recorded-timestamp.ts";
 import { invalidState, jsonDigest, stateRecord, stateString, TextOccurrences } from "./chat-parser-state.ts";
