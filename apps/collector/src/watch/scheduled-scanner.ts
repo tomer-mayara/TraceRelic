@@ -10,10 +10,16 @@ export interface ScanClock {
   wait(delayMs: number, signal: AbortSignal): Promise<void>;
 }
 
-const systemClock: ScanClock = {
-  now: () => Date.now(),
-  wait: (delayMs, signal) => setTimeout(delayMs, undefined, { signal }),
-};
+/** The clock of the process. */
+class SystemClock implements ScanClock {
+  now(): number {
+    return Date.now();
+  }
+
+  wait(delayMs: number, signal: AbortSignal): Promise<void> {
+    return setTimeout(delayMs, undefined, { signal });
+  }
+}
 
 const maxTimerMs = 2_147_483_647;
 
@@ -30,7 +36,7 @@ export class ScheduledScanner {
 
   constructor(private readonly scanOnce: () => Promise<unknown>,
     private readonly activity: Pick<ScanActivity, "beginPass" | "finishPass" | "pending">,
-    private readonly clock: ScanClock = systemClock) {}
+    private readonly clock: ScanClock = new SystemClock()) {}
 
   static checkedIntervalMs(value: number): number {
     if (!Number.isInteger(value) || value < 1 || value > maxTimerMs) {
