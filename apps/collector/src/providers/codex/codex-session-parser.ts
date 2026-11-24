@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { CodexRolloutEntry } from "../index.ts";
+import type { CodexRolloutEntry } from "./codex-history.ts";
 import type { DamagedLine, RecordBatch } from "../../transcript/index.ts";
 import type { CodexForkCheckpoint } from "../../storage/collector-storage.ts";
 import { invalidState, stateRecord } from "../../scan/parser-state.ts";

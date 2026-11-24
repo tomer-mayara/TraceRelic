@@ -22,15 +22,8 @@ const pending = [
 const message =
   "Put this function in the class that owns the rule. See docs/specs/local-collector-structure-cleanup.md.";
 
-const topLevelFunctions = [
-  "Program > FunctionDeclaration",
-  "Program > ExportNamedDeclaration > FunctionDeclaration",
-  "Program > ExportDefaultDeclaration > FunctionDeclaration",
-  "Program > VariableDeclaration > VariableDeclarator > ArrowFunctionExpression",
-  "Program > VariableDeclaration > VariableDeclarator > FunctionExpression",
-  "Program > ExportNamedDeclaration > VariableDeclaration > VariableDeclarator > ArrowFunctionExpression",
-  "Program > ExportNamedDeclaration > VariableDeclaration > VariableDeclarator > FunctionExpression",
-].map((selector) => ({ selector, message }));
+// A function, a function expression or an arrow function that is not in a class body.
+const functionOutsideClass = { selector: ":function:not(ClassBody :function)", message };
 
 export default [
   {
@@ -38,7 +31,7 @@ export default [
     ignores: pending.map((file) => `**/apps/collector/src/${file}`),
     languageOptions: { parser: tsparser },
     rules: {
-      "no-restricted-syntax": ["error", ...topLevelFunctions],
+      "no-restricted-syntax": ["error", functionOutsideClass],
     },
   },
 ];

@@ -1,5 +1,5 @@
 import { relative } from "node:path";
-import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "../index.ts";
+import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "./claude-history.ts";
 import type { ScanSelection, SourceDiscoveryOptions } from "../../transcript/index.ts";
 import type { LocatedSource, ProviderScan } from "../../scan/scan-provider.ts";
 import type { ParserFormat } from "../../scan/transcript-cursor.ts";

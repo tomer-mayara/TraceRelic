@@ -1,4 +1,4 @@
-import type { CodexRolloutEntry } from "../index.ts";
+import type { CodexRolloutEntry } from "./codex-history.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { TokenCounts, Usage } from "../../storage/collector-storage.ts";
 import { jsonDigest } from "../../scan/parser-state.ts";

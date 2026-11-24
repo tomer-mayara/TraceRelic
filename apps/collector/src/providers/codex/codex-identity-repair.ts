@@ -1,12 +1,13 @@
-import type { CodexRolloutSource } from "../index.ts";
+import type { CodexRolloutSource } from "./codex-history.ts";
 import { TranscriptChangedError } from "../../transcript/index.ts";
 import { legacyScannerLine, needsHistoryVerification, type AcknowledgedSource, type Checkpoint, type CodexIdentityProof, type CollectorStorage,
   type SourceScope, type StreamKey } from "../../storage/collector-storage.ts";
 import { ScanPendingError } from "../../scan/scan-pending.ts";
 import { captureProof, readStorage } from "../../scan/scan-recovery.ts";
-import { sourceId, type SourceSighting } from "../../scan/source-sightings.ts";
+import type { SeenSource } from "../../scan/scan-provider.ts";
+import { sourceId } from "../../scan/source-sightings.ts";
 
-interface Seen { sighting: SourceSighting; transcript: CodexRolloutSource }
+type Seen = SeenSource<CodexRolloutSource>;
 type IdentitiesAt = (paths: ReadonlySet<string>) => AsyncIterable<{ path: string; sessionId: string }>;
 
 /** A filename only selects candidates. Both accepted checkpoints must match one sealed native capture. */
