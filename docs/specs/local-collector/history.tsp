@@ -28,10 +28,8 @@ interface HistoryWindow {
   contains(timestamp: string): boolean;
 }
 
-/** The local transcripts of one provider. The provider receives its root directory. */
+/** The local transcripts of one provider. The provider receives its root directory as an absolute path. */
 interface HistoryProvider {
-  /** The harness of each entry that this provider returns. */
-  harness(): Harness;
   /** Read each source anew, in file order. Return the records whose timestamp is in the window.
    * A final record becomes readable after its newline. File read errors propagate to the caller. */
   readHistory(window: HistoryWindow): LocalHistoryEntry[];
@@ -44,9 +42,6 @@ interface LocalLLMHistory {
    * Equal endpoints return an empty list. A final record becomes readable after its newline.
    * Invalid or reversed dates raise RangeError. File read errors propagate to the caller. */
   readLocalHistory(fromDate: utcDateTime, toDate: utcDateTime): LocalHistoryEntry[];
-  /** Read the same window from RFC 3339 strings, retaining all recorded fractional digits.
-   * A Codex rollout stored as .jsonl.zst has the same logical bytes as its plain form.
-   * For same-name plain and compressed copies with the same native ID, return the longer
-   * verified byte prefix. Prefer plain on a tie. Read divergent files independently. */
+  /** Read the same window from RFC 3339 strings, retaining all recorded fractional digits. */
   readLocalHistoryInstants(from: string, to: string): LocalHistoryEntry[];
 }

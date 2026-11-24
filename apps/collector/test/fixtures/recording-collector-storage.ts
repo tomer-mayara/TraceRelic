@@ -16,7 +16,6 @@ export interface StorageScript {
  */
 export class RecordingCollectorStorage implements CollectorStorage {
   readonly batches: Batch[] = [];
-  readonly presence: PresenceWrite[] = [];
 
   constructor(private readonly script: StorageScript = {}, readonly journal: string[] = []) {}
 
@@ -27,7 +26,6 @@ export class RecordingCollectorStorage implements CollectorStorage {
 
   async recordPresence(update: PresenceWrite): Promise<CommitResult> {
     this.record("recordPresence", update.source);
-    this.presence.push(update);
     return "committed";
   }
 

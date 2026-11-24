@@ -73,7 +73,8 @@ Given("Claude Code project transcripts contain these records on February 1, 2026
   this.fixture = await ClaudeProjectFixture.create();
   const config = new GlobalConfig(join(this.fixture.home, "codex"), this.fixture.home);
   assert(contract.validate("GlobalConfig.json", config), contract.errorsText());
-  this.reader = new LocalLLMHistory([new ClaudeHistory(this.fixture.home)]);
+  assert(config.claudePath);
+  this.reader = new LocalLLMHistory([new ClaudeHistory(config.claudePath)]);
   const projects = new Map<string, object[]>();
   for (const { session, time, role, text } of table.hashes()) {
     const timestamp = "2026-02-01T" + time + "Z";

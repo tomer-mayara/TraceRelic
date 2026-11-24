@@ -20,6 +20,7 @@ export interface IdentityInventory<Source> {
   readonly storage: CollectorStorage;
   readonly scope: SourceScope;
   readonly known: ReadonlyMap<string, AcknowledgedSource>;
+  /** The sources that the pass captured. Read them one time. */
   readonly seen: Iterable<SeenSource<Source>>;
 }
 

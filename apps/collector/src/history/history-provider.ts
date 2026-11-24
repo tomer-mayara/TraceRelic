@@ -12,7 +12,6 @@ export interface LocalHistoryEntry {
 
 /** The local transcripts of one provider. The provider receives its root directory. */
 export interface HistoryProvider {
-  readonly harness: LocalHistoryEntry["harness"];
   /** Read each source anew, in file order. Return the records whose timestamp is in the window. */
   readHistory(window: HistoryWindow): Promise<readonly LocalHistoryEntry[]>;
 }

@@ -6,17 +6,15 @@ import {
   countReplayMessages, planReplayOccurrences, readReplayOccurrences, reconcileReplayMessages, type ReplayOccurrences,
 } from "./replay-occurrences.ts";
 
-/** The checkpoint fields that the scanner writes itself. The format of a provider supplies the other fields. */
-type ScannerCheckpointField = "offset" | "parserState" | "prefixDigest" | "evidenceVersion" | "replayThrough";
-export type ProviderCheckpointFields = Omit<Checkpoint, ScannerCheckpointField>;
+/** The checkpoint fields that the format of a provider supplies. The scanner writes the other fields itself. */
+export type ProviderCheckpointFields = Pick<Checkpoint, "codexFork" | "claudeCallOrigins">;
 
 /** The decoder state that a checkpoint saved, with its parser version. */
 export interface SavedDecoder { readonly version: unknown; readonly decoder: Record<string, unknown> }
 
-/** The optional batch fields that name an earlier checkpoint. A correction names the checkpoint that it replaces in one of them. */
-export type ReplacedCheckpointFields = {
-  [Field in keyof Batch as undefined extends Batch[Field] ? NonNullable<Batch[Field]> extends Checkpoint ? Field : never : never]?: Checkpoint;
-};
+/** The batch fields in which a provider correction names the checkpoint that it replaces. A correction has one of them.
+ * The scanner writes resetFrom and repairEvidenceFrom itself. */
+export type CorrectionBatchFields = Pick<Batch, "reconcileCodexForkFrom" | "backfillClaudeOriginsFrom">;
 
 /** A provider's plan to classify the accepted usage again at the accepted byte. */
 export interface UsageCorrection<Entry> {
@@ -27,8 +25,8 @@ export interface UsageCorrection<Entry> {
   accepted(
     saved: SavedDecoder | undefined, reread: ChatParser<Entry>, format: ParserFormat<Entry>,
   ): { checkpoint: Checkpoint } | { parser: ChatParser<Entry> };
-  /** The batch fields that name the replaced checkpoint. */
-  readonly batchFields: ReplacedCheckpointFields;
+  /** The batch field that names the replaced checkpoint. */
+  readonly batchFields: CorrectionBatchFields;
 }
 
 export interface ParserFormat<Entry> {

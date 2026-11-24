@@ -153,6 +153,37 @@ model LocatedSource {
   rootStreamId: Identifier;
 }
 
+/** What a discovery receives, in one object. Each operation gives one value, and each one is optional. */
+interface SourceDiscoveryOptions {
+  /** Discover only this file again. */
+  sourceFile(): Identifier;
+  /** Receives the error of a file that changes during the discovery. The discovery continues with the next file. */
+  onChanged(error: unknown): void;
+}
+
+/** A source that a pass captured, with what the scanner observed of it. */
+model SeenSource<Source> {
+  sighting: {
+    source: StreamKey;
+    observation: SourceObservation;
+    /** True when storage rejected a batch of this source during the pass. */
+    rejected: boolean;
+  };
+  transcript: Source;
+}
+
+/** What a provider receives to check the identity of acknowledged sources, in one object.
+ * Each operation gives one value. */
+interface IdentityInventory<Source> {
+  storage(): CollectorStorage;
+  /** The scope of this provider in the scan. */
+  scope(): SourceScope;
+  /** The acknowledged sources of the scope that this pass did not see. Each key is the JSON text of a stream key. */
+  known(): Record<AcknowledgedSource>;
+  /** The sources that this pass captured. Read them one time. */
+  seen(): SeenSource<Source>[];
+}
+
 /** One earlier copy of a current file. */
 model EarlierCopy<Source> {
   /** Path of the current file, relative to the provider root. */
@@ -162,8 +193,6 @@ model EarlierCopy<Source> {
   /** Each readable session in the copy. */
   sources: Source[];
 }
-
-model ClaudeEarlierCopy is EarlierCopy<ClaudeTranscriptSource>;
 
 /** A copy that can continue an acknowledged source. */
 model CopyCandidate<Source> {
@@ -179,16 +208,37 @@ model CopyAssessment<Source> {
   candidates: CopyCandidate<Source>[];
 }
 
-model ClaudeCopyAssessment is CopyAssessment<ClaudeTranscriptSource>;
-
 /** The checkpoint fields that a provider owns. The scanner writes the other fields. */
 model ProviderCheckpointFields {
   ...PickProperties<Checkpoint, "codexFork" | "claudeCallOrigins">;
 }
 
-/** The batch fields that name the checkpoint that a correction replaces. A correction has one of them. */
+/** The batch fields in which a provider correction names the checkpoint that it replaces. A correction has
+ * one of them. The scanner writes resetFrom and repairEvidenceFrom itself. */
 model CorrectionBatchFields {
   ...PickProperties<Batch, "reconcileCodexForkFrom" | "backfillClaudeOriginsFrom">;
+}
+
+/** The decoder state that a checkpoint saved, with its parser version. */
+model SavedDecoder {
+  ...PickProperties<ParserCheckpointState, "version" | "decoder">;
+}
+
+/** The parser of one source. The provider owns it. It decodes each batch, and it gives the decoder state
+ * that a checkpoint saves. This contract does not model its operations. */
+interface ChatParser {}
+
+/** One decoded batch, before the scanner adds its source and its checkpoint. A parser gives it.
+ * This contract does not model its fields. */
+model DecodedChat is Record<unknown>;
+
+/** What UsageCorrection.accepted gives. It has exactly one of the two values. */
+interface AcceptedUsage {
+  /** The corrected checkpoint. */
+  checkpoint(): Checkpoint;
+  /** The parser that holds the accepted chat state. The scanner saves the state of that parser in
+   * the corrected checkpoint. */
+  parser(): ChatParser;
 }
 
 /** A provider's plan to classify the accepted usage again at the accepted byte.
@@ -196,17 +246,16 @@ model CorrectionBatchFields {
 interface UsageCorrection {
   /** Optional. The parent session, when the provider knows it before the scanner reads the records. */
   parentSessionId(): Identifier;
-  /** Receives the saved parser state of the accepted checkpoint, if it has one, the parser that
-   * read the accepted bytes again, and the format of the source. Give the corrected checkpoint, or
-   * the parser that holds the accepted chat state. The scanner saves the state of that parser in
-   * the corrected checkpoint. */
-  accepted(saved: ParserCheckpointState | null, format: ParserFormat): Checkpoint;
+  /** Receives the saved decoder state of the accepted checkpoint, if it has one, the parser that
+   * read the accepted bytes again, and the format of the source. */
+  accepted(saved: SavedDecoder | null, reread: ChatParser, format: ParserFormat): AcceptedUsage;
   /** The batch field that names the replaced checkpoint. */
   batchFields(): CorrectionBatchFields;
 }
 
-/** The parser of one source. The provider owns the decoder state in ParserCheckpointState
- * and the provider fields of a checkpoint. Each operation here is optional. */
+/** The parser format of one source. It has the version of the parser and the operations that make a
+ * parser from a saved state. This contract does not model them. It also has the provider rules for the
+ * checkpoints of the source. They are the operations here, and each one is optional. */
 interface ParserFormat {
   /** The fields that the provider adds to each checkpoint of this source.
    * Codex adds codexFork for a fork. Claude Code adds claudeCallOrigins. */
@@ -220,7 +269,7 @@ interface ParserFormat {
    * scanner reads the stored session. The operation receives each decoded batch, the stored
    * session and the accepted offset. Remove from the batch the fields that storage has.
    * Return false to skip the batch. */
-  prepareBatch(known: SessionView | null, expectedOffset: Count): boolean;
+  prepareBatch(chat: DecodedChat, known: SessionView | null, expectedOffset: Count): boolean;
 }
 
 /** A named earlier file can resume the logical current stream only from verified bytes. */
@@ -249,10 +298,8 @@ interface EarlierCopies<Source extends TranscriptSourceInfo> {
 
 /** One scan pass of one provider over the selected files. The pass keeps its own state. */
 interface ProviderScan<Source extends TranscriptSourceInfo> {
-  /** Discover the selected sources. The sources that share one physical file arrive together.
-   * With sourceFile, discover only that file again. Report a file that changes during
-   * discovery, and continue with the next file. */
-  discoverFiles(sourceFile?: Identifier): Source[][];
+  /** Discover the selected sources. The sources that share one physical file arrive together. */
+  discoverFiles(options: SourceDiscoveryOptions): Source[][];
   /** Optional. The name that the physical forms of one file share. */
   logicalName(sourceFile: Identifier): Identifier;
   /** Select the parser for a discovered source and its accepted checkpoint.
@@ -264,7 +311,7 @@ interface ProviderScan<Source extends TranscriptSourceInfo> {
   confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
   /** Optional. Check the identity of the acknowledged sources that this pass did not see.
    * Return the sources that the scan must select. */
-  repairIdentities(storage: CollectorStorage, scope: SourceScope, known: AcknowledgedSource[], seen: Source[]): StreamKey[];
+  repairIdentities(inventory: IdentityInventory<Source>): StreamKey[];
   /** Optional. Only a provider that keeps earlier copies of a file has this. */
   earlierCopies(): EarlierCopies<Source>;
 }
@@ -274,10 +321,10 @@ interface ProviderScan<Source extends TranscriptSourceInfo> {
 interface ScanProvider<Source extends TranscriptSourceInfo> {
   /** The harness of each source that this provider discovers. */
   harness(): Harness;
-  /** The provider root. It is the root of each source scope and of each source location. */
+  /** The provider root, an absolute path. It is the root of each source scope and of each source location. */
   root(): string;
-  /** Open one pass over the selected files. */
-  openScan(selection?: ScanSelection): ProviderScan<Source>;
+  /** Open one pass over the selected files. An empty selection includes each file of the root. */
+  openScan(selection: ScanSelection): ProviderScan<Source>;
 }
 
 /** One Codex scan pass. Its state is the fork evidence of the latest discovery. A discovery of one
@@ -285,7 +332,7 @@ interface ScanProvider<Source extends TranscriptSourceInfo> {
 interface CodexScan extends ProviderScan<CodexRolloutSource> {
   /** Give each selected rollout as its own group, as soon as it is discovered.
    * A fork also needs the headers of the later selected files. */
-  discoverFiles(sourceFile?: Identifier): CodexRolloutSource[][];
+  discoverFiles(options: SourceDiscoveryOptions): CodexRolloutSource[][];
   /** The rollout basename. A plain rollout and its .zst form have the same name. */
   logicalName(sourceFile: Identifier): Identifier;
   /** The path is the logical name. The root-based stream ID is the JSON array of the root and the path. */
@@ -294,18 +341,19 @@ interface CodexScan extends ProviderScan<CodexRolloutSource> {
   confirmedAbsent(paths: Identifier[]): Identifier[];
   /** A filename only selects candidates. Both accepted checkpoints must match one sealed native capture.
    * A session-only scan may inspect the native ID at an old location without importing the other chat. */
-  repairIdentities(storage: CollectorStorage, scope: SourceScope, known: AcknowledgedSource[], seen: CodexRolloutSource[]): StreamKey[];
+  repairIdentities(inventory: IdentityInventory<CodexRolloutSource>): StreamKey[];
 }
 
-/** The Codex provider. It receives the Codex root directory. */
+/** The Codex provider. It receives the Codex root directory as an absolute path. */
 interface CodexHistory extends HistoryProvider {
+  /** A Codex rollout stored as .jsonl.zst has the same logical bytes as its plain form.
+   * For same-name plain and compressed copies with the same native ID, return the longer
+   * verified byte prefix. Prefer plain on a tie. Read divergent files independently. */
+  readHistory(window: HistoryWindow): LocalHistoryEntry[];
   /** "codex" */
   harness(): Harness;
   root(): string;
-  openScan(selection?: ScanSelection): CodexScan;
-  /** Check rollout basenames in the active and archive directories of an accessible root. */
-  confirmedAbsent(paths: Identifier[]): Identifier[];
-  discoverSources(selection?: ScanSelection): CodexRolloutSource[];
+  openScan(selection: ScanSelection): CodexScan;
   /** Yield one selected rollout at a time. Preserve undated metadata and source order. */
   readRollouts(selection?: ScanSelection): CodexRollout[];
 }
@@ -313,7 +361,7 @@ interface CodexHistory extends HistoryProvider {
 /** One Claude Code scan pass. It has no identity repair and no logical name. */
 interface ClaudeScan extends ProviderScan<ClaudeTranscriptSource> {
   /** Give all the selected sessions of one physical file as one group. */
-  discoverFiles(sourceFile?: Identifier): ClaudeTranscriptSource[][];
+  discoverFiles(options: SourceDiscoveryOptions): ClaudeTranscriptSource[][];
   /** The path is relative to the root. The root-based stream ID is the absolute source file. */
   locate(source: ClaudeTranscriptSource): LocatedSource;
   /** Ignore a backup's current-name alias only when its identity or accepted prefix has been disproved. */
@@ -321,18 +369,13 @@ interface ClaudeScan extends ProviderScan<ClaudeTranscriptSource> {
   earlierCopies(): EarlierCopies<ClaudeTranscriptSource>;
 }
 
-/** The Claude Code provider. It receives the Claude Code root directory.
+/** The Claude Code provider. It receives the Claude Code root directory as an absolute path.
  * A collector with no Claude Code root has no Claude Code provider. */
 interface ClaudeHistory extends HistoryProvider {
   /** "claude" */
   harness(): Harness;
   root(): string;
-  openScan(selection?: ScanSelection): ClaudeScan;
-  /** Ignore a backup's current-name alias only when its identity or accepted prefix has been disproved. */
-  confirmedAbsent(paths: Identifier[], excludedCopyPaths?: Identifier[]): Identifier[];
-  /** Identify every readable session in backups of the acknowledged relative paths. */
-  recoveryCandidates(paths: Identifier[]): ClaudeEarlierCopy[];
-  discoverSources(selection?: ScanSelection): ClaudeTranscriptSource[];
+  openScan(selection: ScanSelection): ClaudeScan;
   /** Yield complete records grouped by file and effective session ID.
    * Include earlier copies of a selected file for the same session. */
   readTranscripts(selection?: ScanSelection): ClaudeTranscript[];
@@ -405,7 +448,9 @@ model FailedScan {
 interface LocalCollectorOptions {
   /** The scanner reads these providers in this order. A provider that is not configured is not supplied.
    * LocalProviders.fromConfig gives Codex first, then Claude Code when the configuration has a claudePath.
-   * Each of these provider objects is a HistoryProvider and a ScanProvider. */
+   * Each of these provider objects is a HistoryProvider and a ScanProvider.
+   * Supply at most one provider for each harness. With an installation ID, a stream ID does not
+   * contain the provider root, so two roots of one harness can give one stream key to two files. */
   providers(): ScanProvider<TranscriptSourceInfo>[];
   /** The destination workspace. */
   storage(): CollectorStorage;
@@ -423,8 +468,9 @@ interface LocalCollectorOptions {
 interface ScanProgress {
   /** UTC milliseconds since the Unix epoch. */
   now(): Count;
-  /** The scanner matched the durable checkpoint of a source to its capture. */
-  verified(source: StreamKey, snapshot: CheckpointSnapshot): void;
+  /** The scanner matched the durable checkpoint of a source to its capture. It gives the capture
+   * when it has one. The schedule reads only the prefix digests of the capture. */
+  verified(source: StreamKey, snapshot: CheckpointSnapshot, transcript?: SourceBatches<{}>): void;
   /** The scanner read a source to its end without a rejection. */
   finishedSource(source: StreamKey): void;
 }
