@@ -213,3 +213,31 @@ test("uses the first absolute Claude working directory without a NUL character",
   const selected = await Array.fromAsync(TranscriptSnapshots.transcripts(reader, { projectPaths: ["/work/actual"] }));
   assert.deepEqual(selected.map(source => source.sessionId).sort(), ["nul", "relative"]);
 });
+
+test("Claude exposes the effective project for ID and directory selections and for an orphaned copy", async t => {
+  const fixture = await Claude.create();
+  t.after(() => fixture.close());
+  const current = await fixture.write("encoded", "chat", [{ sessionId: "id", cwd: "relative" }, { sessionId: "other", cwd: "/other" }]);
+  await appendFile(current, '{"sessionId":"id","c\\u0077d":"/work/one"}\n{"sessionId":"id","cwd":"/work/later"}\n');
+  const earlier = await fixture.write("encoded", "chat.orphaned-1700000000000-copy", [{ sessionId: "id" }]);
+  const reader = new ClaudeHistory(fixture.home);
+  for (const selection of [{}, { sessionIds: ["id"] }, { projectPaths: ["/work"] }]) {
+    const sources = await Array.fromAsync(reader.discoverSources(selection));
+    assert.deepEqual(sources.filter(s => s.sessionId === "id").map(s => [s.sourceFile, s.projectDir, s.selectionCwd]),
+      [current, earlier].map(path => [path, dirname(current), "/work/one"]));
+  }
+});
+
+test("an earlier Claude file retains both working directories regardless of how it was selected", async t => {
+  const fixture = await Claude.create();
+  t.after(() => fixture.close());
+  const current = await fixture.write("project", "chat", [{ sessionId: "s", cwd: "/work/a" }]);
+  const previous = await fixture.write("project", "chat.orphaned-123-copy", [{ sessionId: "s", cwd: "/work/b" }]);
+  const reader = new ClaudeHistory(fixture.home);
+  for (const selection of [{}, { sessionIds: ["s"] }, { projectPaths: ["/work/a"] }, { projectPaths: ["/work/b"] }]) {
+    const sources = await Array.fromAsync(reader.discoverSources(selection));
+    const directories = sources.map(source => [source.sourceFile, source.selectionCwd, source.currentFileCwd]);
+    const earlier = [previous, "/work/b", "/work/a"];
+    assert.deepEqual(directories, selection.projectPaths?.includes("/work/b") ? [earlier] : [[current, "/work/a", undefined], earlier]);
+  }
+});

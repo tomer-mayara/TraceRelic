@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ReplayOccurrences } from "#src/scan/replay-occurrences";
-import { TranscriptReplayFixture as F } from "../../fixtures/transcript-replay-fixture.ts";
+import { ReplayOccurrencesFixture as F } from "../../fixtures/replay-occurrences-fixture.ts";
 
 test("counts occurrences across batches and keeps native IDs and separate blocks intact", () => {
   const first = F.message(F.unique, 1, 2, 0);
