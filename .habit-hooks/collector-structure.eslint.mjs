@@ -25,11 +25,11 @@ const thisInStaticMethod = {
   message: `Name the class in a static method. Do not use \`this\`. ${plan}`,
 };
 
-// An import, a re-export or an import type that names ../src.
+// An import, a re-export, a dynamic import or an import type whose module is ../src.
 const relativeSourceImport = {
   selector:
-    ":matches(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, ImportExpression, TSImportType) Literal[value=/^(\\.\\.\\/)+src\\//]",
-  message: `Import a module that has a package export through @tracerelic/collector/…, and each other module through #src/…. ${plan}`,
+    ":matches(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, ImportExpression, TSImportType)[source.value=/^(\\.\\.\\/)+src\\//]",
+  message: `Import a name that a package export has through @tracerelic/collector/…, and each other name through #src/…. ${plan}`,
 };
 
 const block = (files, ...selectors) => ({

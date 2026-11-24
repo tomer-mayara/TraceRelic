@@ -1,9 +1,9 @@
 // These goldens are byte-exact on purpose. A checkpoint saves the parser state as JSON text, and the scanner
 // compares and hashes that text. Message, call and interval IDs are SHA-256 digests of JSON text. Thus the
 // key order of each saved or hashed object is part of the behavior, and a deep-equal check cannot see it.
-// When a source has more than one batch, TranscriptCursor.decode prepares a lookahead with all the batches before it
-// decodes the first one. The lookahead can give a message a native ID. Thus the main batches are pinned with and
-// without the lookahead.
+// TranscriptCursor.decode prepares a lookahead when the first batch of a read ends before the end of the captured
+// file. It gives the lookahead that batch and the later batches, and then it decodes the batch. The lookahead can
+// give a message a native ID. Thus the main batches are pinned with and without the lookahead.
 // To change a golden on purpose: set its text to '' in test/fixtures/codex-parser-golden-text.ts, run
 // `bun run build` and `node --test apps/collector/dist/test/unit/providers/codex/codex-parser-golden.test.js`, review the
 // actual text that the failure shows, and paste it as the new golden.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { ScanPendingError } from "@tracerelic/collector/scan";
 import { ScanActivity } from "#src/watch/scan-activity";
-import { ScanPendingError } from "#src/scan/scan-pending";
 import { batch, source } from "../../fixtures/collector-storage-fixture.ts";
 import { PresenceConnection } from "../../fixtures/presence-connection.ts";
 import { RejectingBatchStorage } from "../../fixtures/rejecting-batch-storage.ts";

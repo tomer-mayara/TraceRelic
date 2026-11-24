@@ -1,6 +1,6 @@
+import type { EarlierCopy } from "@tracerelic/collector/scan";
 import type { Metadata, SessionView } from "@tracerelic/collector/storage";
 import type { ScanSelection, SourceDiscoveryOptions, TranscriptSource } from "@tracerelic/collector/transcript";
-import type { EarlierCopy } from "#src/scan/scan-provider";
 
 /** The fields of a source. A source needs only its session ID and its file. */
 type SourceFields = Pick<TranscriptSource<unknown>, "sessionId" | "sourceFile">

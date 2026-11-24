@@ -1,4 +1,4 @@
-import type { PendingScan } from "#src/scan/scan-pending";
+import type { PendingScan } from "@tracerelic/collector/scan";
 import type { ScheduledScanOutcome, ScheduledScanReport } from "#src/watch/scan-activity";
 import { ScheduledScanner } from "#src/watch/scheduled-scanner";
 import { ManualScanClock } from "./manual-scan-clock.ts";

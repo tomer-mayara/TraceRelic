@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { ScanPendingError } from "@tracerelic/collector/scan";
 import { StorageBackoffError } from "@tracerelic/collector/storage";
-import { ScanPendingError } from "#src/scan/scan-pending";
 import { batch } from "../../fixtures/collector-storage-fixture.ts";
 import { ScanRecoveryFixture } from "../../fixtures/scan-recovery-fixture.ts";
 

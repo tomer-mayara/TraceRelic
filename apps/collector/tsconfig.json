@@ -1,5 +1,0 @@
-{
-  // Knip reads outDir to find the source file of an import that resolves to dist/.
-  "extends": "../../tsconfig.json",
-  "compilerOptions": { "outDir": "dist" }
-}

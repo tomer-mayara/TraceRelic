@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ScanPendingError } from "#src/scan/scan-pending";
+import { ScanPendingError } from "@tracerelic/collector/scan";
 import { source } from "../../fixtures/collector-storage-fixture.ts";
 
 test("reports only the attempted source, byte range, reason and next retry time", t => {

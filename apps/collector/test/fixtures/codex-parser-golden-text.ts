@@ -30,9 +30,9 @@ export class CodexParserGolden {
     },
   ];
 
-  /** The same batches, read after the lookahead that a scan prepares for a source of several batches. The lookahead
-   * changes one text: in the first batch, the prompt of line 13 gets the native ID of its typed copy, which is in
-   * the second batch. */
+  /** The same batches, read after the lookahead that a scan prepares when its first batch is not the end of the
+   * file. The lookahead changes one text: in the first batch, the prompt of line 13 gets the native ID of its typed
+   * copy, which is in the second batch. */
   static readonly mainWithLookahead: readonly GoldenText[] = [
     {
       ...CodexParserGolden.main[0],

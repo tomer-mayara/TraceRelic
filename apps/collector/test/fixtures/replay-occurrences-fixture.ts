@@ -1,4 +1,4 @@
-import type { DecodedChat } from "#src/scan/decoded-chat";
+import type { DecodedChat } from "@tracerelic/collector/scan";
 import { planning } from "./collector-storage-fixture.ts";
 
 export class ReplayOccurrencesFixture {
