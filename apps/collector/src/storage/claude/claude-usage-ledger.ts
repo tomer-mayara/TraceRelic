@@ -77,7 +77,7 @@ export class ClaudeUsageLedger {
   static merge(previous: ClaudeUsageLedger | undefined, reports: readonly ClaudeUsageReport[], sessionId: string): ClaudeUsageLedger | null {
     if (!BatchValues.isIdentifier(sessionId) || !Array.isArray(reports)) return null;
     for (const report of reports) if (!BatchValues.isClaudeUsageReport(report)) return null;
-    return this.fromValidatedReports(previous, reports, sessionId);
+    return ClaudeUsageLedger.fromValidatedReports(previous, reports, sessionId);
   }
 
   static fromValidatedReports(previous: ClaudeUsageLedger | undefined, reports: readonly ClaudeUsageReport[], sessionId: string): ClaudeUsageLedger {

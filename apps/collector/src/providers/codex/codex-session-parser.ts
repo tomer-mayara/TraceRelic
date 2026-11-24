@@ -18,9 +18,9 @@ export class CodexSessionParser implements ChatParser<CodexRolloutEntry> {
   static forFork(plan: CodexForkCheckpoint, forkedAt?: string): ParserFormat<CodexRolloutEntry> {
     const fork = () => new CodexForkUsage(plan, forkedAt);
     return {
-      version: this.version, gapVersion: this.gapVersion, checkpointFields: { codexFork: plan },
-      resume: state => this.resume(state, fork()),
-      upgrade: oldChat => this.upgrade(oldChat, fork()),
+      version: CodexSessionParser.version, gapVersion: CodexSessionParser.gapVersion, checkpointFields: { codexFork: plan },
+      resume: state => CodexSessionParser.resume(state, fork()),
+      upgrade: oldChat => CodexSessionParser.upgrade(oldChat, fork()),
       correction: checkpoint => {
         if (isDeepStrictEqual(plan, checkpoint.codexFork)) return;
         return {
