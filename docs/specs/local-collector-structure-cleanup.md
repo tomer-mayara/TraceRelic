@@ -17,7 +17,7 @@ modules) and `apps/api` (only its imports of the names that change).
 | 2 | One directory for each provider and for each layer | Done, [PR 29](https://github.com/tomer-mayara/TraceRelic/pull/29) |
 | 3 | The scanner receives its providers through a port | Done, [PR 30](https://github.com/tomer-mayara/TraceRelic/pull/30) |
 | 4 | Each function is a member of a class | Done, [PR 31](https://github.com/tomer-mayara/TraceRelic/pull/31) |
-| 5 | Finish | Not approved. Not started. |
+| 5 | Tests reach the source in two ways, and no production member has only test readers | Approved. In work. |
 
 The description of each PR has the check results of its step.
 
@@ -384,24 +384,64 @@ exported classes:
 
 ### Step 5. Finish
 
-Not approved. When the owner approves it, record its four constraint decisions here before the code
-changes.
+The owner approved this step on 2026-11-24. After it, a test reaches the source in two ways, and each
+test file has the name of its subject. No production file has a member that only a test reads. A user of
+the CLI sees no change.
 
-1. Tests import public classes through the package exports and internal classes through `#src/…`.
-   Remove the relative `../src` imports. Fix the Knip resolution of `#src/…`. Decide if the port types of
-   the earlier copies are exports of `./scan`: `EarlierCopies`, `EarlierCopy`, `SourceCopy` and
-   `CopyAssessment`.
-2. Remove what only a test reads from production code and from [scan.tsp](local-collector/scan.tsp), and
-   move it to test fixtures: `readRollouts`, `readTranscripts`, `ClaudeChat.decode`, `CodexChat.decode`
-   and the source field `currentFilePath`.
-3. Give new names to the four test files that do not have the name of their subject:
-   `local-llm-history-codex.test.ts`, `local-llm-history-claude.test.ts`, `transcript-replay.test.ts` and
-   `test/interface/transcript/source-presence.test.ts`.
-4. Add a golden test that reads the main Codex fixture with the lookahead, as a real scan does. Only the
-   small lookahead fixture has such a test now.
-5. Forbid `this` in a static method with one lint selector. Three static methods that are older than
-   step 4 use `this`: `CodexSessionParser.forFork`, `ClaudeReportEvidence.select` and
-   `ClaudeUsageLedger.merge`.
+Affected components: `apps/collector` (source, tests and package exports), the contract
+[scan.tsp](local-collector/scan.tsp), the structure rule, and the Knip input of `apps/collector` and
+`apps/api`.
+
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | No change for a user of the CLI. No scenario is new, because a caller can do nothing new. One golden test is new (item 4). It pins the text that the parser writes now. No golden text that exists changes. After each commit that changes a production file, run the output comparison and the trace comparison. |
+| Observability | Out of scope. No signal is added or changed. Each logger call stays in `cli.ts`, on its line. |
+| Architecture | The structure rule gets two selectors. A static method does not contain `this` (item 5). A test does not import `../src` (item 1). `check:collector-structure` checks both, and it also reads `apps/collector/test`. The dependency rules do not change. |
+| Interface | [scan.tsp](local-collector/scan.tsp) loses two operations, three models and one field that only a test reads (item 2). The package export `./scan` gets the four port types of the earlier copies. `./providers` and `./transcript` lose the types of the two removed readers. Checks: `schema:collector-scan`, `check:collector-scan` and `bun run typecheck`. |
+
+The five items:
+
+1. **Two import forms for a test.** A test imports a module that has a package export through the
+   package: `@tracerelic/collector/…`. It imports each other module through `#src/…`. No test imports
+   `../src`. At the start of this step, 63 imports do. All of them are for types, and 54 name the storage
+   port.
+   - **The port is complete in `./scan`.** `EarlierCopies`, `EarlierCopy`, `SourceCopy` and
+     `CopyAssessment` become exports of `./scan`. `ProviderScan.earlierCopies` names them, and
+     `ProviderScan` is an export, so a caller that writes a provider needs them.
+   - **Knip follows `#src/…`.** Knip resolves such an import to the compiled file in `dist/`. It finds
+     the source of a compiled file only if the `tsconfig.json` of the same workspace has an `outDir`.
+     Thus it reported an export that only a test imports through `#src/…` as not used. Before a build,
+     it reported 102 imports as not resolved. `apps/collector/tsconfig.json` and
+     `apps/api/tsconfig.json` are new. Each one extends the root file and adds only `outDir`.
+2. **No member that only a test reads.** These members go from the production code to test fixtures:
+   `CodexHistory.readRollouts`, `ClaudeHistory.readTranscripts`, `TranscriptBatches.snapshot`,
+   `ClaudeChat.decode`, `CodexChat.decode` and `UsageWindows.mayCover`. The source field
+   `currentFilePath` goes away, because no production code reads it. The types `Transcript`,
+   `CodexRollout` and `ClaudeTranscript` go to the fixture of the two readers.
+   [scan.tsp](local-collector/scan.tsp) loses the same names. The plan of step 4 named four methods
+   and the field. A script that reads each reference found two more: only the two readers call
+   `TranscriptBatches.snapshot`, and only tests call `UsageWindows.mayCover`. Four assertions go away
+   with their subject: the two checks of `CodexRollout` and `ClaudeTranscript` against the schema, and
+   the two checks of `currentFilePath`.
+3. **Each test file has the name of its subject.**
+
+   | Now | Becomes |
+   | --- | --- |
+   | `test/interface/providers/codex/local-llm-history-codex.test.ts` | `codex-history.test.ts` |
+   | `test/interface/providers/claude/local-llm-history-claude.test.ts` | `claude-history.test.ts` |
+   | `test/unit/scan/transcript-replay.test.ts` and its fixture `transcript-replay-fixture.ts` | `replay-occurrences.test.ts` and `replay-occurrences-fixture.ts` |
+   | `test/interface/transcript/source-presence.test.ts`, three tests of the complete end of a captured file | `test/interface/transcript/captured-transcript-file.test.ts` |
+   | The same file, four tests of the search for an absent file | `test/interface/transcript/transcript-directories.test.ts` |
+   | The same file, two tests of the fields of a Claude Code source | `test/interface/providers/claude/claude-transcripts.test.ts`, which is there now |
+
+   The last file has three subjects, and `SourcePresenceScan` is not one of them. No test body changes.
+4. **A golden test for the real scan of the main Codex fixture.** One parser prepares the lookahead
+   and then reads each batch, as `TranscriptCursor.decode` does. Only the small lookahead fixture has
+   such a test now.
+5. **No `this` in a static method.** Three static methods that are older than step 4 use `this`:
+   `CodexSessionParser.forFork`, `ClaudeReportEvidence.select` and `ClaudeUsageLedger.merge`. Each one
+   names its class. The selector finds each `this` in a static method, also in a function that is in
+   that method. No such function has a `this` now.
 
 Two decisions are open for the owner. The contracts state both points as preconditions now.
 
