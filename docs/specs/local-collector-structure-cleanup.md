@@ -456,9 +456,8 @@ Changes of step 5 for a TypeScript caller:
   does not check three things that the code does by construction: the scanner gives a pass only the
   sources that this pass discovered, the scanner keeps each pass with its own presence scan, and `locate`
   gives a location whose root is the root of its provider.
-- **Two preconditions that no code checks.** A provider receives its root as an absolute path, as
-  `GlobalConfig` gives it. A scanner receives at most one provider for each harness. The contracts state
-  both.
+- **Two preconditions that no code checks.** A provider receives its root as an absolute path, and a
+  scanner receives at most one provider for each harness. [Decision 6](#decisions) gives the reason.
 - **Contract fields in `scan/` are not provider decisions.** `scan/` reads `codexFork`,
   `claudeCallOrigins`, `claudeUsageReports`, `codexCallClaims`, `codexCallAliases` and `currentFileCwd`,
   because they are fields of `Checkpoint`, `Batch` and `SourceLocation` in the storage contract.
@@ -507,7 +506,7 @@ Changes of step 5 for a TypeScript caller:
 
 ## Decisions
 
-The owner accepted these five decisions.
+The owner accepted these six decisions.
 
 1. **Provider class names.** `CodexHistory` and `ClaudeHistory`. The configuration key (`claudePath`),
    the stored `harness` value and the specification all say `claude`.
@@ -519,12 +518,13 @@ The owner accepted these five decisions.
    `packages/shared`, with `ajv` and `ajv-formats` as its dependencies. `storage/` is then self-contained.
 5. **Enforcement.** The PR workflow runs `check:collector-structure`, so that a new function outside a
    class fails the check.
-
-Two decisions are open for the owner. The contracts state both points as preconditions now.
-
-- Must the constructor of a provider reject a root that is not an absolute path? Before step 1, a reader
-  received a `GlobalConfig`, which rejects such a path.
-- Must the constructor of `LocalCollector` reject two providers that have one harness?
+6. **Two preconditions stay preconditions.** The owner decided this after step 5. No constructor checks
+   them. A provider does not reject a root that is not an absolute path. `LocalCollector` does not reject
+   two providers that have one harness. The contracts state both points. The CLI always meets them. In
+   the production code, only `LocalProviders.fromConfig` makes a provider, and it makes at most one for
+   each harness. The command gives that method a `GlobalConfig`, which rejects a path that is not
+   absolute. A TypeScript caller that makes a provider or a scanner itself must meet them. A check in a
+   constructor is a new error for such a caller, so it needs its own scenario.
 
 ## The review that started the cleanup
 
