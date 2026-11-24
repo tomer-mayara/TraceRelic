@@ -1,7 +1,7 @@
 import { basename, dirname, join, relative } from "node:path";
 import { matchesRecordedPath } from "@tracerelic/shared";
 import type { HistoryProvider, HistoryWindow, LocalHistoryEntry } from "../../history/index.ts";
-import type { ScanSelection, SourceDiscoveryOptions, Transcript, TranscriptEntry, TranscriptSource } from "../../transcript/index.ts";
+import type { ScanSelection, SourceDiscoveryOptions, TranscriptEntry, TranscriptSource } from "../../transcript/index.ts";
 import { JsonlRecords } from "../../transcript/jsonl-records.ts";
 import { SourceDiscovery } from "../../transcript/source-discovery.ts";
 import { TranscriptBatches } from "../../transcript/transcript-batches.ts";
@@ -13,10 +13,6 @@ import { ClaudeTranscriptFiles, type TranscriptFile } from "./claude-transcript-
 
 export type ClaudeTranscriptEntry = TranscriptEntry<"claude">;
 
-export interface ClaudeTranscript extends Transcript<ClaudeTranscriptEntry> {
-  readonly previousCopy: boolean;
-}
-
 /** One session in one Claude Code transcript file. */
 export interface ClaudeTranscriptSource extends TranscriptSource<ClaudeTranscriptEntry> {
   readonly previousCopy: boolean;
@@ -24,7 +20,6 @@ export interface ClaudeTranscriptSource extends TranscriptSource<ClaudeTranscrip
   readonly projectDir?: string;
   readonly claudeSubagent?: ClaudeSubagent;
   readonly currentFileCwd?: string;
-  readonly currentFilePath?: string;
 }
 
 interface SelectedSession {
@@ -62,13 +57,6 @@ export class ClaudeHistory implements HistoryProvider, ScanProvider<ClaudeTransc
     return entries;
   }
 
-  async *readTranscripts(selection: ScanSelection = {}): AsyncGenerator<ClaudeTranscript> {
-    for await (const source of this.discoverSources(selection)) {
-      const transcript = await this.batches.snapshot(source);
-      if (transcript) yield { ...transcript, previousCopy: source.previousCopy };
-    }
-  }
-
   async *discoverSources(selection: ScanSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<ClaudeTranscriptSource> {
     const previous: TranscriptFile[] = [];
     const currentCwds = new Map<string, string>();
@@ -98,7 +86,6 @@ export class ClaudeHistory implements HistoryProvider, ScanProvider<ClaudeTransc
     file: TranscriptFile, selection: ScanSelection, currentCwds: Map<string, string>,
   ): AsyncGenerator<ClaudeTranscriptSource> {
     const { sourceFile, currentFile } = file;
-    const currentFilePath = currentFile ? relative(this.root, currentFile) : undefined;
     const selectedProject = selection.projectPaths?.some(path => matchesRecordedPath(path, file.projectDir, true));
     const requestedIds = selection.projectPaths?.length ? undefined : new Set(selection.sessionIds);
     // One file can contain several native IDs. Keep only each ID's selection by its first usable cwd.
@@ -144,7 +131,7 @@ export class ClaudeHistory implements HistoryProvider, ScanProvider<ClaudeTransc
         isConversation: record => record.type === "user" || record.type === "assistant",
       });
       yield { ...source, previousCopy: currentFile !== undefined, ...(selectionCwd && { selectionCwd }), ...(projectDir && { projectDir }),
-        ...(subagent && { claudeSubagent: subagent }), ...(currentFilePath && { currentFilePath }),
+        ...(subagent && { claudeSubagent: subagent }),
         ...(inherited && cwd && inherited !== cwd && { currentFileCwd: inherited }) };
     }
   }

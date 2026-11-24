@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Batch, SessionView } from "../../../src/storage/collector-storage.ts";
+import type { Batch, SessionView } from "@tracerelic/collector/storage";
 import { CodexUsageScanFixture } from "../../fixtures/codex-usage-scan-fixture.ts";
 
 function checkCoarse(view: SessionView) {

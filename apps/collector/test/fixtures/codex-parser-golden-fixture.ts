@@ -1,11 +1,10 @@
 import type { CodexSessionParser } from "#src/providers/codex/codex-session-parser";
-import { type GoldenBatch, GoldenTranscript } from "./parser-golden-fixture.ts";
+import { GoldenTranscript } from "./parser-golden-fixture.ts";
 
 type Fields = Readonly<Record<string, unknown>>;
-type CodexEntry = Parameters<CodexSessionParser["decodeBatch"]>[0][number] & { readonly startOffset: number };
-type CodexDamage = NonNullable<Parameters<CodexSessionParser["decodeBatch"]>[1]>[number];
 type ForkPlan = Parameters<typeof CodexSessionParser.forFork>[0];
-type CodexBatch = GoldenBatch<CodexEntry, CodexDamage>;
+/** A batch as the history reader yields it, with its `next` position and prefix digest. */
+type CodexBatch = Parameters<CodexSessionParser["prepareLookahead"]>[1] extends AsyncIterable<infer Batch> ? Batch : never;
 
 const repository = "https://example.org/golden/repo.git";
 
@@ -129,6 +128,11 @@ export class CodexParserGoldenFixture {
       R.report("10:02:03.000", R.tokens(120, 20, 30, 5), R.tokens(50, 10, 12, 3), { call_id: "call_golden_e" }),
       R.message("10:02:04.000", "assistant", [R.output("Done.")], { id: "msg_golden_done" }),
     ]]);
+
+  /** The batches after the first, as the reader yields them for a lookahead. */
+  static async *lookaheadTail(): AsyncGenerator<CodexBatch> {
+    yield* CodexParserGoldenFixture.batches.slice(1);
+  }
 
   static readonly forkBatches: readonly CodexBatch[] = GoldenTranscript.batches(
     { harness: "codex", sessionId: "golden-codex-fork", sourceFile: "/golden/codex/rollout-golden-fork.jsonl" }, [[

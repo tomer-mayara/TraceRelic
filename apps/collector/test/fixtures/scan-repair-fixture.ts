@@ -3,7 +3,7 @@ import { appendFile, mkdir, rename, rm, stat, writeFile } from "node:fs/promises
 import { basename, dirname, join } from "node:path";
 import { GlobalConfig } from "@tracerelic/collector/config";
 import { ScanPendingError } from "@tracerelic/collector/scan";
-import type { SessionKey, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { SessionKey, StreamKey } from "@tracerelic/collector/storage";
 import { ClaudeProjectFixture as Claude } from "./claude-project-fixture.ts";
 import { CodexRolloutFixture as Codex } from "./codex-rollout-fixture.ts";
 import { ConfiguredCollector } from "./configured-collector.ts";

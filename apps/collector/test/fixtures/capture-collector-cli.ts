@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import type { TestContext } from "node:test";
+import type { CollectorStorage } from "@tracerelic/collector/storage";
 import { CollectorCli } from "#src/cli";
-import type { CollectorStorage } from "../../src/storage/collector-storage.ts";
 
 export function captureCollectorStderr(t?: TestContext) {
   const previous = Object.getOwnPropertyDescriptor(process, "stderr");

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { appendFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
-import type { CollectorStorage, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { CollectorStorage, StreamKey } from "@tracerelic/collector/storage";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 

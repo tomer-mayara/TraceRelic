@@ -30,6 +30,17 @@ export class CodexParserGolden {
     },
   ];
 
+  /** The same batches, read after the lookahead that a scan prepares when its first batch is not the end of the
+   * file. The lookahead changes one text: in the first batch, the prompt of line 13 gets the native ID of its typed
+   * copy, which is in the second batch. */
+  static readonly mainWithLookahead: readonly GoldenText[] = [
+    {
+      ...CodexParserGolden.main[0],
+      output: '{"metadata":{"cwd":"/golden/work/app","repository":"https://example.org/golden/repo.git","branch":"feature/golden"},"messages":[{"id":"text:9ac877d90ca2e851b460a521f52641d2bf0fe9b6188a89be3d977684fbfc3375:1:0","at":"2026-05-04T10:00:02.000Z","role":"user","text":"Summarize the golden plan.","sourceOrder":4,"blockIndex":0,"turnId":"turn-1","context":{"cwd":"/golden/work/app","repository":"https://example.org/golden/repo.git","branch":"feature/golden"}},{"id":"native:msg_golden_plan:0","at":"2026-05-04T10:00:05.000Z","role":"assistant","text":"Plan: measure first, then refine.","sourceOrder":6,"blockIndex":0,"turnId":"turn-1","context":{"cwd":"/golden/work/app","repository":"https://example.org/golden/repo.git","branch":"feature/golden"}},{"id":"native:item_golden_again:0","at":"2026-05-04T10:00:11.000Z","role":"user","text":"Again, please.","sourceOrder":13,"blockIndex":0,"turnId":"turn-2","context":{"cwd":"/golden/work/app","repository":"https://example.org/golden/repo.git","branch":"feature/golden"}}],"branchObservation":{"sourceOrder":12,"at":"2026-05-04T10:00:10.000Z"},"usage":[],"usageWindows":[{"historyId":"verified:e39a2239cb343dafbb37a567a1e4b75b543ee18df6e123a196cef8c0188343f2","start":{"inputTokens":0,"outputTokens":0,"cacheReadTokens":0,"reasoningTokens":0},"end":{"inputTokens":1200,"outputTokens":300,"cacheReadTokens":800,"reasoningTokens":120},"parts":[{"kind":"call","revision":1,"at":"2026-05-04T10:00:06.000Z","inputTokens":1200,"outputTokens":300,"cacheReadTokens":800,"reasoningTokens":120,"turnId":"turn-1","model":"gpt-golden","id":"call:3c13ac86321a3af6d4a01d447859b41055e2a7f37e9160a8ca933e2b2c108c70"}]}],"hasGap":false}',
+    },
+    ...CodexParserGolden.main.slice(1),
+  ];
+
   /** One item for each batch of `CodexParserGoldenFixture.forkBatches`. */
   static readonly fork: readonly GoldenText[] = [
     {

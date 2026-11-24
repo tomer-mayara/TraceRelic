@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
+import type { Batch, ClaudeCallOrigin, ClaudeUsageReport, Usage } from "@tracerelic/collector/storage";
 import { ClaudeCallOwners } from "#src/storage/claude/claude-call-owners";
-import type { Batch, ClaudeCallOrigin, ClaudeUsageReport, Usage } from "../../src/storage/collector-storage.ts";
 
 export class ClaudeCallOwnershipFixture {
   owners = new ClaudeCallOwners();

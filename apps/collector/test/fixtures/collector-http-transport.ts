@@ -1,5 +1,5 @@
 import { setTimeout } from "node:timers/promises";
-import type { AcknowledgedSource, SessionView } from "../../src/storage/collector-storage.ts";
+import type { AcknowledgedSource, SessionView } from "@tracerelic/collector/storage";
 import { inventoryLocation, inventorySource, measuredSource } from "./source-inventory-fixture.ts";
 
 export const apiOrigin = "https://collector.example.test";

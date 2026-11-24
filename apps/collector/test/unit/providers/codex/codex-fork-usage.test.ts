@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
+import type { DecodedChat } from "@tracerelic/collector/scan";
 import { CodexChat } from "#src/providers/codex/codex-chat";
 import { CodexSessionParser } from "#src/providers/codex/codex-session-parser";
-import type { DecodedChat } from "#src/scan/decoded-chat";
 import { CodexForkUsageFixture as F } from "../../../fixtures/codex-fork-usage-fixture.ts";
 
 const forkFormat = (plan: typeof F.inherited | typeof F.uncertain) => CodexSessionParser.forFork(plan, F.forkedAt);

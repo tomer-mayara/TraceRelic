@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { CodexRolloutEntry, CodexRolloutSource } from "@tracerelic/collector/providers";
 import { CodexScan } from "#src/providers/codex/codex-scan";
-import type { CodexRolloutEntry, CodexRolloutSource } from "#src/providers/index";
 import { ForkEvidenceSource as F } from "../../../fixtures/codex-fork-evidence-fixture.ts";
 import { ProviderHistoryStub, ScanPassFixture } from "../../../fixtures/provider-scan-fixture.ts";
 

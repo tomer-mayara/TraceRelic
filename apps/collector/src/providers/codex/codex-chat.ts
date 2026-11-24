@@ -69,11 +69,6 @@ export class CodexChat implements ChatParser<ChatEntry> {
     };
   }
 
-  /** Read one rollout in the source order supplied by the Codex reader. */
-  static decode(entries: readonly ChatEntry[]): DecodedChat {
-    return CodexChat.resume().decodeBatch(entries);
-  }
-
   async prepareLookahead(
     first: readonly ChatEntry[], tail: AsyncIterable<{ entries: readonly ChatEntry[]; damagedLines?: readonly DamagedLine[] }>, acceptedLine: number,
     damagedLines?: readonly DamagedLine[],

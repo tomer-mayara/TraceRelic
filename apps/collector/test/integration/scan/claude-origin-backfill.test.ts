@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import type { Batch, StreamKey } from "../../../src/storage/collector-storage.ts";
+import type { Batch, StreamKey } from "@tracerelic/collector/storage";
 import { ClaudeForkScanFixture } from "../../fixtures/claude-fork-scan-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 

@@ -1,4 +1,4 @@
-import type { CodexRolloutSource } from "../../src/providers/index.ts";
+import type { CodexRolloutSource } from "@tracerelic/collector/providers";
 import { CodexUsageFixture as Usage } from "./codex-usage-fixture.ts";
 
 type Row = ReturnType<typeof Usage.record> | null;

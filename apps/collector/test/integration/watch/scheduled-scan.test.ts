@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { writeFile } from "node:fs/promises";
 import { test } from "node:test";
+import { ScanRejectedError } from "@tracerelic/collector/scan";
 import { ScanActivity } from "#src/watch/scan-activity";
-import { ScanRejectedError } from "#src/scan/scan-rejected";
 import { ScheduledScanner } from "#src/watch/scheduled-scanner";
 import { captureCollectorStderr } from "../../fixtures/capture-collector-cli.ts";
 import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";

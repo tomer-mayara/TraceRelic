@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ScanPendingError } from "#src/scan/scan-pending";
-import { ScanRejectedError } from "#src/scan/scan-rejected";
+import { ScanPendingError, ScanRejectedError } from "@tracerelic/collector/scan";
+import { StorageAuthenticationError } from "@tracerelic/collector/storage";
 import { ScheduledScanner } from "#src/watch/scheduled-scanner";
-import { StorageAuthenticationError } from "#src/storage/collector-storage";
 import { source } from "../../fixtures/collector-storage-fixture.ts";
 import { ScheduledScannerFixture } from "../../fixtures/scheduled-scanner-fixture.ts";
 

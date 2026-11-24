@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Batch, SessionView } from "../../../src/storage/collector-storage.ts";
+import type { Batch, SessionView } from "@tracerelic/collector/storage";
 import { ClaudeUsageScanFixture } from "../../fixtures/claude-usage-scan-fixture.ts";
 
 test("a competing collector can finish this source while its correction is being retried", async t => {

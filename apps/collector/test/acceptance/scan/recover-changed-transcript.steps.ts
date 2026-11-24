@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { After, Before, Given, Then, When } from "@cucumber/cucumber";
-import type { Batch, CommitResult, SessionView } from "../../../src/storage/collector-storage.ts";
+import type { Batch, CommitResult, SessionView } from "@tracerelic/collector/storage";
 import { RewriteScanFixture } from "../../fixtures/rewrite-scan-fixture.ts";
 import { rotateCodex } from "../../fixtures/scan-repair-fixture.ts";
 import { CodexIdentityRepairFixture } from "../../fixtures/codex-identity-repair-fixture.ts";

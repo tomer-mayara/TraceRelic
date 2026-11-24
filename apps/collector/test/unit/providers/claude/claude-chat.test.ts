@@ -6,12 +6,12 @@ import { ClaudeChatFixture as F } from "../../../fixtures/claude-chat-fixture.ts
 test("filters complete generated goal and tick envelopes while preserving quoted examples", () => {
   const rows = [F.row("user", "<tick>resume</tick>"), F.row("user", [F.text("<goal>generated</goal>"), F.text("Continue")]),
     F.row("user", "What does <goal>example</goal> mean?"), F.row("user", "`<tick>resume</tick>`")];
-  assert.deepEqual(ClaudeChat.decode(F.transcript(rows)).messages.map(row => row.text),
+  assert.deepEqual(F.decode(F.transcript(rows)).messages.map(row => row.text),
     ["Continue", "What does <goal>example</goal> mean?", "`<tick>resume</tick>`"]);
 });
 
 test("returns exact text, roles, recorded times and original block positions", () => {
-  const { messages, metadata } = ClaudeChat.decode(F.transcript([
+  const { messages, metadata } = F.decode(F.transcript([
     F.row("user", " Why?\n"),
     F.row("assistant", [F.text("  One"), { type: "tool_use" }, { type: "thinking", text: "hidden" }, F.text("Two\n")]),
     F.row("user", [{ type: "image" }, { type: "tool_result", content: "hidden" }, F.text(" With context ")]),
@@ -32,7 +32,7 @@ test("returns exact text, roles, recorded times and original block positions", (
 test("omits injected context while keeping quoted markers and genuine blocks in mixed messages", () => {
   const reminder = "<system-reminder>Internal</system-reminder>";
   const quote = "Explain " + reminder;
-  const { messages } = ClaudeChat.decode(F.transcript([
+  const { messages } = F.decode(F.transcript([
     F.row("user", "Injected", { isMeta: true }),
     F.row("user", "Summary", { isCompactSummary: true }),
     F.row("user", [F.text("[Request interrupted by user]")]),
@@ -56,15 +56,15 @@ test("identifies blocks by row UUID across copies despite shared request and API
     F.row("assistant", "c", { ...fields, uuid: "two" }),
     F.row("user", "Anonymous"),
   ];
-  const original = ClaudeChat.decode(F.transcript(rows)).messages;
-  const copy = ClaudeChat.decode(F.transcript([rows[2], ...rows], "/fixture/previous.jsonl", true)).messages;
+  const original = F.decode(F.transcript(rows)).messages;
+  const copy = F.decode(F.transcript([rows[2], ...rows], "/fixture/previous.jsonl", true)).messages;
   assert.equal(new Set(original.map(m => m.id)).size, 4);
   assert.deepEqual(copy.map(m => m.id), original.slice(0, 3).map(m => m.id));
 });
 
 test("fallback IDs retain repeated identical prompts and are stable and source scoped", () => {
   const prompt = F.row("user", "Again?");
-  const ids = (rows: typeof prompt[], file?: string) => ClaudeChat.decode(F.transcript(rows, file)).messages.map(m => m.id);
+  const ids = (rows: typeof prompt[], file?: string) => F.decode(F.transcript(rows, file)).messages.map(m => m.id);
   const repeated = ids([prompt, prompt]);
   assert.equal(new Set(repeated).size, 2);
   assert.deepEqual(ids([prompt, prompt, prompt]).slice(0, 2), repeated);
@@ -73,7 +73,7 @@ test("fallback IDs retain repeated identical prompts and are stable and source s
 });
 
 test("attaches only row context and records the source position of the last branch", () => {
-  const { messages, metadata, branchObservation } = ClaudeChat.decode(F.transcript([
+  const { messages, metadata, branchObservation } = F.decode(F.transcript([
     F.row("user", "First", { cwd: "/work", gitBranch: "main", turnId: "turn-1", requestId: "request-1" }),
     F.row("user", "Again"),
     F.row("assistant", [{ type: "tool_use" }], { gitBranch: "next" }),
@@ -91,7 +91,7 @@ test("keeps embedded IDE or hook examples and excludes standalone injected user 
   for (const tag of ["ide_opened_file", "ide_selection", "session-start-hook"]) {
     const envelope = `<${tag}>\ncontext\n</${tag}>`;
     const prompt = `Explain ${envelope} please.`;
-    const { messages } = ClaudeChat.decode(F.transcript([
+    const { messages } = F.decode(F.transcript([
       F.row("user", [F.text(envelope), F.text(prompt)]),
       F.row("assistant", envelope),
     ]));
@@ -100,7 +100,7 @@ test("keeps embedded IDE or hook examples and excludes standalone injected user 
 });
 
 test("uses the recorded outer role when the inner role is absent", () => {
-  const { messages } = ClaudeChat.decode(F.transcript([
+  const { messages } = F.decode(F.transcript([
     { type: "user", timestamp: F.at, message: { content: "Question" } },
     { type: "assistant", timestamp: F.at, message: { content: [F.text("Answer")] } },
     { type: "system", timestamp: F.at, message: { content: "Hidden" } },
@@ -110,7 +110,7 @@ test("uses the recorded outer role when the inner role is absent", () => {
 
 test("attaches a recorded repository only to the row that supplied it", () => {
   const repository = "https://example.org/team/project.git";
-  const { messages, metadata } = ClaudeChat.decode(F.transcript([
+  const { messages, metadata } = F.decode(F.transcript([
     F.row("user", "First", { repository }), F.row("user", "Later", { repository: "" }),
   ]));
   assert.deepEqual(messages.map(m => m.context), [{ repository }, undefined]);
@@ -132,7 +132,7 @@ test("a fresh parser retains anonymous block IDs and emits only newly recorded t
   assert.ok(!saved.includes("A private question"));
   const fresh = ClaudeChat.resume(false, JSON.parse(saved));
   const suffix = fresh.decodeBatch(entries.slice(2, 3));
-  assert.deepEqual(suffix.messages, ClaudeChat.decode(transcript).messages.slice(2));
+  assert.deepEqual(suffix.messages, F.decode(transcript).messages.slice(2));
   assert.deepEqual(suffix.metadata, {});
   assert.equal(suffix.branchObservation, undefined);
   assert.equal(new Set([...accepted.messages, ...suffix.messages].map(m => m.id)).size, 4);

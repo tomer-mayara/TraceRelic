@@ -1,4 +1,4 @@
-import type { ClaudeTranscript, ClaudeTranscriptEntry } from "./claude-history.ts";
+import type { ClaudeTranscriptEntry } from "./claude-history.ts";
 import { JsonRecord } from "../../transcript/json-record.ts";
 import type { Metadata } from "../../storage/collector-storage.ts";
 import { ParserState, TextOccurrences } from "../../scan/parser-state.ts";
@@ -18,10 +18,6 @@ export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
     if (state === undefined) return new ClaudeChat(previousCopy, new TextOccurrences());
     const saved = ParserState.record(state, ["occurrences"]);
     return new ClaudeChat(previousCopy, TextOccurrences.restore(saved.occurrences));
-  }
-
-  static decode(transcript: ClaudeTranscript): DecodedChat {
-    return ClaudeChat.resume(transcript.previousCopy).decodeBatch(transcript.entries);
   }
 
   decodeBatch(entries: readonly ClaudeTranscriptEntry[]): DecodedChat {

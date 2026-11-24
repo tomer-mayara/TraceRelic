@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ClaudeCallOrigin } from "../../../src/storage/collector-storage.ts";
+import type { ClaudeCallOrigin } from "@tracerelic/collector/storage";
 import { call, child, markedCopy, original, ownChild, parent } from "../../fixtures/claude-ownership-storage-fixture.ts";
 import { batch, codexSource, planning } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";

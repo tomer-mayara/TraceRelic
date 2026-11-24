@@ -1,4 +1,4 @@
-import type { ScanClock } from "../../src/watch/scheduled-scanner.ts";
+import type { ScanClock } from "#src/watch/scheduled-scanner";
 
 export class ManualScanClock implements ScanClock {
   private timer?: { at: number; wake: () => void };

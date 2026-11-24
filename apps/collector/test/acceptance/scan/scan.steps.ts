@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { After, Before, Given, Then, When, setWorldConstructor } from "@cucumber/cucumber";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
 import { ClaudeHistory, CodexHistory } from "@tracerelic/collector/providers";
+import type { CollectorStorage, SessionKey, SessionView } from "@tracerelic/collector/storage";
 import type { ScanSelection } from "@tracerelic/collector/transcript";
-import type { CollectorStorage, SessionKey, SessionView } from "../../../src/storage/collector-storage.ts";
 import { ClaudeUsageScanFixture } from "../../fixtures/claude-usage-scan-fixture.ts";
 import { CodexUsageScanFixture } from "../../fixtures/codex-usage-scan-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 import { scanContract as contract } from "../../fixtures/scan-contract.ts";
+import { TranscriptSnapshots } from "../../fixtures/transcript-snapshots.ts";
 import "./fork-totals.steps.ts";
 import "./claude-fork.steps.ts";
 import "./claude-copy-metadata.steps.ts";
@@ -100,9 +101,8 @@ Given("a selected Codex session contains the prompt {string} and the reply {stri
   assert(contract.validate("ScanSelection.json", selection), contract.errorsText());
   const reader = new CodexHistory((await GlobalConfigLoader.load(this.fixture.configFile)).codexPath);
   await this.checkSourceAndBatches(reader, selection, "CodexRolloutSource.json", "CodexRecordBatch.json");
-  const rollouts = await Array.fromAsync(reader.readRollouts(selection));
+  const rollouts = await Array.fromAsync(TranscriptSnapshots.rollouts(reader, selection));
   assert.equal(rollouts.length, 1);
-  assert(contract.validate("CodexRollout.json", rollouts[0]), contract.errorsText());
 });
 
 When("I scan its root once", async function (this: ScanScenario) {
@@ -142,10 +142,9 @@ Given("a Claude session contains {string} twice and one assistant response has t
   assert(claudePath, "the scan configuration names a Claude Code root");
   const reader = new ClaudeHistory(claudePath);
   await this.checkSourceAndBatches(reader, selection, "ClaudeTranscriptSource.json", "ClaudeRecordBatch.json");
-  const transcripts = await Array.fromAsync(reader.readTranscripts(selection));
+  const transcripts = await Array.fromAsync(TranscriptSnapshots.transcripts(reader, selection));
   assert.equal(transcripts.length, 1);
   assert.equal(transcripts[0].sessionId, this.fixture.claudeKey.sessionId);
-  assert(contract.validate("ClaudeTranscript.json", transcripts[0]), contract.errorsText());
 });
 
 When("I scan its project twice", async function (this: ScanScenario) {

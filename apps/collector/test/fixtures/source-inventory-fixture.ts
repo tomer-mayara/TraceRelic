@@ -1,4 +1,4 @@
-import type { PresenceWrite, SourceLocation, SourceScope, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { PresenceWrite, SourceLocation, SourceScope, StreamKey } from "@tracerelic/collector/storage";
 import { batch, observation } from "./collector-storage-fixture.ts";
 
 export const inventorySource: StreamKey = {

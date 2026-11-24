@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { stat } from "node:fs/promises";
-import type { Batch, CollectorStorage, PresenceWrite, SessionKey, SourceScope, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { Batch, CollectorStorage, PresenceWrite, SessionKey, SourceScope, StreamKey } from "@tracerelic/collector/storage";
 import { RewriteScanFixture } from "./rewrite-scan-fixture.ts";
 
 export type DropMoment = "before storage writes" | "after storage writes";

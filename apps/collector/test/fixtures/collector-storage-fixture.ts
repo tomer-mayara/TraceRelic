@@ -1,6 +1,6 @@
 import type {
   Batch, ClaudeUsageReport, Message, StreamKey, TokenCounts, Usage, UsageKind, UsageWindow,
-} from "../../src/storage/collector-storage.ts";
+} from "@tracerelic/collector/storage";
 
 const observedAt = "2026-01-01T00:00:00Z";
 

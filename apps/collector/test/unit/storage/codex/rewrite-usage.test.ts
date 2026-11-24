@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { UsageWindows } from "#src/storage/codex/usage-windows";
-import { archivedCopy, counts, earlier, first, last, rollout, window, zero } from "../../../fixtures/usage-windows-fixture.ts";
+import { archivedCopy, counts, earlier, first, last, mayCover, rollout, window, zero } from "../../../fixtures/usage-windows-fixture.ts";
 
 test("a replacement can establish the same verified counter and count later appends", () => {
   const past = UsageWindows.merge(undefined, [earlier], rollout, 0);
   assert(past);
   const loose = { usageId: "request", historyId: earlier.historyId, after: zero };
-  assert.equal(past.mayCover(loose, rollout, 2), true);
+  assert.equal(mayCover(past, loose, rollout, 2), true);
   const confirmed = UsageWindows.merge(past, [earlier], rollout, 2);
   assert(confirmed);
   assert.deepEqual(confirmed.measurements, earlier.parts);
-  assert.equal(confirmed.mayCover({ ...loose, after: first }, rollout, 2), false);
+  assert.equal(mayCover(confirmed, { ...loose, after: first }, rollout, 2), false);
   assert.equal(confirmed.hasGap, false);
 });
 
@@ -26,8 +26,8 @@ test("an unverified counter from a replaced file cannot establish continuity by 
   assert.deepEqual(replaced.measurements, oldWindow.parts);
   assert.equal(replaced.hasGap, true);
   const loose = { usageId: "request", historyId, after: zero };
-  assert.equal(replaced.mayCover(loose, rollout, 0), false);
-  assert.equal(replaced.mayCover(loose, rollout, 2), true);
+  assert.equal(mayCover(replaced, loose, rollout, 0), false);
+  assert.equal(mayCover(replaced, loose, rollout, 2), true);
 });
 
 test("a replacement counter that would hide a larger accepted native call waits for a proven partition", () => {
@@ -42,7 +42,7 @@ test("a replacement counter that would hide a larger accepted native call waits 
   assert(staged);
   assert.deepEqual(staged.measurements, []);
   assert.equal(staged.hasGap, true);
-  assert.equal(staged.mayCover(anchor, rollout, 0), false);
+  assert.equal(mayCover(staged, anchor, rollout, 0), false);
   const again = UsageWindows.merge(staged, [coarse], archivedCopy);
   assert(again);
   assert.deepEqual(again.measurements, []);
@@ -60,6 +60,6 @@ test("competing coarse histories keep other independently identified calls visib
   const staged = UsageWindows.merge(before, [coarse, native], rollout, 2, [{ source: rollout, generation: 0, anchor }]);
   assert(staged);
   assert.deepEqual(staged.measurements, native.parts);
-  assert.equal(staged.mayCover(anchor, rollout), false);
+  assert.equal(mayCover(staged, anchor, rollout), false);
   assert.equal(staged.hasGap, true);
 });

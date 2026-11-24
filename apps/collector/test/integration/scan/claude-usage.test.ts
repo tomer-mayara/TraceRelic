@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { rename } from "node:fs/promises";
 import { test } from "node:test";
-import type { Batch, CommitResult, SessionView, StreamKey } from "../../../src/storage/collector-storage.ts";
+import type { Batch, CommitResult, SessionView, StreamKey } from "@tracerelic/collector/storage";
 import { ClaudeUsageScanFixture } from "../../fixtures/claude-usage-scan-fixture.ts";
 
 for (const winningFinal of [true, false]) {

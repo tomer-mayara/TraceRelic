@@ -1,3 +1,6 @@
+import type { DecodedChat } from "@tracerelic/collector/scan";
+import { CodexChat } from "#src/providers/codex/codex-chat";
+
 type CodexRecord = {
   timestamp?: string;
   type: string;
@@ -41,4 +44,9 @@ export class CodexChatFixture {
 
   static input(text: string) { return { type: "input_text", text }; }
   static output(text: string) { return { type: "output_text", text }; }
+
+  /** Read one rollout in the source order supplied by the Codex reader. */
+  static decode(entries: Parameters<CodexChat["decodeBatch"]>[0]): DecodedChat {
+    return CodexChat.resume().decodeBatch(entries);
+  }
 }

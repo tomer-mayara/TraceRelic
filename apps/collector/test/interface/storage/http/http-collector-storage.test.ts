@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { StorageAuthenticationError, StorageBackoffError, StorageUnavailableError } from "#src/storage/collector-storage";
-import { HttpCollectorStorage } from "#src/storage/http/http-collector-storage";
+import { HttpCollectorStorage } from "@tracerelic/collector/http-storage";
+import { StorageAuthenticationError, StorageBackoffError, StorageUnavailableError } from "@tracerelic/collector/storage";
 import { apiOrigin, CollectorHttpTransport, inventory, session, sessionKey, token } from "../../../fixtures/collector-http-transport.ts";
 import { inventoryScope, inventorySource, measuredSource, presence } from "../../../fixtures/source-inventory-fixture.ts";
 

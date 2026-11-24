@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import type { Batch, CollectorStorage, Harness } from "../../src/storage/collector-storage.ts";
+import type { Batch, CollectorStorage, Harness } from "@tracerelic/collector/storage";
 import { ClaudeUsageScanFixture } from "./claude-usage-scan-fixture.ts";
 import { CodexUsageScanFixture } from "./codex-usage-scan-fixture.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";

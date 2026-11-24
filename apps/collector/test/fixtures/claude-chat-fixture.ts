@@ -1,4 +1,6 @@
-import type { ClaudeTranscript } from "../../src/providers/index.ts";
+import type { DecodedChat } from "@tracerelic/collector/scan";
+import { ClaudeChat } from "#src/providers/claude/claude-chat";
+import type { ClaudeTranscript } from "./transcript-snapshots.ts";
 
 type Row = Record<string, unknown>;
 
@@ -20,5 +22,9 @@ export class ClaudeChatFixture {
       ...(typeof record.timestamp === "string" && { timestamp: record.timestamp }), record,
     }));
     return { sessionId, sourceFile, entries, endOffset: rows.length * 100, previousCopy };
+  }
+
+  static decode(transcript: ClaudeTranscript): DecodedChat {
+    return ClaudeChat.resume(transcript.previousCopy).decodeBatch(transcript.entries);
   }
 }

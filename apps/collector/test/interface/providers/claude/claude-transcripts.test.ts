@@ -7,6 +7,7 @@ import { GlobalConfig } from "@tracerelic/collector/config";
 import { ClaudeHistory, LocalProviders } from "@tracerelic/collector/providers";
 import type { ScanSelection } from "@tracerelic/collector/transcript";
 import { ClaudeProjectFixture as Claude } from "../../../fixtures/claude-project-fixture.ts";
+import { TranscriptSnapshots } from "../../../fixtures/transcript-snapshots.ts";
 
 test("a discovered Claude Code source has previousCopy, and only its user and assistant records get the digest through their own line", async t => {
   const fixture = await Claude.create();
@@ -39,7 +40,7 @@ test("selects Claude sessions by ID, first recorded working directory, or exact 
   await fixture.write("encoded", "one/subagents/other", [{ sessionId: "unrelated" }]);
   const reader = new ClaudeHistory(fixture.home);
   const ids = async (selection?: ScanSelection) => {
-    const transcripts = await Array.fromAsync(reader.readTranscripts(selection));
+    const transcripts = await Array.fromAsync(TranscriptSnapshots.transcripts(reader, selection));
     const expected = transcripts.map(transcript => transcript.sessionId).sort();
     const sources = await Array.fromAsync(reader.discoverSources(selection));
     assert.deepEqual(sources.map(source => source.sessionId).sort(), expected);
@@ -51,7 +52,7 @@ test("selects Claude sessions by ID, first recorded working directory, or exact 
   assert.deepEqual(await ids({ sessionIds: ["three"], projectPaths: ["/work/plan"] }), ["one", "three"]);
   assert.deepEqual(await ids({ projectPaths: ["/later", dirname(dirname(file))], sessionIds: ["different-filename"] }), []);
   assert.deepEqual(await ids({ projectPaths: [dirname(file)] }), ["one", "two"]);
-  const [selected] = await Array.fromAsync(reader.readTranscripts({ projectPaths: ["/work/plan"] }));
+  const [selected] = await Array.fromAsync(TranscriptSnapshots.transcripts(reader, { projectPaths: ["/work/plan"] }));
   assert.deepEqual(selected.entries.map(entry => entry.lineNumber), [1, 3, 4]);
   // A configuration without claudePath gives only the Codex provider. Thus the reader cannot read a Claude Code transcript.
   assert.deepEqual(LocalProviders.fromConfig(new GlobalConfig(fixture.home)).map(provider => provider.harness), ["codex"]);
@@ -73,7 +74,7 @@ test("returns complete Claude records grouped by effective session with byte off
   const metadataEnd = (await stat(sourceFile)).size;
   await appendFile(sourceFile, JSON.stringify(child));
   const reader = new ClaudeHistory(fixture.home);
-  const [childTranscript, otherTranscript] = await Array.fromAsync(reader.readTranscripts());
+  const [childTranscript, otherTranscript] = await Array.fromAsync(TranscriptSnapshots.transcripts(reader));
   const shared = { sourceFile, harness: "claude" };
   assert.deepEqual(childTranscript, { sessionId: childId, sourceFile, previousCopy: false, endOffset: metadataEnd, entries: [
     { ...shared, sessionId: childId, record: child, timestamp: child.timestamp, lineNumber: 1, endOffset: childEnd },
@@ -82,8 +83,8 @@ test("returns complete Claude records grouped by effective session with byte off
   assert.deepEqual(otherTranscript, { sessionId: "independent", sourceFile, previousCopy: false, endOffset: otherEnd, entries: [
     { ...shared, sessionId: "independent", record: other, lineNumber: 3, endOffset: otherEnd },
   ] });
-  assert.deepEqual(await Array.fromAsync(reader.readTranscripts({ sessionIds: [childId] })), [childTranscript]);
-  assert.deepEqual(await Array.fromAsync(reader.readTranscripts({ sessionIds: ["parent"] })), []);
+  assert.deepEqual(await Array.fromAsync(TranscriptSnapshots.transcripts(reader, { sessionIds: [childId] })), [childTranscript]);
+  assert.deepEqual(await Array.fromAsync(TranscriptSnapshots.transcripts(reader, { sessionIds: ["parent"] })), []);
   const sources = await Array.fromAsync(reader.discoverSources());
   assert.deepEqual(sources.map(source => source.sessionId), [childId, "independent"]);
   const afterBroken = childEnd + Buffer.byteLength("broken\n");
@@ -109,7 +110,7 @@ test("reads current Claude sources before orphaned and superseded copies", async
   const superseded = current + ".superseded-1760000000000";
   await copyFile(current, superseded);
   const reader = new ClaudeHistory(fixture.home);
-  const transcripts = await Array.fromAsync(reader.readTranscripts());
+  const transcripts = await Array.fromAsync(TranscriptSnapshots.transcripts(reader));
   assert.deepEqual(transcripts.map(source => source.sessionId), ["native", "native", "native"]);
   assert.deepEqual(transcripts[0].sourceFile, current);
   assert.equal(transcripts[0].previousCopy, false);
@@ -133,7 +134,7 @@ test("includes prior Claude copies only for their own selected file and session 
     { sessionId, cwd: "/work/selected" },
   ]);
   const reader = new ClaudeHistory(fixture.home);
-  const sources = await Array.fromAsync(reader.readTranscripts({ projectPaths: ["/work/selected"] }));
+  const sources = await Array.fromAsync(TranscriptSnapshots.transcripts(reader, { projectPaths: ["/work/selected"] }));
   assert.deepEqual(sources.map(source => [source.sourceFile, source.sessionId]).sort(),
     [current, orphan, superseded, separate].map(path => [path, sessionId]).sort());
   const discovered = await Array.fromAsync(reader.discoverSources({ projectPaths: ["/work/selected"] }));
@@ -208,7 +209,35 @@ test("uses the first absolute Claude working directory without a NUL character",
     { sessionId: "relative", cwd: "/work/actual" }, { sessionId: "nul", cwd: "/work/actual" },
   ]);
   const reader = new ClaudeHistory(fixture.home);
-  assert.deepEqual(await Array.fromAsync(reader.readTranscripts({ projectPaths: [".", "/work/rejected"] })), []);
-  const selected = await Array.fromAsync(reader.readTranscripts({ projectPaths: ["/work/actual"] }));
+  assert.deepEqual(await Array.fromAsync(TranscriptSnapshots.transcripts(reader, { projectPaths: [".", "/work/rejected"] })), []);
+  const selected = await Array.fromAsync(TranscriptSnapshots.transcripts(reader, { projectPaths: ["/work/actual"] }));
   assert.deepEqual(selected.map(source => source.sessionId).sort(), ["nul", "relative"]);
+});
+
+test("Claude exposes the effective project for ID and directory selections and for an orphaned copy", async t => {
+  const fixture = await Claude.create();
+  t.after(() => fixture.close());
+  const current = await fixture.write("encoded", "chat", [{ sessionId: "id", cwd: "relative" }, { sessionId: "other", cwd: "/other" }]);
+  await appendFile(current, '{"sessionId":"id","c\\u0077d":"/work/one"}\n{"sessionId":"id","cwd":"/work/later"}\n');
+  const earlier = await fixture.write("encoded", "chat.orphaned-1700000000000-copy", [{ sessionId: "id" }]);
+  const reader = new ClaudeHistory(fixture.home);
+  for (const selection of [{}, { sessionIds: ["id"] }, { projectPaths: ["/work"] }]) {
+    const sources = await Array.fromAsync(reader.discoverSources(selection));
+    assert.deepEqual(sources.filter(s => s.sessionId === "id").map(s => [s.sourceFile, s.projectDir, s.selectionCwd]),
+      [current, earlier].map(path => [path, dirname(current), "/work/one"]));
+  }
+});
+
+test("an earlier Claude file retains both working directories regardless of how it was selected", async t => {
+  const fixture = await Claude.create();
+  t.after(() => fixture.close());
+  const current = await fixture.write("project", "chat", [{ sessionId: "s", cwd: "/work/a" }]);
+  const previous = await fixture.write("project", "chat.orphaned-123-copy", [{ sessionId: "s", cwd: "/work/b" }]);
+  const reader = new ClaudeHistory(fixture.home);
+  for (const selection of [{}, { sessionIds: ["s"] }, { projectPaths: ["/work/a"] }, { projectPaths: ["/work/b"] }]) {
+    const sources = await Array.fromAsync(reader.discoverSources(selection));
+    const directories = sources.map(source => [source.sourceFile, source.selectionCwd, source.currentFileCwd]);
+    const earlier = [previous, "/work/b", "/work/a"];
+    assert.deepEqual(directories, selection.projectPaths?.includes("/work/b") ? [earlier] : [[current, "/work/a", undefined], earlier]);
+  }
 });

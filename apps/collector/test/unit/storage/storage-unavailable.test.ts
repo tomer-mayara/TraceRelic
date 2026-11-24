@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { StorageAuthenticationError, StorageBackoffError, StorageUnavailableError } from "#src/storage/collector-storage";
+import { StorageAuthenticationError, StorageBackoffError, StorageUnavailableError } from "@tracerelic/collector/storage";
 
 test("recognizes storage connection failures and timeouts", () => {
   assert(StorageUnavailableError.is(new StorageUnavailableError()));

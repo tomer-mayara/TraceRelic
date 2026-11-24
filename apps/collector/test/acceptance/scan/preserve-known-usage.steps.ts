@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { After, Before, Given, Then, When } from "@cucumber/cucumber";
-import type { SessionView } from "../../../src/storage/collector-storage.ts";
+import type { SessionView } from "@tracerelic/collector/storage";
 import { CodexRolloutFixture } from "../../fixtures/codex-rollout-fixture.ts";
 import { RewriteScanFixture } from "../../fixtures/rewrite-scan-fixture.ts";
 import { scanContract } from "../../fixtures/scan-contract.ts";

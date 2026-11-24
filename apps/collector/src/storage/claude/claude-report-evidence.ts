@@ -59,7 +59,7 @@ export class ClaudeReportEvidence {
   }
 
   static select(groups: readonly ClaudeReportEvidence[]): ClaudeUsageReport | undefined {
-    const winner = this.strongestReport(groups);
+    const winner = ClaudeReportEvidence.strongestReport(groups);
     if (!winner) return;
     const selected = { ...winner };
     const reports = groups.flatMap(group => group.reports);

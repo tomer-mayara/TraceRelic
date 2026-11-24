@@ -1,7 +1,7 @@
-import type { DecodedChat } from "../../src/scan/decoded-chat.ts";
+import type { DecodedChat } from "@tracerelic/collector/scan";
 import { planning } from "./collector-storage-fixture.ts";
 
-export class TranscriptReplayFixture {
+export class ReplayOccurrencesFixture {
   static readonly repeated = "a".repeat(64);
   static readonly unique = "b".repeat(64);
   static readonly added = "c".repeat(64);

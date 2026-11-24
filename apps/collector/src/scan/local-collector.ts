@@ -16,7 +16,7 @@ import { TranscriptCursor, type ParserFormat, type SourceLine } from "./transcri
 export { ScanPendingError, type PendingScan } from "./scan-pending.ts";
 export { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 export type { MissingSource } from "../storage/collector-storage.ts";
-export type { IdentityInventory, LocatedSource, ProviderScan, ScanProvider } from "./scan-provider.ts";
+export type { CopyAssessment, EarlierCopies, EarlierCopy, IdentityInventory, LocatedSource, ProviderScan, ScanProvider, SourceCopy } from "./scan-provider.ts";
 export type { CorrectionBatchFields, ParserFormat, ProviderCheckpointFields, SavedDecoder, UsageCorrection } from "./transcript-cursor.ts";
 export type { ChatParser, DecodedChat } from "./decoded-chat.ts";
 

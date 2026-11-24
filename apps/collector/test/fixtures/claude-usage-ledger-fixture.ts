@@ -1,4 +1,4 @@
-import type { ClaudeUsageReport } from "../../src/storage/collector-storage.ts";
+import type { ClaudeUsageReport } from "@tracerelic/collector/storage";
 
 export const initial: ClaudeUsageReport = {
   at: "2026-02-01T12:00:01Z", messageId: "message-a", requestId: "request-a", status: "provisional",

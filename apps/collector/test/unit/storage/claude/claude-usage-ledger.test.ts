@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ClaudeUsageReport } from "../../../../src/storage/collector-storage.ts";
+import type { ClaudeUsageReport } from "@tracerelic/collector/storage";
 import { ClaudeUsageLedger } from "#src/storage/claude/claude-usage-ledger";
 import { completed, independent, initial } from "../../../fixtures/claude-usage-ledger-fixture.ts";
 

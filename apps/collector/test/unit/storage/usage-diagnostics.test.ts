@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ByteRange, UsageDiagnostic } from "../../../src/storage/collector-storage.ts";
+import type { ByteRange, UsageDiagnostic } from "@tracerelic/collector/storage";
 import { batch, codexParserState, codexSource, planning, request, source } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
