@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Batch } from "../../../src/storage/collector-storage.ts";
+import type { Batch } from "@tracerelic/collector/storage";
 import { captureCollectorCli } from "../../fixtures/capture-collector-cli.ts";
 import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { RejectedBatchFixture } from "../../fixtures/rejected-batch-fixture.ts";

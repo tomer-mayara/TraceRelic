@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { test } from "node:test";
-import type { Batch } from "../../../src/storage/collector-storage.ts";
+import type { Batch } from "@tracerelic/collector/storage";
 import { CodexRolloutFixture } from "../../fixtures/codex-rollout-fixture.ts";
 import { CodexUsageFixture as Codex } from "../../fixtures/codex-usage-fixture.ts";
 import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";

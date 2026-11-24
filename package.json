@@ -15,7 +15,7 @@
     "schema:collector-scan": "tsp compile docs/specs/local-collector/scan.tsp --pretty false --output-dir dist/collector-scan --option @typespec/json-schema.bundleId=scan.schema.json",
     "check:collector-scan": "bun run build && bun run schema:collector-scan && bun run check:collector-deps && bun run --cwd apps/collector check:scan-scenarios",
     "check:collector-deps": "depcruise --config .dependency-cruiser.collector.json \"{apps,packages}/*/{src,scripts,test}\"",
-    "check:collector-structure": "eslint --config .habit-hooks/collector-structure.eslint.mjs apps/collector/src packages/shared/src",
+    "check:collector-structure": "eslint --config .habit-hooks/collector-structure.eslint.mjs apps/collector/src apps/collector/test packages/shared/src",
     "check:shared-logging": "bun run build && bun run check:logging-contract && bun run --cwd packages/shared check:logging-scenarios && bun test ./packages/shared/test",
     "habit-hooks": "uvx --from 'habit-hooks[typescript]==1.5.0' habit-hooks",
     "typecheck": "tsrs --noEmit",

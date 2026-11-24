@@ -5,7 +5,7 @@ import { Ajv2020 } from "ajv/dist/2020.js";
 import { fullFormats } from "ajv-formats/dist/formats.js";
 import type {
   Batch, CheckpointSnapshot, CollectorStorage, CommitResult, SessionKey, SessionView,
-} from "../../../src/storage/collector-storage.ts";
+} from "@tracerelic/collector/storage";
 import {
   claudeReport, codexMeasurement, codexParserState, codexSource, codexWindow, initialPlanningBatch, observation, prompt,
 } from "../../fixtures/collector-storage-fixture.ts";

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { UsageWindow } from "../../../../src/storage/collector-storage.ts";
+import type { UsageWindow } from "@tracerelic/collector/storage";
 import { UsageWindows } from "#src/storage/codex/usage-windows";
 import {
   archivedCopy, coarse, counts, earlier, first, history, last, later, mayCover, rollout, window, zero,

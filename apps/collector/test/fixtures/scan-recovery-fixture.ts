@@ -1,5 +1,5 @@
+import type { Checkpoint, CheckpointSnapshot, CommitResult } from "@tracerelic/collector/storage";
 import { ScanRecovery } from "#src/scan/scan-recovery";
-import type { Checkpoint, CheckpointSnapshot, CommitResult } from "../../src/storage/collector-storage.ts";
 
 export class ScanRecoveryFixture {
   reads = 0;

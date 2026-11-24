@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Batch, Usage, UsageDiagnostic } from "../../../src/storage/collector-storage.ts";
+import type { Batch, Usage, UsageDiagnostic } from "@tracerelic/collector/storage";
 import {
   batch, claudeParserState, claudeReport, codexParserState, codexSource, planning, request, source,
 } from "../../fixtures/collector-storage-fixture.ts";

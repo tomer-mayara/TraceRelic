@@ -1,4 +1,4 @@
-import type { StreamKey, TokenCounts, Usage, UsageAnchor, UsageWindow } from "../../src/storage/collector-storage.ts";
+import type { StreamKey, TokenCounts, Usage, UsageAnchor, UsageWindow } from "@tracerelic/collector/storage";
 import type { UsageWindows } from "#src/storage/codex/usage-windows";
 
 export const rollout: StreamKey = { harness: "codex", sessionId: "planning", streamId: "active" };

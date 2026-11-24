@@ -1,4 +1,4 @@
-import type { Batch, PresenceWrite, SourceScope, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { Batch, PresenceWrite, SourceScope, StreamKey } from "@tracerelic/collector/storage";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 
 /** Control the transport at the point where a write or its reply can be lost. */

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { stat } from "node:fs/promises";
 import { test } from "node:test";
 import { ScanPendingError } from "@tracerelic/collector/scan";
-import type { Batch } from "../../../src/storage/collector-storage.ts";
+import type { Batch } from "@tracerelic/collector/storage";
 import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
 import { RewriteScanFixture } from "../../fixtures/rewrite-scan-fixture.ts";
 

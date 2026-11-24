@@ -1,1 +1,1 @@
-export { InMemoryCollectorStorage } from "#src/storage/in-memory-collector-storage";
+export { InMemoryCollectorStorage } from "@tracerelic/collector/memory-storage";

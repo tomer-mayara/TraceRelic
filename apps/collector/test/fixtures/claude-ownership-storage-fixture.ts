@@ -1,4 +1,4 @@
-import type { ClaudeCallOrigin, ClaudeUsageReport, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { ClaudeCallOrigin, ClaudeUsageReport, StreamKey } from "@tracerelic/collector/storage";
 import { planning } from "./collector-storage-fixture.ts";
 
 export const child: StreamKey = { harness: "claude", sessionId: "child", streamId: "child.jsonl", installationId: "laptop" };

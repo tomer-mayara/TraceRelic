@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { StorageUnavailableError, type PresenceWrite } from "@tracerelic/collector/storage";
 import { CodexIdentityRepairFixture } from "../../fixtures/codex-identity-repair-fixture.ts";
-import { StorageUnavailableError, type PresenceWrite } from "#src/storage/collector-storage";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
 for (const match of ["verified", "wrong digest", "absent digest", "wrong row", "unverified usage", "empty state"] as const) {

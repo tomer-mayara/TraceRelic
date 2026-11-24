@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
+import type { CollectorStorage } from "@tracerelic/collector/storage";
 import { CollectorCli } from "#src/cli";
-import type { ScheduledScanReport } from "../../src/watch/scan-activity.ts";
-import type { CollectorStorage } from "../../src/storage/collector-storage.ts";
+import type { ScheduledScanReport } from "#src/watch/scan-activity";
 import { ManualScanClock } from "./manual-scan-clock.ts";
 
 export class ScheduledScanFixture {

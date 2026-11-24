@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import type { Batch, CollectorStorage, PresenceWrite, StreamKey } from "../../src/storage/collector-storage.ts";
+import type { Batch, CollectorStorage, PresenceWrite, StreamKey } from "@tracerelic/collector/storage";
 import { batch, codexParserState, observation } from "./collector-storage-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "./codex-rollout-fixture.ts";
 import { ConfiguredCollector } from "./configured-collector.ts";

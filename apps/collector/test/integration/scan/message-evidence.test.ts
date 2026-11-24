@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { Batch } from "#src/storage/collector-storage";
+import type { Batch } from "@tracerelic/collector/storage";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture as Codex } from "../../fixtures/codex-rollout-fixture.ts";

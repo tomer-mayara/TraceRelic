@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Checkpoint } from "../../../src/storage/collector-storage.ts";
+import type { Checkpoint } from "@tracerelic/collector/storage";
 import { batch, claudeParserState, codexSource, planning, request, source } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 

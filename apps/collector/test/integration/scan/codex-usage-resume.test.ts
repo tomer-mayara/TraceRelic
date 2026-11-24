@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Batch, StreamKey } from "../../../src/storage/collector-storage.ts";
+import type { Batch, StreamKey } from "@tracerelic/collector/storage";
 import { textOnlyBatch } from "../../fixtures/collector-storage-fixture.ts";
 import { ScanCommandFixture } from "../../fixtures/scan-command-fixture.ts";
 

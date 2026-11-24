@@ -1,4 +1,4 @@
-import type { Batch, CommitResult } from "../../src/storage/collector-storage.ts";
+import type { Batch, CommitResult } from "@tracerelic/collector/storage";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 
 export class RejectingBatchStorage extends InMemoryCollectorStorage {

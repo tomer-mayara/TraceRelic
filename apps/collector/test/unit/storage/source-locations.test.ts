@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { StreamKey } from "../../../src/storage/collector-storage.ts";
+import type { StreamKey } from "@tracerelic/collector/storage";
 import { batch } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { inventoryLocation as location, inventoryScope as scope, inventorySource as source, measuredSource, presence } from "../../fixtures/source-inventory-fixture.ts";

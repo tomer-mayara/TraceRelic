@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { appendFile, stat, truncate, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
-import type { CollectorStorage } from "../../src/storage/collector-storage.ts";
+import type { CollectorStorage } from "@tracerelic/collector/storage";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "./codex-rollout-fixture.ts";
 import { CodexUsageFixture as Usage } from "./codex-usage-fixture.ts";

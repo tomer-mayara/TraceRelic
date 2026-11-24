@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { ClaudeTranscriptEntry, ClaudeTranscriptSource } from "@tracerelic/collector/providers";
 import { ClaudeScan } from "#src/providers/claude/claude-scan";
-import type { ClaudeTranscriptEntry, ClaudeTranscriptSource } from "#src/providers/index";
 import { ProviderHistoryStub, ScanPassFixture } from "../../../fixtures/provider-scan-fixture.ts";
 
 const current = "/claude/projects/p/one.jsonl";

@@ -2,12 +2,13 @@ import tsparser from "@typescript-eslint/parser";
 
 // Each rule of the collector belongs to a class. These selectors keep that structure.
 // The source rules apply to all of apps/collector/src and to the two leaf modules of packages/shared
-// that the collector layers share.
+// that the collector layers share. The test rule applies to all of apps/collector/test.
 const sourceFiles = [
   "apps/collector/src/**/*.ts",
   "packages/shared/src/claude-transcript-copy.ts",
   "packages/shared/src/recorded-instant.ts",
 ];
+const testFiles = ["apps/collector/test/**/*.ts"];
 
 const plan = "See docs/specs/local-collector-structure-cleanup.md.";
 
@@ -24,12 +25,20 @@ const thisInStaticMethod = {
   message: `Name the class in a static method. Do not use \`this\`. ${plan}`,
 };
 
+// An import, a re-export or an import type that names ../src.
+const relativeSourceImport = {
+  selector:
+    ":matches(ImportDeclaration, ExportNamedDeclaration, ExportAllDeclaration, ImportExpression, TSImportType) Literal[value=/^(\\.\\.\\/)+src\\//]",
+  message: `Import a module that has a package export through @tracerelic/collector/…, and each other module through #src/…. ${plan}`,
+};
+
+const block = (files, ...selectors) => ({
+  files: files.map((file) => `**/${file}`),
+  languageOptions: { parser: tsparser },
+  rules: { "no-restricted-syntax": ["error", ...selectors] },
+});
+
 export default [
-  {
-    files: sourceFiles.map((file) => `**/${file}`),
-    languageOptions: { parser: tsparser },
-    rules: {
-      "no-restricted-syntax": ["error", functionOutsideClass, thisInStaticMethod],
-    },
-  },
+  block(sourceFiles, functionOutsideClass, thisInStaticMethod),
+  block(testFiles, relativeSourceImport),
 ];
