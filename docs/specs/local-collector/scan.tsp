@@ -116,7 +116,8 @@ model RecordBatch<Entry extends {}> {
 model CodexRecordBatch is RecordBatch<CodexRolloutEntry>;
 model ClaudeRecordBatch is RecordBatch<ClaudeTranscriptEntry>;
 
-/** Start at zero or a saved next position. Read within the captured logical file size.
+/** Give each complete record of the session in file order, also a record that has no timestamp.
+ * Start at zero or a saved next position. Read within the captured logical file size.
  * Selection, logical bytes and their SHA-256 proof belong to one capture.
  * A true append leaves that extent unchanged; an in-place rewrite invalidates the capture.
  * Plain and Zstandard Codex representations use the same uncompressed offsets and hashes.
@@ -343,7 +344,8 @@ interface CodexHistory extends HistoryProvider {
 
 /** One Claude Code scan pass. It has no identity repair and no logical name. */
 interface ClaudeScan extends ProviderScan<ClaudeTranscriptSource> {
-  /** Give all the selected sessions of one physical file as one group. */
+  /** Give all the selected sessions of one physical file as one group.
+   * Also give the earlier copies of a selected file, for the same session. */
   discoverFiles(options: SourceDiscoveryOptions): ClaudeTranscriptSource[][];
   /** The path is relative to the root. The root-based stream ID is the absolute source file. */
   locate(source: ClaudeTranscriptSource): LocatedSource;

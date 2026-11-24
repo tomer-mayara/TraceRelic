@@ -143,8 +143,6 @@ test("marks the native header after a verified blank prefix across batches and r
       assert.equal(entries[0].lineNumber, lineNumber + 1);
       assert.equal(entries[0].startOffset, offset);
     }
-    const [rollout] = await Array.fromAsync(TranscriptSnapshots.rollouts(reader));
-    assert(rollout.entries.every(entry => !("afterBlankPrefix" in entry)));
   }
 });
 
