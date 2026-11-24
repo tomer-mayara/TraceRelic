@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
-import { LocalCollector } from "@tracerelic/collector/scan";
 import type { Batch, CollectorStorage, Metadata } from "@tracerelic/collector/storage";
 import { ClaudeProjectFixture } from "./claude-project-fixture.ts";
+import { ConfiguredCollector } from "./configured-collector.ts";
 
 const at = "2026-02-01T12:00:00Z";
 const key = { harness: "claude" as const, sessionId: "planning" };
@@ -48,7 +48,7 @@ export class ClaudeCopyMetadataFixture {
   }
 
   scan(store: CollectorStorage) {
-    return new LocalCollector({ codexPath: join(this.projects.home, "codex"), claudePath: this.projects.home, installationId: "desktop" }, store).scanOnce();
+    return ConfiguredCollector.from({ codexPath: join(this.projects.home, "codex"), claudePath: this.projects.home, installationId: "desktop" }, store).scanOnce();
   }
 
   appendCopyWithOrigin(parentSessionId: string) {

@@ -21,6 +21,7 @@ behavior:
   - test/acceptance/scan/codex-token-counts.feature
   - test/acceptance/scan/claude-usage.feature
   - test/acceptance/scan/two-chats.feature
+  - test/acceptance/scan/scan-providers.feature
   - ../api/test/acceptance/collector/remote-sync.feature
 interface:
   - ../../docs/specs/local-collector/storage.tsp
@@ -42,4 +43,5 @@ configSchema: src/config/global-config-schema.ts
 configLoader: src/config/global-config-loader.ts
 cli: src/cli.ts
 scanner: src/scan/local-collector.ts
+scanPort: src/scan/scan-provider.ts
 scheduler: src/watch/scheduled-scanner.ts

@@ -89,6 +89,51 @@ test("a native call carries a workspace provider key and keeps its session-scope
   assert.notEqual(measurements(first)[0].id, measurements(other)[0].id);
 });
 
+test("a fork format corrects an accepted checkpoint whose fork plan is different", () => {
+  const format = forkFormat(F.inherited);
+  assert.deepEqual(format.checkpointFields, { codexFork: F.inherited });
+  assert.equal(format.correction?.({ offset: 400, parserState: "{}", codexFork: structuredClone(F.inherited) }), undefined);
+  assert(format.correction?.({ offset: 400, parserState: "{}" }));
+  const checkpoint = { offset: 400, parserState: "{}", codexFork: F.uncertain };
+  const correction = format.correction?.(checkpoint);
+  assert(correction);
+  assert.equal(correction.parentSessionId, "parent");
+  assert.deepEqual(correction.batchFields, { reconcileCodexForkFrom: checkpoint });
+  assert.equal(correction.batchFields.reconcileCodexForkFrom, checkpoint);
+  const reread = format.resume();
+  const fresh = correction.accepted(undefined, reread, format);
+  assert("parser" in fresh);
+  assert.equal(fresh.parser, reread);
+});
+
+test("a fork correction keeps the accepted chat state and the usage state of the bytes that it read again", t => {
+  const format = forkFormat(F.inherited);
+  const correction = format.correction?.({ offset: 400, parserState: "{}" });
+  assert(correction);
+  const rows = F.rows(F.child, F.event("user_message", "A question"), F.report(F.counts(180, 20)), F.report(F.counts(190, 25)));
+  const reread = format.resume();
+  reread.decodeBatch(rows);
+  const chat = CodexChat.resume();
+  chat.decodeBatch(rows.slice(0, 2));
+  const acceptedChat = JSON.parse(JSON.stringify(chat.snapshot()));
+  const { usage } = JSON.parse(JSON.stringify(reread.snapshot()));
+  const resume = t.mock.method(format, "resume");
+  for (const saved of [{ version: 2, decoder: { chat: acceptedChat, usage: {} } }, { version: 1, decoder: acceptedChat }]) {
+    const restored = correction.accepted(saved, reread, format);
+    assert("parser" in restored);
+    assert.deepEqual(JSON.parse(JSON.stringify(restored.parser.snapshot())), { chat: acceptedChat, usage });
+    assert.equal(restored.parser, resume.mock.calls.at(-1)?.result);
+  }
+  // The accepted chat state is resumed through the format that the correction receives.
+  const state = { ...reread.snapshot(), chat: acceptedChat };
+  assert.deepEqual(resume.mock.calls.map(call => call.arguments), [[state], [state]]);
+});
+
+test("a plain Codex rollout adds no checkpoint fields and has no correction", () => {
+  assert.equal("checkpointFields" in CodexSessionParser, false);
+  assert.equal("correction" in CodexSessionParser, false);
+});
+
 test("a text-only checkpoint backfills child usage while preserving accepted chat state", () => {
   const format = forkFormat(F.inherited);
   assert(format.upgrade);

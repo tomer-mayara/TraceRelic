@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
-import { LocalCollector } from "@tracerelic/collector/scan";
 import type { Batch, CollectorStorage, PresenceWrite, StreamKey } from "../../src/storage/collector-storage.ts";
 import { batch, codexParserState, observation } from "./collector-storage-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "./codex-rollout-fixture.ts";
+import { ConfiguredCollector } from "./configured-collector.ts";
 import { InMemoryCollectorStorage } from "./in-memory-collector-storage.ts";
 
 export class CodexIdentityRepairFixture {
@@ -34,7 +34,7 @@ export class CodexIdentityRepairFixture {
     return original;
   }
   scan(sessionIds?: string[]) {
-    return new LocalCollector({ codexPath: this.root.home, installationId: "desktop" }, this.storage).scanOnce({ sessionIds });
+    return ConfiguredCollector.from({ codexPath: this.root.home, installationId: "desktop" }, this.storage).scanOnce({ sessionIds });
   }
   async proof(): Promise<PresenceWrite> {
     const source = this.key("A");

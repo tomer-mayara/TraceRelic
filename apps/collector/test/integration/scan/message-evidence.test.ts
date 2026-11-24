@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { test } from "node:test";
-import { LocalCollector } from "#src/scan/local-collector";
 import type { Batch } from "#src/storage/collector-storage";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture as Codex } from "../../fixtures/codex-rollout-fixture.ts";
+import { ConfiguredCollector } from "../../fixtures/configured-collector.ts";
 
 const at = "2026-02-01T12:00:00Z";
 
@@ -15,7 +15,7 @@ for (const completeFirst of [false, true]) {
     const [one, two] = await Promise.all([Codex.create(), Codex.create()]);
     t.after(() => Promise.all([one.close(), two.close()]));
     const storage = new InMemoryCollectorStorage();
-    const scan = (file: Codex) => new LocalCollector({ codexPath: file.home, installationId: file === one ? "one" : "two" }, storage).scanOnce();
+    const scan = (file: Codex) => ConfiguredCollector.from({ codexPath: file.home, installationId: file === one ? "one" : "two" }, storage).scanOnce();
     const event = { type: "event_msg", timestamp: at, payload: { type: "user_message", message: "Plan" } };
     const response = Codex.message(at, "Plan");
     const typed = { ...response, payload: { ...response.payload, id: "native-prompt", content: [
@@ -44,7 +44,7 @@ test("anonymous Claude rows converge across copied roots while identical prompts
     const projects = new Claude(root);
     const row = Claude.user("planning", at, "Again?");
     await projects.write("planning", "planning", [row, row]);
-    await new LocalCollector({ codexPath: home, claudePath: root, installationId: home }, storage).scanOnce();
+    await ConfiguredCollector.from({ codexPath: home, claudePath: root, installationId: home }, storage).scanOnce();
   }
   const view = await storage.readSession({ harness: "claude", sessionId: "planning" });
   assert.deepEqual(view?.messages.map(m => m.text), ["Again?", "Again?"]);
@@ -60,7 +60,7 @@ test("a verified pre-repair checkpoint replaces misdecoded text and the next sca
       type: "UserMessage", id: "original", content: [{ type: "text", text: "Actual question" }],
     } } }];
   await home.write(rows);
-  const scanner = () => new LocalCollector({ codexPath: home.home, installationId: "desktop" }, storage);
+  const scanner = () => ConfiguredCollector.from({ codexPath: home.home, installationId: "desktop" }, storage);
   const commit = storage.commit.bind(storage);
   const oldWriter = t.mock.method(storage, "commit", (batch: Batch) => {
     const { evidenceVersion: _old, ...checkpoint } = batch.checkpoint;
@@ -87,7 +87,7 @@ test("correcting old metadata retains the branch and working directory reported 
   const storage = new InMemoryCollectorStorage();
   const key = { harness: "codex", sessionId: "planning" } as const;
   await home.write([Codex.header(key.sessionId), Codex.message(at, "Plan")]);
-  const scan = () => new LocalCollector({ codexPath: home.home, installationId: "desktop" }, storage).scanOnce();
+  const scan = () => ConfiguredCollector.from({ codexPath: home.home, installationId: "desktop" }, storage).scanOnce();
   const commit = storage.commit.bind(storage);
   const oldWriter = t.mock.method(storage, "commit", (batch: Batch) => {
     const { evidenceVersion: _old, ...checkpoint } = batch.checkpoint;
@@ -113,7 +113,7 @@ for (const replacement of [false, true]) for (const emptyState of [false, true])
     const key = { harness: "codex", sessionId: "planning" } as const;
     const rows = [Codex.header(key.sessionId), Codex.message(at, "Original plan"), Codex.tokenCount(at)];
     const path = await home.write(rows);
-    const scan = () => new LocalCollector({ codexPath: home.home, installationId: "desktop" }, storage).scanOnce();
+    const scan = () => ConfiguredCollector.from({ codexPath: home.home, installationId: "desktop" }, storage).scanOnce();
     const commit = storage.commit.bind(storage);
     const writer = t.mock.method(storage, "commit", (batch: Batch) => {
       const { evidenceVersion: _old, ...checkpoint } = batch.checkpoint;

@@ -34,10 +34,11 @@
       "name": "schedule-runs-the-scan-through-its-handler",
       "severity": "error",
       "from": { "path": "^apps/collector/src/watch/scheduled-scanner\\.ts$" },
-      "to": { "path": "^apps/collector/src/(history/|storage/(?!collector-storage\\.ts$)|scan/local-collector\\.ts$)" }
+      "to": { "path": "^apps/collector/src/(history/|providers/|transcript/|storage/(?!collector-storage\\.ts$)|scan/local-collector\\.ts$)" }
     },
     {
-      "name": "only-the-transcript-layer-reads-files",
+      "name": "readers-and-scanner-read-files-through-transcript",
+      "comment": "The reader, the providers, the scanner and the schedule read a transcript file only through transcript/.",
       "severity": "error",
       "from": { "path": "^apps/collector/src/(history|providers|scan|watch)/" },
       "to": { "path": "^(node:)?fs(/promises)?$" }
@@ -56,15 +57,30 @@
     },
     {
       "name": "providers-do-not-know-each-other",
+      "comment": "A provider directory imports no provider file outside itself, not the other provider and not providers/index.ts.",
       "severity": "error",
       "from": { "path": "^apps/collector/src/providers/(codex|claude)/" },
-      "to": { "path": "^apps/collector/src/providers/(codex|claude)/", "pathNot": "^apps/collector/src/providers/$1/" }
+      "to": { "path": "^apps/collector/src/providers/", "pathNot": "^apps/collector/src/providers/$1/" }
     },
     {
       "name": "providers-receive-their-paths",
       "severity": "error",
       "from": { "path": "^apps/collector/src/providers/(codex|claude)/" },
       "to": { "path": "^apps/collector/src/config/" }
+    },
+    {
+      "name": "scan-engine-is-provider-neutral",
+      "comment": "The scanner and the schedule know a provider only through the ScanProvider port.",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/(scan|watch)/" },
+      "to": { "path": "^apps/collector/src/providers/" }
+    },
+    {
+      "name": "outside-providers-use-the-provider-index",
+      "comment": "Outside providers/, a file gets the providers from providers/index.ts.",
+      "severity": "error",
+      "from": { "path": "^apps/collector/src/(?!providers/)" },
+      "to": { "path": "^apps/collector/src/providers/(codex|claude)/" }
     },
     {
       "name": "scanner-uses-only-the-storage-port",

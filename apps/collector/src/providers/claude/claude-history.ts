@@ -1,20 +1,30 @@
 import { basename, dirname, join, relative } from "node:path";
 import { matchesRecordedPath } from "@tracerelic/shared";
 import type { HistoryProvider, HistoryWindow, LocalHistoryEntry } from "../../history/index.ts";
-import type {
-  ClaudeSubagent, ScanSelection, SourceDiscoveryOptions, Transcript, TranscriptEntry, TranscriptSource,
-} from "../../transcript/index.ts";
+import type { ScanSelection, SourceDiscoveryOptions, Transcript, TranscriptEntry, TranscriptSource } from "../../transcript/index.ts";
 import { JsonlRecords } from "../../transcript/jsonl-records.ts";
 import { SourceDiscovery } from "../../transcript/source-discovery.ts";
 import { TranscriptBatches } from "../../transcript/transcript-batches.ts";
 import { type DirectoryListing, TranscriptDirectories } from "../../transcript/transcript-directories.ts";
-import { ClaudeSessionIdentity } from "./claude-session-identity.ts";
+import type { ScanProvider } from "../../scan/scan-provider.ts";
+import { ClaudeScan } from "./claude-scan.ts";
+import { ClaudeSessionIdentity, type ClaudeSubagent } from "./claude-session-identity.ts";
 import { ClaudeTranscriptFiles, type TranscriptFile } from "./claude-transcript-files.ts";
 
 export type ClaudeTranscriptEntry = TranscriptEntry<"claude">;
 
 export interface ClaudeTranscript extends Transcript<ClaudeTranscriptEntry> {
   readonly previousCopy: boolean;
+}
+
+/** One session in one Claude Code transcript file. */
+export interface ClaudeTranscriptSource extends TranscriptSource<ClaudeTranscriptEntry> {
+  readonly previousCopy: boolean;
+  readonly selectionCwd?: string;
+  readonly projectDir?: string;
+  readonly claudeSubagent?: ClaudeSubagent;
+  readonly currentFileCwd?: string;
+  readonly currentFilePath?: string;
 }
 
 interface SelectedSession {
@@ -24,14 +34,18 @@ interface SelectedSession {
 }
 
 /** The Claude Code provider. It receives the Claude Code root directory. */
-export class ClaudeHistory implements HistoryProvider {
+export class ClaudeHistory implements HistoryProvider, ScanProvider<ClaudeTranscriptEntry, ClaudeTranscriptSource> {
   readonly harness = "claude";
   private readonly jsonl = new JsonlRecords();
   private readonly batches = new TranscriptBatches(this.jsonl);
   private readonly files: ClaudeTranscriptFiles;
 
-  constructor(private readonly root: string) {
+  constructor(readonly root: string) {
     this.files = new ClaudeTranscriptFiles(root);
+  }
+
+  openScan(selection: ScanSelection): ClaudeScan {
+    return new ClaudeScan(this, selection);
   }
 
   async readHistory(window: HistoryWindow): Promise<readonly LocalHistoryEntry[]> {
@@ -55,7 +69,7 @@ export class ClaudeHistory implements HistoryProvider {
     }
   }
 
-  async *discoverSources(selection: ScanSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<TranscriptSource<ClaudeTranscriptEntry>> {
+  async *discoverSources(selection: ScanSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<ClaudeTranscriptSource> {
     const previous: TranscriptFile[] = [];
     const currentCwds = new Map<string, string>();
     const target = options.sourceFile;
@@ -82,7 +96,7 @@ export class ClaudeHistory implements HistoryProvider {
 
   private async *discoverFile(
     file: TranscriptFile, selection: ScanSelection, currentCwds: Map<string, string>,
-  ): AsyncGenerator<TranscriptSource<ClaudeTranscriptEntry>> {
+  ): AsyncGenerator<ClaudeTranscriptSource> {
     const { sourceFile, currentFile } = file;
     const currentFilePath = currentFile ? relative(this.root, currentFile) : undefined;
     const selectedProject = selection.projectPaths?.some(path => matchesRecordedPath(path, file.projectDir, true));
@@ -122,12 +136,15 @@ export class ClaudeHistory implements HistoryProvider {
       if (!currentFile && cwd) currentCwds.set(`${sourceFile}\0${sessionId}`, cwd);
       if (!selected) continue;
       const inherited = currentFile ? currentCwds.get(`${currentFile}\0${sessionId}`) : undefined;
+      const { projectDir } = file;
+      const selectionCwd = cwd ?? inherited;
       const source = this.batches.transcriptSource({
-        harness: "claude", sessionId, file: captured, previousCopy: currentFile !== undefined,
-        projectDir: file.projectDir, selectionCwd: cwd ?? inherited,
+        harness: "claude", sessionId, file: captured,
         matches: record => ClaudeSessionIdentity.parse(record, file.subagent)?.sessionId === sessionId,
+        isConversation: record => record.type === "user" || record.type === "assistant",
       });
-      yield { ...source, ...(subagent && { claudeSubagent: subagent }), ...(currentFilePath && { currentFilePath }),
+      yield { ...source, previousCopy: currentFile !== undefined, ...(selectionCwd && { selectionCwd }), ...(projectDir && { projectDir }),
+        ...(subagent && { claudeSubagent: subagent }), ...(currentFilePath && { currentFilePath }),
         ...(inherited && cwd && inherited !== cwd && { currentFileCwd: inherited }) };
     }
   }

@@ -22,7 +22,7 @@ test("a remapped Claude row keeps the original transcript UUID, provider IDs and
   assert.equal(decoded.claudeUsageReports?.[0].requestId, "remapped");
   assert.equal(decoded.metadata.parentSessionId, "parent");
   assert.deepEqual(decoded.messages.map(({ id, text }) => [id, text]), [["native:new:0", "Copied answer"]]);
-  assert.equal(format.claudeCallOrigins, true);
+  assert.equal(format.checkpointFields?.claudeCallOrigins, true);
   const backfill = format.upgrade?.({ occurrences: {} });
   assert.deepEqual(backfill?.read(rows).claudeUsageReports, decoded.claudeUsageReports);
 });
@@ -40,6 +40,35 @@ test("a Claude subagent reports independently identified work and preserves unce
     ["subagent", "subagent", "own", "own", "copy", "subagent"]);
   assert(chat.claudeUsageReports?.every(report => report.origin?.parentSessionId === "parent"));
   assert.equal(chat.claudeUsageReports?.[4].origin?.parentMessageUuid, "p");
+});
+
+test("a Claude format corrects only an accepted checkpoint beyond byte zero that has no call origins", t => {
+  const format = ClaudeSessionParser.forSource(false);
+  assert.equal(format.correction?.({ offset: 10, parserState: "{}", claudeCallOrigins: true }), undefined);
+  assert.equal(format.correction?.({ offset: 0, parserState: "{}" }), undefined);
+  const checkpoint = { offset: 10, parserState: "{}" };
+  const correction = format.correction?.(checkpoint);
+  assert(correction);
+  assert.equal(correction.parentSessionId, undefined);
+  assert.deepEqual(correction.batchFields, { backfillClaudeOriginsFrom: checkpoint });
+  assert.equal(correction.batchFields.backfillClaudeOriginsFrom, checkpoint);
+  const reread = format.resume();
+  const resume = t.mock.method(format, "resume");
+  const decoder = { occurrences: { ["a".repeat(64)]: 1 } };
+  assert.deepEqual(correction.accepted({ version: 2, decoder }, reread, format), { checkpoint: { ...checkpoint, claudeCallOrigins: true } });
+  // The saved decoder is resumed even when the corrected checkpoint does not use it.
+  assert.throws(() => correction.accepted({ version: 2, decoder: { unknown: 1 } }, reread, format), /Invalid chat parser state/);
+  const fresh = correction.accepted(undefined, reread, format);
+  assert("parser" in fresh);
+  assert.equal(fresh.parser, reread);
+  const earlier = correction.accepted({ version: 1, decoder }, reread, format);
+  assert("parser" in earlier);
+  assert.notEqual(earlier.parser, reread);
+  assert.deepEqual(earlier.parser.snapshot(), decoder);
+  // Each saved decoder is resumed through the format that the correction receives.
+  assert.deepEqual(resume.mock.calls.map(call => call.arguments), [[decoder], [{ unknown: 1 }], [decoder]]);
+  assert.equal(resume.mock.calls[2].result, earlier.parser);
+  assert.deepEqual(ClaudeSessionParser.forSource(true).checkpointFields, { claudeCallOrigins: true });
 });
 
 test("a copied Claude user message establishes the parent even without a usage report", () => {

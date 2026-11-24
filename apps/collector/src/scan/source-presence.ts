@@ -3,21 +3,10 @@ import type { TranscriptSource } from "../transcript/index.ts";
 import { StorageBackoffError, StorageUnavailableError, type AcknowledgedSource, type CommitResult, type MissingSource, type PresenceWrite,
   type ObservedExtent, type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";
-import { assessClaudeCopies, unreadableCopy, type ClaudeBackup } from "../providers/claude/claude-source-copy.ts";
 import { captureProof, readStorage } from "./scan-recovery.ts";
+import type { EarlierCopy, ProviderScan, SeenSource } from "./scan-provider.ts";
 import { sourceId, SourceSighting, SourceSightings } from "./source-sightings.ts";
-import { CodexIdentityRepair } from "../providers/codex/codex-identity-repair.ts";
-
-interface SourceLocations<Entry> {
-  identitiesAt?(paths: ReadonlySet<string>): AsyncIterable<{ path: string; sessionId: string }>;
-  confirmedAbsent(paths: readonly string[], excludedCopyPaths?: readonly string[]): Promise<readonly string[]>;
-  recoveryCandidates?(paths: ReadonlySet<string>): AsyncIterable<ClaudeBackup<Entry>>;
-}
-
-interface Seen<Entry> {
-  sighting: SourceSighting;
-  transcript: TranscriptSource<Entry>;
-}
+import type { SourceLine } from "./transcript-cursor.ts";
 
 export interface RestoredSource {
   sighting: SourceSighting;
@@ -48,13 +37,13 @@ function recordsSighting(known: AcknowledgedSource | undefined, observation: Sou
 }
 
 /** Compare an inventory snapshot with a subsequent search of every possible physical location. */
-export class SourcePresenceScan<Entry> {
-  private readonly seen = new Map<string, Seen<Entry>>();
+export class SourcePresenceScan<Entry extends SourceLine> {
+  private readonly seen = new Map<string, SeenSource<TranscriptSource<Entry>>>();
 
-  constructor(readonly scope: SourceScope, private readonly locations: SourceLocations<Entry>, private readonly memory: SourceSightings) {}
+  constructor(readonly scope: SourceScope, private readonly locations: ProviderScan<Entry>, private readonly memory: SourceSightings) {}
 
   async capture(transcript: TranscriptSource<Entry>, observedEnd: number): Promise<SourceSighting> {
-    const sighting = await this.memory.capture(this.scope, transcript, observedEnd);
+    const sighting = await this.memory.capture(this.scope, transcript, this.locations.locate(transcript), observedEnd);
     const seen = { sighting, transcript };
     this.seen.set(sourceId(sighting.source), seen);
     return sighting;
@@ -91,9 +80,8 @@ export class SourcePresenceScan<Entry> {
       uncertain.delete(id);
       known.delete(id);
     }
-    if (this.scope.harness === "codex" && known.size) {
-      const repair = new CodexIdentityRepair(this.memory.storage, this.scope);
-      selected.push(...await repair.reconcile(known, this.seen.values(), this.locations.identitiesAt?.bind(this.locations)));
+    if (this.locations.repairIdentities && known.size) {
+      selected.push(...await this.locations.repairIdentities({ storage: this.memory.storage, scope: this.scope, known, seen: this.seen.values() }));
     }
     const excluded = restore ? await this.restoreCopies(known, uncertain, restore, selected) : new Map<string, string[]>();
     const paths = new Set([...known.values()].map(row => row.location.path));
@@ -123,9 +111,10 @@ export class SourcePresenceScan<Entry> {
   private async restoreCopies(known: Map<string, AcknowledgedSource>, uncertain: Map<string, SourceSighting>, restore: RestoreCopy<Entry>, selected: StreamKey[]) {
     const rejected = new Map<string, string[]>();
     const paths = new Set([...known.values()].map(row => row.location.path));
-    if (!paths.size || !this.locations.recoveryCandidates) return rejected;
-    const byPath = new Map<string, ClaudeBackup<Entry>[]>();
-    for await (const copy of this.locations.recoveryCandidates(paths)) {
+    const earlier = this.locations.earlierCopies;
+    if (!paths.size || !earlier) return rejected;
+    const byPath = new Map<string, EarlierCopy<TranscriptSource<Entry>>[]>();
+    for await (const copy of earlier.candidates(paths)) {
       const group = byPath.get(copy.currentPath) ?? [];
       group.push(copy);
       byPath.set(copy.currentPath, group);
@@ -147,7 +136,7 @@ export class SourcePresenceScan<Entry> {
         known.set(id, row = current);
       }
       const snapshot = await readStorage(row.source, () => this.memory.storage.readCheckpoint(row.source));
-      const { excluded, candidates } = await assessClaudeCopies(row, snapshot.checkpoint, copies);
+      const { excluded, candidates } = await earlier.assess(row, snapshot.checkpoint, copies);
       for (const { transcript, path } of candidates) {
         if ([...this.seen.values()].some(s => s.sighting.rejected && s.transcript.sourceFile === transcript.sourceFile)) continue;
         try {
@@ -160,7 +149,7 @@ export class SourcePresenceScan<Entry> {
           }
           break;
         } catch (error) {
-          if (!unreadableCopy(error)) throw error;
+          if (!earlier.unreadable(error)) throw error;
         }
       }
       rejected.set(id, excluded);

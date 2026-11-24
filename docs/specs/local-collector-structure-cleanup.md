@@ -5,586 +5,480 @@ class receives its providers. One directory for each provider holds all the code
 provider's files and records. Each rule belongs to a class. The CLI output, the exit codes, the stored
 sessions and the checkpoints stay the same. [Current specification](local-collector.md)
 
-This document reviews the structure at commit `21ab8a9` and gives the cleanup plan. Line links refer to
-that commit. No production code has changed.
-
-Affected components: `apps/collector` (all of `src/` and the test imports) and `apps/api` (only its
-imports of the storage helpers that change name).
+Affected components: `apps/collector` (all of `src/` and its tests), `packages/shared` (two leaf
+modules) and `apps/api` (only its imports of the names that change).
 
 ## Status
 
-Steps 0 and 1 are complete on 2026-11-22. Step 2 is complete on 2026-11-23. The owner accepted the
-five recommendations in [Decisions for the owner](#decisions-for-the-owner). The sections after this
-one describe the code before step 1, at commit `21ab8a9`. They name each file by its path at that
-commit. The table in [Where the current files go](#where-the-current-files-go) gives the path of each
-file after step 2.
+| Step | Result | State |
+| --- | --- | --- |
+| 0 | Golden tests pin the saved state and the IDs of each parser as exact text | Done, [PR 28](https://github.com/tomer-mayara/TraceRelic/pull/28) |
+| 1 | The history reader receives its providers | Done, [PR 28](https://github.com/tomer-mayara/TraceRelic/pull/28) |
+| 2 | One directory for each provider and for each layer | Done, [PR 29](https://github.com/tomer-mayara/TraceRelic/pull/29) |
+| 3 | The scanner receives its providers through a port | Done, [PR 30](https://github.com/tomer-mayara/TraceRelic/pull/30) |
+| 4 | Each function is a member of a class | The code is in the draft [PR 31](https://github.com/tomer-mayara/TraceRelic/pull/31). It is not on `main`. |
+| 5 | Finish | Not approved. Not started. |
 
-| Measure | Before | After step 1 | After step 2 |
-| --- | ---: | ---: | ---: |
-| Top-level functions in `history/` and `providers/` | 7 | 0 | 67 |
-| Top-level functions in all of `src/` | 265 | 262 | 258 |
-| Classes | 57 | 67 | 67 |
-| Node tests | 687 | 778 | 778 |
-| Collector scenarios | 47 | 49 | 49 |
+The description of each PR has the check results of its step.
 
-Step 2 changed no function. The 67 functions came into `providers/` with the parser files, and all of
-them are in the ten files of the `pending` list. Four functions left `src/` with the two shared leaf
-modules.
-
-Results of step 1:
-
-- **Output comparison.** `scan --once` and `history` give the same bytes as before step 1 on the frozen
-  sample. The comparison ran five commands: a full scan, a full history window, a scan with `--session`,
-  a scan with `--project` and a history window with fractional seconds.
-- **Checks.** The Node tests, lint, the dependency rules, `check:collector-structure`, the three
-  schemas, the collector scenarios and the API and PostgreSQL scenarios pass on Node.js 26.13.1.
-- **Parser tests.** Seven `*-parser-*golden.test.ts` files pin the saved state and the output of each
-  parser as exact text. After step 2 they are in
-  [test/unit/providers/codex](../../apps/collector/test/unit/providers/codex) and
-  [test/unit/providers/claude](../../apps/collector/test/unit/providers/claude). They cover one
-  continuous scan, a restore from each saved state, a Codex fork, Codex paginated history, the Codex
-  lookahead, the version upgrade of both parsers, a Claude Code subagent and an earlier Claude Code
-  copy. A swap of two keys in one `snapshot()` fails 16 of these tests and no other test.
-
-Results of step 2:
-
-- **Moves.** 37 source files and 33 test files have a new path or a new name. A moved file changed
-  only in its import lines, with two exceptions. Each of the seven golden tests names its new compiled
-  path in one comment line. `storage/http/collector-wire-contract.ts` reads the schema bundle by a
-  path relative to its own file, and that path has one more `../`.
-- **Review check.** A script compared each TypeScript file of the collector, the API and the shared
-  package with its content before the step. The text outside the import statements is identical,
-  except for the eight lines above. Each import names the same module and the same names as before.
-- **Output comparison.** `scan --once` and `history` give the same bytes as before step 2 on a new
-  frozen sample. The sample has plain and compressed Codex rollouts, archived rollouts, and Claude Code
-  transcripts with subagents. The comparison ran seven commands. Five ran the source on Bun: a full
-  scan, a full history window, a scan with `--session`, a scan with `--project` and a history window
-  with fractional seconds. Two ran the compiled files on Node.js: a full scan and a history window.
-  For each command the standard output, the standard error and the exit code are the same.
-- **Checks.** From a clean build on Node.js 26.13.1, these pass: the Node tests, lint, the dependency
-  rules, `check:collector-structure`, the three schemas, the collector scenarios, the API and
-  PostgreSQL scenarios, the shared logging checks, Knip and Habit Hooks.
-- **Rules.** `storage-is-self-contained` is on. A test added one forbidden line to a file for each
-  changed dependency rule and for the structure rule. Each of the eleven lines made its check fail. A
-  function in a `pending` file did not.
-- **Files with no change.** `knip.json` and `apps/api/component.yaml` name no moved path. No API
-  source file changed.
-
-The later steps must know these points:
-
-- **A restored parser can write different text.** A parser that resumes from a checkpoint does not
-  always give the same key order as one continuous scan. Five cases are known. The parser tests pin
-  each case as it is, and three tests have the name "known restore difference, kept as it is". The
-  cleanup must keep this behavior. A change to it is a separate decision.
-- **Two block builders, two key orders.** Paginated Codex items build a text block as
-  `{ blockIndex, text }`. Legacy Codex records build it as `{ text, blockIndex }`. The fallback message
-  ID hashes the block, so step 4a must keep the two builders apart.
-- **Empty `claudePath`.** `LocalProviders.fromConfig` adds the Claude Code provider when `claudePath` is
-  defined. The scanner adds it when `claudePath` is not empty. `GlobalConfig` rejects an empty path, so
-  the two rules agree today. Step 3 must keep one rule.
-- **Eight imports from `scan/` to `providers/`.** `scan/local-collector.ts` imports the provider index,
-  `claude-session-parser.ts`, `claude-source-copy.ts`, `codex-fork-sources.ts` and
-  `codex-rollout-files.ts`. `scan/source-presence.ts` imports `claude-source-copy.ts` and
-  `codex-identity-repair.ts`. `scan/source-sightings.ts` imports `codex-rollout-files.ts`. Step 3
-  removes these imports.
-- **Imports from `providers/` to `scan/`.** Twelve parser files import six `scan/` files:
-  `parser-state.ts`, `decoded-chat.ts`, `transcript-cursor.ts`, `scan-recovery.ts`, `scan-pending.ts`
-  and `source-sightings.ts`. No rule forbids this direction.
-- **`scan/` and `watch/` import each other.** `scan/local-collector.ts` imports the type `ScanProgress`
-  from `watch/scan-activity.ts`. The two `watch/` files import five `scan/` files. Step 3 gives
-  `LocalCollector` a `progress` option and can move this type to `scan/`.
-- **Shared leaf modules.** `recorded-instant.ts` and `claude-transcript-copy.ts` are in
-  `packages/shared/src`, and `@tracerelic/shared` exports their six names. The structure rule applies
-  only to `apps/collector/src`, so it does not see their four functions. Step 4 makes
-  `RecordedInstant` and `ClaudeTranscriptCopy` and must extend the rule to these two files. Bun and
-  Node.js load `@tracerelic/shared` from `packages/shared/dist`. Run `bun run build` after a change to
-  the shared package and before `bun run collector`.
-- **Stale test names.** `local-llm-history-codex.test.ts`, `local-llm-history-claude.test.ts` and
-  `transcript-replay.test.ts` keep the names of files that no longer exist. Step 5 can give them new
-  names.
-- **Bun and Node.js give a different order.** For the same sample at the same commit, the Bun run of
-  the source and the Node.js run of the compiled files do not give the same bytes. The content is the
-  same, but the order of the sessions and of some messages is different. Compare the output of one
-  runtime with the output of the same runtime.
-- **`ClaudeSubagent`** stays in `transcript/transcript-source.ts` until step 3 moves the provider fields.
-- **`JsonlRecords.isRecord`** is the plain-object check of the transcript layer. The `JsonRecord` class
-  of step 4 takes it over.
-- **`SourceDiscovery`** in `transcript/source-discovery.ts` is new. It owns the selection by session and
-  project. The package has two new exports, `./providers` and `./transcript`.
-
-## Baseline
-
-| Directory | Files | Lines | Classes | Top-level functions |
+| Measure | Before | After step 1 | After step 2 | After step 3 |
 | --- | ---: | ---: | ---: | ---: |
-| `src/` root | 3 | 90 | 0 | 6 |
-| `commands/` | 1 | 115 | 1 | 4 |
-| `config/` | 4 | 102 | 2 | 0 |
-| `history/` | 7 | 1,027 | 6 | 7 |
-| `scan/` | 26 | 3,851 | 26 | 98 |
-| `storage/` | 24 | 4,003 | 22 | 150 |
-| **Total** | **65** | **9,188** | **57** | **265** |
+| Top-level functions in `apps/collector/src` | 265 | 262 | 258 | 256 |
+| Classes | 57 | 67 | 67 | 70 |
+| Node tests | 687 | 778 | 778 | 809 |
+| Collector scenarios | 47 | 49 | 49 | 52 |
 
-Of the 265 functions, 68 are exported. Thirteen files contain functions and no class.
+"Before" is commit `21ab8a9`. Step 2 moved four of the functions to `packages/shared` with two leaf
+modules. Step 3 moved two functions into provider classes.
 
-With the pinned Node.js 26.13.1, all 687 workspace tests and the 47 collector scenarios pass. Lint and
-the dependency rules pass. The Habit Hooks size limits pass for `apps/collector/src`. The API and
-PostgreSQL scenario suites were not run for this review. Node.js 24.20 fails one compressed-rollout
-test, so run `nvm use` before each check.
+## Structure
 
-## Findings
-
-### 1. The date reader exists, but inheritance hides it
-
-[`LocalLLMHistory`](../../apps/collector/src/history/local-llm-history.ts#L109) is an abstract class
-with `readLocalHistory(fromDate, toDate)`. `LocalLLMHistoryCodex` and `LocalLLMHistoryClaude` extend
-it. Nothing is injected. No class reads both providers. The command builds the two readers and joins
-their results itself at
-[collector-command.ts:81](../../apps/collector/src/commands/collector-command.ts#L81). The scanner
-builds the same two readers again at
-[local-collector.ts:134](../../apps/collector/src/scan/local-collector.ts#L134).
-
-### 2. The base class does three jobs
-
-| Job | Lines in `local-llm-history.ts` |
-| --- | --- |
-| Check a date window and filter by timestamp | 114–135 |
-| Build scan sources, apply the session and project selection | 137–185 |
-| Split JSONL lines, decode JSON, cut byte-bounded batches, hash prefixes | 187–297 |
-
-Each provider class inherits all three through `protected` helpers. Each provider class also finds
-files, reads headers, answers date queries, discovers scan sources and checks for missing files.
-
-### 3. Provider knowledge is in four places, and the scan engine names both providers
-
-Codex code is in `history/` (2 files), `scan/` (9 files) and `storage/` (5 files). Claude code is in
-the `src/` root (1 file), `history/` (1 file), `scan/` (5 files) and `storage/` (7 files). The engine
-that should be provider-neutral contains these provider decisions:
-
-| Provider decision in the engine | Where it is now |
-| --- | --- |
-| Construct the Codex and Claude readers | [local-collector.ts:134](../../apps/collector/src/scan/local-collector.ts#L134) |
-| Skip Claude when `claudePath` is absent | [local-collector.ts:137](../../apps/collector/src/scan/local-collector.ts#L137) and four checks in `local-llm-history-claude.ts` |
-| Codex fork evidence shared through a closure variable | [local-collector.ts:142](../../apps/collector/src/scan/local-collector.ts#L142) |
-| Claude parser selection | [local-collector.ts:148](../../apps/collector/src/scan/local-collector.ts#L148) |
-| One source for each Codex file, many sessions for each Claude file | [local-collector.ts:64](../../apps/collector/src/scan/local-collector.ts#L64) |
-| Logical file name: strip `.zst` for Codex only | [local-collector.ts:84](../../apps/collector/src/scan/local-collector.ts#L84) |
-| Claude earlier-copy fields and copy recovery | [local-collector.ts:54](../../apps/collector/src/scan/local-collector.ts#L54), [:230](../../apps/collector/src/scan/local-collector.ts#L230) |
-| Stream ID and location for each provider | [source-sightings.ts:59](../../apps/collector/src/scan/source-sightings.ts#L59) |
-| Codex identity repair | [source-presence.ts:94](../../apps/collector/src/scan/source-presence.ts#L94) |
-| Codex fork and Claude origin flags in the cursor | [transcript-cursor.ts:13](../../apps/collector/src/scan/transcript-cursor.ts#L13), [:118](../../apps/collector/src/scan/transcript-cursor.ts#L118) |
-| Provider fields on the generic source type (`codexForkHeader`, `codexHeaderEnd`, `claudeSubagent`, `currentFileCwd`, `currentFilePath`) | [local-llm-history.ts:69](../../apps/collector/src/history/local-llm-history.ts#L69) |
-| Provider record types named in the generic line reader | [local-llm-history.ts:236](../../apps/collector/src/history/local-llm-history.ts#L236) |
-
-A third provider would require edits in each of these places.
-
-### 4. Functions outnumber classes by more than four to one
-
-- **Function-only modules (13 files, 105 functions).** For example
-  [codex-usage-report.ts](../../apps/collector/src/providers/codex/codex-usage-report.ts) has 15 functions and
-  [checkpoint-validation.ts](../../apps/collector/src/storage/checkpoint-transition.ts) has 18.
-- **Exported helpers beside a class (26 functions).** For example `readStorage`, `captureProof` and
-  three more in [scan-recovery.ts](../../apps/collector/src/scan/scan-recovery.ts).
-- **Private helpers beside a class (134 functions).** For example 15 below `CodexChat` and 25 in
-  [usage-windows.ts](../../apps/collector/src/storage/codex/usage-windows.ts).
-
-The same small rule is written several times:
-
-| Rule | Copies |
-| --- | --- |
-| "Value is a plain object" | `claude-chat.ts:96`, `codex-chat.ts:386`, `codex-usage-counts.ts:10`, `claude-usage-counts.ts:7`, `usage-validation.ts:20`, `local-llm-history.ts:152` |
-| "Value is a nonempty string" | `claude-chat.ts:92`, `codex-chat.ts:390`, `codex-usage-report.ts:25`, `usage-validation.ts:16` |
-| "Value is a nonnegative safe integer" | `claude-usage-counts.ts:11`, `codex-usage-counts.ts:14`, `usage-validation.ts:12` |
-| Encode a stream key or session key as text | `source-sightings.ts:7`, `scan-activity.ts:38`, `in-memory-collector-storage.ts:18` and `:22` |
-| The list of token breakdown fields | `codex-usage-counts.ts:4`, `usage-windows.ts:5` |
-| "Is this Claude row a real assistant message" | `claude-chat.ts:54`, `claude-usage.ts:15` |
-| `Seen<Entry>` and `VerifiedPrefix` types | `source-presence.ts:17` and `codex-identity-repair.ts:8`; `local-llm-history.ts:59` and `collector-storage.ts:131` |
-
-### 5. Directories mix concerns
-
-- **`scan/` holds three things.** Provider parsers and provider recovery (14 files), the import engine
-  (10 files) and the watch schedule (2 files).
-- **`storage/` holds four things.** The port (1 file), the HTTP client and wire format (3 files),
-  provider accounting rules (12 files) and the session model (8 files). The port file has 403 lines.
-  It mixes the contract types with seven functions and three error classes.
-- **Two files sit loose in `src/`.** `recorded-timestamp.ts` and `claude-transcript-copy.ts` are there
-  because history, scan and storage all import them. The API also loads them through `storage/`. The
-  dependency rule that limits the API to `storage/` does not see this.
-- **`cli.ts` is two functions.** `commands/collector-command.ts` parses arguments, loads the
-  configuration, builds readers, builds the scanner and runs the schedule.
-
-### 6. The size limits helped to produce this shape
-
-[Habit Hooks](../../.habit-hooks/eslint.config.mjs) allows 500 lines for each file and 60 lines for
-each function. `usage-windows.ts` has 485 lines, `codex-chat.ts` 471 and `codex-usage.ts` 429. The file
-limit is the likely reason that logic left a large class for a sibling file of functions. For example
-`codex-usage-report.ts` and `codex-usage-counts.ts` sit beside `codex-usage.ts`. The cleanup cannot put
-those helpers back into the same large class. It must give each group of helpers its own small class.
-
-### 7. Tests reach the source in three ways
-
-Tests import through the package exports (`@tracerelic/collector/history`), through `#src/…` and
-through relative `../../../src/…` paths. Knip cannot resolve the `#src/…` form. Four production
-methods have test callers only: `readRollouts`, `readTranscripts`, `ClaudeChat.decode` and
-`CodexChat.decode`.
-
-## Target structure
+Steps 1 to 3 made this structure. Step 4 adds the seven files that have the mark `+4`.
 
 ```text
 apps/collector/src/
-├── cli.ts                     CollectorCli: logger, standard output, exit codes
+├── cli.ts                     the logger, the standard output and the exit codes
 ├── commands/
-│   ├── collector-command.ts   CollectorCommand: builds the providers, the reader, the scanner, the schedule
-│   └── command-arguments.ts   CommandArguments: parses and checks the CLI options
-├── config/                    no change
+│   ├── collector-command.ts   CollectorCommand: builds the providers, the reader, the scanner and the schedule
+│   └── command-arguments.ts   +4  CommandArguments: checks the CLI options
+├── config/                    the configuration file, its schema and its loader
 ├── history/                   the date reader
-│   ├── index.ts               package export ./history
-│   ├── local-llm-history.ts   LocalLLMHistory: readLocalHistory(from, to) over the injected providers
+│   ├── local-llm-history.ts   LocalLLMHistory: readLocalHistory(from, to) over the providers that it receives
 │   ├── history-provider.ts    HistoryProvider (port), LocalHistoryEntry
 │   └── history-window.ts      HistoryWindow: checks the bounds, tests one timestamp
 ├── providers/
-│   ├── index.ts               package export ./providers
-│   ├── local-providers.ts     LocalProviders.fromConfig(config): the only file that names both providers
+│   ├── local-providers.ts     LocalProviders.fromConfig(config): the providers of the configured roots
 │   ├── codex/                 all code that knows Codex files and records
 │   │   ├── codex-history.ts          CodexHistory: implements HistoryProvider and ScanProvider
-│   │   ├── codex-rollout-files.ts    sessions/, archived_sessions/, plain and .zst forms
-│   │   ├── codex-session-header.ts   session ID, working directory, fork parent
-│   │   ├── codex-session-parser.ts, codex-chat.ts, codex-visible-text.ts
+│   │   ├── codex-scan.ts             CodexScan: one scan pass, with the fork evidence of its latest discovery
+│   │   ├── codex-rollout-files.ts, codex-rollout-copies.ts, codex-session-header.ts
+│   │   ├── codex-session-parser.ts, codex-chat.ts, codex-visible-text.ts (+4)
 │   │   ├── codex-usage.ts, codex-usage-report.ts, codex-token-counts.ts
-│   │   └── codex-fork-*.ts, codex-identity-repair.ts, codex-rollout-copies.ts
+│   │   └── codex-fork-evidence.ts, codex-fork-sources.ts, codex-fork-usage.ts, codex-identity-repair.ts
 │   └── claude/                all code that knows Claude Code files and records
 │       ├── claude-history.ts         ClaudeHistory: implements HistoryProvider and ScanProvider
-│       ├── claude-transcript-files.ts   projects/, subagents/, earlier copies
-│       ├── claude-session-identity.ts   native ID, subagent ID
-│       ├── claude-session-parser.ts, claude-chat.ts, claude-visible-text.ts
-│       └── claude-usage.ts, claude-usage-counts.ts, claude-source-copy.ts
+│       ├── claude-scan.ts            ClaudeScan: one scan pass
+│       ├── claude-transcript-files.ts, claude-session-identity.ts, claude-source-copy.ts
+│       ├── claude-session-parser.ts, claude-chat.ts, claude-visible-text.ts (+4)
+│       └── claude-usage.ts, claude-usage-counts.ts, claude-assistant-record.ts (+4)
 ├── transcript/                provider-neutral file reading
 │   ├── captured-transcript-file.ts, transcript-directories.ts
 │   ├── jsonl-records.ts       JsonlRecords: complete lines to JSON objects
+│   ├── json-record.ts         +4  JsonRecord: the checks on one decoded JSON value
 │   ├── transcript-batches.ts  TranscriptBatches: byte-bounded batches with prefix digests
+│   ├── source-discovery.ts    SourceDiscovery: the selection by session and project
 │   └── transcript-source.ts   TranscriptSource, RecordBatch, ReadPosition, ScanSelection
 ├── scan/                      provider-neutral import engine
 │   ├── local-collector.ts     LocalCollector: scanOnce, scanForChanges; receives providers and storage
-│   ├── scan-provider.ts       ScanProvider (port)
+│   ├── scan-provider.ts       ScanProvider and ProviderScan (port)
 │   ├── transcript-cursor.ts, parser-state.ts, replay-occurrences.ts, decoded-chat.ts
-│   ├── scan-recovery.ts, checkpoint-proof.ts, source-presence.ts, source-sightings.ts
-│   └── scan-pending.ts, scan-rejected.ts
-├── watch/
-│   └── scheduled-scanner.ts, scan-activity.ts
+│   ├── scan-recovery.ts, checkpoint-proof.ts (+4), source-presence.ts, source-sightings.ts
+│   └── scan-pending.ts, scan-rejected.ts, scan-progress.ts
+├── watch/                     scheduled-scanner.ts, scan-activity.ts
 └── storage/                   the API imports only this directory
     ├── collector-storage.ts   the port: contract types, CollectorStorage, error classes
     ├── in-memory-collector-storage.ts, checkpoint-transition.ts, batch-values.ts
     ├── session-messages.ts, session-metadata.ts, session-usage.ts
     ├── source-inventory.ts, source-usage-diagnostics.ts
-    ├── http/                  HttpCollectorStorage, CollectorWireContract, PackedBatch
+    ├── http/                  HttpCollectorStorage, CollectorWireContract, the packed batch
     ├── claude/                usage ledger, call owners, origin reports, advisor iterations
-    └── codex/                 call aliases, call owners, source identity, usage windows
+    └── codex/                 call aliases, call owners, source identity, usage windows, usage intervals (+4)
 ```
+
+`config/`, `history/`, `providers/` and `transcript/` each have an `index.ts`. It is the package export of
+that directory. `providers/index.ts` and `providers/local-providers.ts` are the only files that name both
+providers. Two leaf modules that history, scan and storage all use are in `packages/shared/src`:
+`recorded-instant.ts` and `claude-transcript-copy.ts`.
 
 ### The date reader
 
 ```ts
-// history/history-provider.ts
-export interface HistoryProvider {
-  readonly harness: Harness;
-  /** Read the raw records with a recorded timestamp in the window, in file order. */
-  readHistory(window: HistoryWindow): Promise<readonly LocalHistoryEntry[]>;
-}
-
-// history/local-llm-history.ts
-export class LocalLLMHistory {
-  constructor(private readonly providers: readonly HistoryProvider[]) {}
-
-  readLocalHistory(fromDate: Date, toDate: Date): Promise<readonly LocalHistoryEntry[]>;
-  readLocalHistoryInstants(from: string, to: string): Promise<readonly LocalHistoryEntry[]>;
-}
-
-// commands/collector-command.ts
 const providers = LocalProviders.fromConfig(config);   // CodexHistory, and ClaudeHistory if configured
-const entries = await new LocalLLMHistory(providers).readLocalHistoryInstants(from, to);
+const entries = await new LocalLLMHistory(providers).readLocalHistory(fromDate, toDate);
 ```
 
-`LocalLLMHistory` checks the window one time and reads the providers together. It returns their
-records in the injection order. A provider receives its root path, not the configuration object. If the
-configuration has no `claudePath`, no Claude provider is injected. The five `claudePath` checks go away.
+`LocalLLMHistory` checks the window one time and reads the providers together. It returns their records
+in the sequence of the providers. A provider receives its root path, not the configuration. If the
+configuration has no `claudePath`, there is no Claude Code provider. The port is
+[`HistoryProvider`](../../apps/collector/src/history/history-provider.ts). It has one member,
+`readHistory(window)`. The contract is [history.tsp](local-collector/history.tsp).
 
 ### The scanner
 
-`LocalCollector` receives the same provider objects through a second, narrow port.
+`LocalCollector` receives the same provider objects through a second port,
+[`ScanProvider`](../../apps/collector/src/scan/scan-provider.ts). The contract is
+[scan.tsp](local-collector/scan.tsp).
 
 ```ts
-// scan/scan-provider.ts — a starting point; step 3 fixes the final shape
-export interface ScanProvider<Entry extends SourceLine = SourceLine> {
-  readonly harness: Harness;
-  readonly root: string;
-  /** One pass over the selected files. The pass keeps its own state, such as Codex fork evidence. */
-  openScan(selection: ScanSelection): ProviderScan<Entry>;
-}
-
-export interface ProviderScan<Entry extends SourceLine> {
-  /** Sources that share one physical file arrive together. */
-  discoverFiles(options: SourceDiscoveryOptions): AsyncIterable<readonly TranscriptSource<Entry>[]>;
-  parserFor(source: TranscriptSource<Entry>, checkpoint: Checkpoint | null): Promise<ParserFormat<Entry>>;
-  locate(source: TranscriptSource<Entry>): { streamId: string; location: SourceLocation };
-  confirmedAbsent(paths: readonly string[], excludedCopies?: readonly string[]): Promise<readonly string[]>;
-  /** Provider recovery after the files are read: Codex identity repair, Claude earlier copies. */
-  recover?(inventory: RecoveryInventory<Entry>): Promise<readonly StreamKey[]>;
-}
-
 new LocalCollector({ providers, storage, installationId, onRejection, onMissing, progress });
 ```
 
-Each row of the table in finding 3 moves behind this port. After that, `scan/` and `watch/` do not
-import `providers/`.
+A provider opens one `ProviderScan` for each scan pass. The pass keeps the state of that pass. Each
+provider decision that the engine made before step 3 is behind the port. The generic algorithm stays in
+the engine.
 
-## Where the current files go
+| # | Provider decision | Port member | Codex | Claude Code |
+| --- | --- | --- | --- | --- |
+| 1 | Construct the providers | `LocalCollectorOptions.providers` | `LocalProviders.fromConfig` | `LocalProviders.fromConfig`, only when `claudePath !== undefined` |
+| 2 | Fork evidence and parser selection | `ProviderScan.parserFor`, and the state of the pass | `CodexScan` keeps the `CodexForkSources` of its latest discovery | `ClaudeSessionParser.forSource` |
+| 3 | File grouping | `ProviderScan.discoverFiles` | One source for each group, as soon as it is discovered | All the selected sessions of one file together |
+| 4 | Logical file name | `ProviderScan.logicalName`, optional | The rollout name without `.zst` | Absent |
+| 5 | Stream ID, path and location | `ProviderScan.locate` | Path: the logical name. Root-based stream ID: the JSON array of the root and the path | Path: relative to the root. Root-based stream ID: the absolute file |
+| 6 | Identity repair | `ProviderScan.repairIdentities`, optional | `CodexIdentityRepair` | Absent |
+| 7 | Earlier copies of an absent file | `ProviderScan.earlierCopies`, optional | Absent | `ClaudeEarlierCopies`, `ClaudeSourceCopy` |
+| 8 | A batch of an earlier copy | `ParserFormat.prepareBatch`, optional | Absent | The format of an earlier copy |
+| 9 | Provider fields of a source, and the record types that get a prefix digest | The source type of each provider, and `SelectedFile.isConversation` | `CodexRolloutSource`; `response_item` and `event_msg` | `ClaudeTranscriptSource`; `user` and `assistant` |
+| 10 | Provider fields of a checkpoint, and the correction of accepted usage | `ParserFormat.checkpointFields` and `ParserFormat.correction` | `codexFork` and `reconcileCodexForkFrom` | `claudeCallOrigins` and `backfillClaudeOriginsFrom` |
 
-| Now | Target | Change |
+The engine applies one generic rule for the stream ID. With an installation ID, the stream ID is the
+path of the location. Without one, it is the root-based stream ID of the provider.
+
+## Rules that keep the structure
+
+**Dependency rules.** They are in [.dependency-cruiser.collector.json](../../.dependency-cruiser.collector.json).
+`bun run check:collector-deps` checks them.
+
+| Rule | From | Forbidden import |
 | --- | --- | --- |
-| `cli.ts` | `cli.ts` | Same path. The two functions become `CollectorCli`. All logger calls stay in this file. |
-| `commands/collector-command.ts` | `commands/collector-command.ts`, `commands/command-arguments.ts` | Four functions become `CommandArguments`. |
-| `recorded-timestamp.ts` | `packages/shared/src/recorded-instant.ts` | `RecordedInstant` class. See decision 4. |
-| `claude-transcript-copy.ts` | `packages/shared/src/claude-transcript-copy.ts` | `ClaudeTranscriptCopy` class. See decision 4. |
-| `history/index.ts` | `history/index.ts`, `providers/index.ts` | The reader and its port stay in `./history`. The provider classes move to `./providers`. |
-| `history/local-llm-history.ts` | `history/local-llm-history.ts`, `history/history-provider.ts`, `history/history-window.ts`, `transcript/jsonl-records.ts`, `transcript/transcript-batches.ts`, `transcript/transcript-source.ts` | Split by the three jobs in finding 2. |
-| `history/captured-transcript-file.ts`, `history/transcript-directories.ts` | `transcript/` | Move. |
-| `history/local-llm-history-codex.ts`, `history/codex-rollout-copies.ts` | `providers/codex/codex-history.ts`, `codex-rollout-files.ts`, `codex-session-header.ts`, `codex-rollout-copies.ts` | Stop extending the base class. Split file finding from header reading. |
-| `history/local-llm-history-claude.ts` | `providers/claude/claude-history.ts`, `claude-transcript-files.ts`, `claude-session-identity.ts` | Same. |
-| `scan/codex-*.ts` (9 files) | `providers/codex/` | Move. `codex-usage-counts.ts` becomes `codex-token-counts.ts`. |
-| `scan/claude-*.ts` (5 files) | `providers/claude/` | Move. |
-| `scan/local-collector.ts`, `transcript-cursor.ts`, `decoded-chat.ts`, `scan-recovery.ts`, `scan-pending.ts`, `scan-rejected.ts`, `source-presence.ts`, `source-sightings.ts` | `scan/` | Stay. |
-| `scan/chat-parser-state.ts`, `scan/transcript-replay.ts` | `scan/parser-state.ts`, `scan/replay-occurrences.ts` | Rename for the class each file holds. |
-| `scan/scheduled-scanner.ts`, `scan/scan-activity.ts` | `watch/` | Move. |
-| `storage/collector-storage.ts` | `storage/collector-storage.ts` | Same path. Seven functions become `LegacyScannerSource` and `SourceScopes` in the same file. |
-| `storage/http-collector-storage.ts`, `collector-wire-contract.ts`, `collector-batch-wire.ts` | `storage/http/` | Move. `collector-batch-wire.ts` becomes `packed-batch.ts`. |
-| `storage/claude-*.ts` (7 files) | `storage/claude/` | Move. |
-| `storage/codex-*.ts` (3 files), `usage-windows.ts`, `observed-counter-spans.ts` | `storage/codex/` | Move. |
-| `storage/checkpoint-validation.ts`, `usage-validation.ts` | `storage/checkpoint-transition.ts`, `storage/batch-values.ts` | Rename for the class each file holds. |
-| The other six `storage/` files and `config/` | Same path | Stay. |
+| `history-reads-through-the-provider-port` | `history/` | Each other collector directory |
+| `transcript-layer-is-provider-neutral` | `transcript/` | `providers/`, `scan/`, `watch/`, `storage/`, `config/`, `commands/` |
+| `readers-and-scanner-read-files-through-transcript` | `history/`, `providers/`, `scan/`, `watch/` | `node:fs` |
+| `providers-do-not-know-each-other` | `providers/codex/`, `providers/claude/` | Each provider file outside its own directory: the other provider, `providers/index.ts` and `providers/local-providers.ts` |
+| `providers-receive-their-paths` | `providers/codex/`, `providers/claude/` | `config/` |
+| `scan-engine-is-provider-neutral` | `scan/`, `watch/` | `providers/` |
+| `outside-providers-use-the-provider-index` | Each source file outside `providers/` | `providers/codex/`, `providers/claude/` |
+| `scanner-uses-only-the-storage-port` | `scan/`, `watch/`, `providers/` | Each `storage/` file other than the port, also through another file |
+| `storage-is-self-contained` | `storage/` | Each other collector directory |
 
-Test files follow their subject, as the [test layout](../engineering-guidelines/coding-principles.md#test-locations)
-requires. For example `test/unit/scan/codex-chat.test.ts` moves to `test/unit/providers/codex/`. The
-feature files stay where they are. The package export names stay the same, so the API source keeps
-its import paths. One export is new: `@tracerelic/collector/providers`.
+The rules for the API, the HTTP client, the schedule and the storage port were there before the cleanup.
+They have the same meaning with the new paths. `schedule-runs-the-scan-through-its-handler` also forbids
+`providers/` and `transcript/`, because the readers went there from `history/`. A provider imports the
+storage port, because the scan port names its types. Thus `local-history-is-independent-of-storage` applies
+to `history/` and `transcript/` only.
 
-## Functions to classes
-
-**Rule.** No file in `apps/collector/src` declares a top-level function. Each helper goes to one of
-three places:
-
-1. **A private method of the class in the same file.** Use this when only that class calls the helper
-   and the file stays below 500 lines.
-2. **A small value or policy class with its own file.** Use this when several helpers share one subject.
-3. **One shared class.** Use this when the same rule exists in more than one file (finding 4).
-
-No step changes the logic of a helper. A step changes only where the helper lives and how a caller
-names it.
-
-| Now | Functions | Becomes |
-| --- | ---: | --- |
-| `recorded-timestamp.ts` | 3 | `RecordedInstant`: `parse`, `compareTo`, `isTimestamp` |
-| `claude-transcript-copy.ts` | 1 | `ClaudeTranscriptCopy`: `stem`, `fallbackFields` |
-| `cli.ts` | 2 | `CollectorCli`: `run`, private `configuredStorage` |
-| `commands/collector-command.ts` | 4 | `CommandArguments` |
-| `history/codex-rollout-copies.ts` | 1 | `CodexRolloutCopies` |
-| `scan/codex-usage-counts.ts` | 9 | `CodexTokenCounts`: `fromProvider`, `restore`, `sameTotals`, `minus`, `partition`, `mergeRepeated` |
-| `scan/codex-usage-report.ts` | 15 | `CodexUsageReport` and `CodexCallContext` |
-| `scan/codex-chat.ts` | 15 | `CodexVisibleText` (7 functions that decide which text is visible); the other 8 become private methods of `CodexChat` or calls to `JsonRecord` |
-| `scan/claude-chat.ts`, `scan/claude-usage.ts` | 8 | `ClaudeVisibleText`; one `ClaudeAssistantRecord` for the rule that both files repeat |
-| `scan/transcript-replay.ts` | 5 | `ReplayOccurrences`: `restore`, `plan`, `count`, `reconcile` |
-| `scan/chat-parser-state.ts` | 4 | `ParserState`: `record`, `string`, `digest`, `invalid` |
-| `scan/scan-recovery.ts` | 5 | `CheckpointProof`: `prefixes`, `verifiedBy`, `capture`, `same`; `readStorage` becomes a method of the storage reader that the scan classes share |
-| `storage/checkpoint-validation.ts` | 18 | `CheckpointTransition`: `new CheckpointTransition(batch, current).failure()` |
-| `storage/session-usage.ts` | 13 | `SessionUsage`, in the form of `SessionMessages` and `SessionMetadata` |
-| `storage/usage-validation.ts` | 14 | `BatchValues` |
-| `storage/usage-windows.ts` | 26 | `UsageIntervals` (new file for the interval rules); the others become private methods |
-| `storage/collector-batch-wire.ts` | 8 | `PackedBatch`: `pack`, `unpack`, `digest` |
-| `storage/observed-counter-spans.ts` | 11 | `ObservedCounterSpans` |
-| `storage/codex-source-identity.ts` | 5 | `CodexSourceIdentity` |
-| `storage/collector-storage.ts` | 7 | `LegacyScannerSource`, `SourceScopes` |
-| Plain-object, string and count checks (13 copies) | — | `JsonRecord` in `transcript/` for the readers and parsers; `BatchValues` for storage |
-| Stream key and session key text (4 copies) | — | `StreamKeys` in the port file |
-| The other private helpers | about 90 | Private methods of the class in the same file |
+**Structure rule.** [collector-structure.eslint.mjs](../../.habit-hooks/collector-structure.eslint.mjs)
+forbids a function that is not in a class body. One selector finds each such function: a declaration, a
+function expression or an arrow function, at the top level or in an object. `bun run
+check:collector-structure` checks it, and the [PR workflow](../../.github/workflows/collector.yml) runs
+that script. Habit Hooks applies the same rule through its own configuration. Until step 4 is on `main`,
+the rule applies to `history/` and `providers/`, and its `pending` list names the parser files of
+`providers/` that still have top-level functions. Step 4 applies the rule to all of `apps/collector/src`
+and to the two shared leaf modules, with no list.
 
 ## Constraint decisions
 
-| Constraint | Decision and check |
-| --- | --- |
-| Behavior | No change that a user or a caller of the CLI can see. The 47 scenarios and 687 tests are the specification. Two scenarios are new, because a reader that receives its providers is new for a TypeScript caller. They are in [history-providers.feature](../../apps/collector/test/interface/history/history-providers.feature). Check with `bun run check:collector-history`, `check:collector-scan`, `check:collector-storage` and `bun run test`. |
-| Observability | Out of scope. No signal is added or changed. Each diagnostic keeps `cli.ts` as its calling file, because every logger call stays in `cli.ts`. The CLI tests match that prefix. |
-| Architecture | Add the rules below to [.dependency-cruiser.collector.json](../../.dependency-cruiser.collector.json). Add one ESLint rule that forbids a top-level function in `apps/collector/src`. Check with `bun run check:collector-deps` and a new `bun run check:collector-structure`. Add the new check to the [PR workflow](../../.github/workflows/collector.yml). |
-| Interface | [history.tsp](local-collector/history.tsp): `LocalLLMHistory` keeps its two operations, and `HistoryProvider` is new. [scan.tsp](local-collector/scan.tsp): `CodexHistory` and `ClaudeHistory` replace the two interfaces that extend `LocalLLMHistory`. `ScanProvider` is new. `TranscriptSourceInfo` loses its provider fields, and each provider declares its own source model. The storage and HTTP contracts do not change. Check with `bun run schema:collector-history` and `schema:collector-scan`. |
+These decisions apply to all the steps. Step 4 and step 5 add to them in their own sections.
 
-The new scenarios:
-
-```gherkin
-  Scenario: One reader returns Codex and Claude Code records for the same day
-    Given Codex chat "c1" records "Plan search" and Claude Code chat "h1" records "Use an index" on February 1
-    When I read February 1 UTC with one reader for both providers
-    Then I get "Plan search" for "codex/c1" and then "Use an index" for "claude/h1"
-
-  Scenario: A reader for Codex alone does not return Claude Code records
-    Given Codex chat "c1" records "Plan search" and Claude Code chat "h1" records "Use an index" on February 1
-    When I read February 1 UTC with a reader for Codex alone
-    Then I get only "Plan search" for "codex/c1"
-```
-
-Dependency rules:
-
-| Rule | Forbidden import | On from |
+| Constraint | Decision | Check |
 | --- | --- | --- |
-| `history-reads-through-the-provider-port` | `history/` to `providers/`, `transcript/`, `scan/`, `watch/`, `storage/`, `config/`, `commands/` | Step 1 |
-| `transcript-layer-is-provider-neutral` | `transcript/` to `providers/`, `scan/`, `watch/`, `storage/`, `config/`, `commands/` | Step 1 |
-| `only-the-transcript-layer-reads-files` | `history/`, `providers/`, `scan/` to `node:fs`. Replaces `scanner-reads-files-through-history`. Step 2 adds `watch/`. | Step 1 |
-| `providers-do-not-know-each-other` | `providers/codex/` to `providers/claude/`, and the reverse | Step 1 |
-| `providers-receive-their-paths` | `providers/codex/` and `providers/claude/` to `config/`. `history-receives-global-config` continues to keep the configuration loader out of `history/`, `providers/` and `transcript/`. | Step 1 |
-| `scan-engine-is-provider-neutral` | `scan/`, `watch/` to `providers/` | Step 3 |
-| `only-local-providers-names-both-providers` | Any file outside `providers/` to `providers/codex/` or `providers/claude/` | Step 3 |
-| `storage-is-self-contained` | `storage/` to any other collector directory | Step 2 |
-| Existing rules for the HTTP client, the schedule and the storage port | Same meaning, new paths | Step 2 |
+| Behavior | No step changes what a user of the CLI sees. A TypeScript caller can do two new things, and each one has scenarios: a reader for the providers that it receives ([history-providers.feature](../../apps/collector/test/interface/history/history-providers.feature), step 1) and a scanner for the providers that it receives ([scan-providers.feature](../../apps/collector/test/acceptance/scan/scan-providers.feature), step 3). | `bun run test`, `check:collector-history`, `check:collector-scan`, `check:collector-storage`, `check:collector-api`, `check:collector-postgres` |
+| Observability | Out of scope. No signal is added or changed. Each logger call stays in `cli.ts`, because the log prefix shows the file and the line of the call. | The CLI tests match the file name in that prefix |
+| Architecture | The rules in [Rules that keep the structure](#rules-that-keep-the-structure). | `check:collector-deps`, `check:collector-structure` |
+| Interface | [history.tsp](local-collector/history.tsp) has `HistoryWindow`, `HistoryProvider` and the reader that receives its providers. [scan.tsp](local-collector/scan.tsp) has the scan port, the source type of each provider and `LocalCollectorOptions`. An interface of a contract gives each member of a TypeScript object as one operation. The storage and HTTP contracts do not change. | `schema:collector-history`, `schema:collector-scan`, `schema:collector-storage`. The compiler does not compare an interface of a contract with the TypeScript port, so a change to a port includes its contract. |
 
-`scanner-uses-only-the-storage-port` is the existing rule for the storage port. Before step 2 it starts
-from `scan/`. Step 2 moves some of these files to `watch/` and `providers/`, so the rule then starts
-from `scan/`, `watch/` and `providers/`.
+## How a step shows that behavior did not change
 
-The structure rule is in [collector-structure.eslint.mjs](../../.habit-hooks/collector-structure.eslint.mjs).
-Its `cleaned` list names the directories that have no top-level function. Habit Hooks applies the same
-rule through its own configuration.
+| Check | What it does |
+| --- | --- |
+| Golden tests | Seven `*-parser-*golden.test.ts` files in [test/unit/providers](../../apps/collector/test/unit/providers) pin the saved state, the message IDs and the usage IDs of each parser as exact text. They passed on `main` before the first production change. No step changed a golden text. |
+| Output comparison | Run `scan --once` and `history` on a read-only copy of local transcripts, before the change and after it. The standard output, the standard error and the exit code must be the same bytes. Run the commands two times before the change, to confirm that the output is stable. |
+| Trace comparison | The CLI output does not show the sequence of the work. Record each `open`, `stat` and `readdir` of a transcript path, and each storage call with a digest of its arguments and of its result. The traces must be identical. |
+| Rule probe | Add one forbidden line for each changed rule. Each line must make its check fail. |
+| Independent review | A reviewer that did not write the change compares the old statements with the new statements. |
 
-Step 2 moves 14 parser files into `providers/` before their cleanup. Ten of them have top-level
-functions. A second list, `pending`, names these ten files, and the rule does not apply to them. The
-rule continues to apply to `history/`, to the nine files that step 1 made in `providers/`, to the four
-moved files that have no top-level function and to each new file in `providers/`. Step 4a removes the
-six Codex names from `pending`. Step 4b removes the four Claude Code names. The list is then empty, and
-the rule applies to all of `providers/` again.
+| Change | Output comparison | Trace comparison |
+| --- | --- | --- |
+| Step 1 | 5 commands, identical | Not run |
+| Step 2 | 7 commands, identical. A script also showed that only import lines changed. | Not run |
+| Step 3, after each code commit | 13 commands, identical | 12 scenarios, identical |
+| Steps 1 to 3 together: `main` and the commit of step 3 | 13 commands, identical | 12 scenarios, identical |
+| Step 4, after each code commit | 13 commands, identical | 12 scenarios, identical |
+
+The 13 commands are: a full scan with an installation ID and one without; a full history window and a
+window with fractional seconds; a scan with `--session` and one with `--project`; a Codex fork child
+alone, with its parent, and with a parent that is not in the sample; a scan with no Claude Code root.
+Ten run the source on Bun, and three run the compiled files on Node.js.
+
+The 12 scenarios are: two scans with root-based stream IDs, and two with an installation ID; a fork
+child alone, then with its parent; a project selection, then a session selection; checkpoints of an
+earlier collector that have no `codexFork` and no `claudeCallOrigins`; checkpoints that have no evidence
+version; a scanner for Codex alone, then for both providers; earlier copies of Claude Code transcripts
+when the current file is absent; a Codex fork child that gets a new inode during the scan; one collector
+that scans three times, and one that scans while files go away and return.
+
+The sample is private history. It is not in the repository. Nothing from it goes into a commit, a PR or
+a request to a service. A report gives only "identical" or "different" and the number of commands or
+scenarios.
 
 ## Steps
 
-Each step is one draft PR and leaves all checks green. Each step ends with the comparison in step 0.
+Each step is one PR and leaves all checks green. A step records its constraints in its first commit,
+before the code changes.
 
-### Step 0. Safety net and constraints
+### Steps 0 and 1. Safety net, and the history reader receives its providers
 
-No production code changes.
+Done in PR 28.
 
-1. **Pin the parser output.** Tests read `parserState` with `deepEqual`, which ignores key order. The
-   scanner compares `parserState` as a string
-   ([scan-recovery.ts:44](../../apps/collector/src/scan/scan-recovery.ts#L44)). Message IDs and call IDs
-   are hashes of JSON text. Add one unit test for each provider parser. It feeds fixed in-memory records
-   and expects the exact `snapshot()` text, message IDs and usage IDs.
-2. **Compare with `main`.** Live sessions change the local history, so copy a sample of it to a scratch
-   directory and make the copy read-only. Copy only the transcript directories (`sessions/`,
-   `archived_sessions/` and `projects/`), not the other files of `~/.codex` and `~/.claude`. Run
-   `collector scan --once` and `collector history` on that copy from `main` and from the branch. Include
-   one run with `--session`, one run with `--project` and one window with fractional seconds. The
-   standard output must be identical byte for byte. Run the commands two times on `main` first, to
-   confirm that the output is stable. Nothing leaves the computer.
-3. **Write the constraints for the next step.** Add the scenarios, the TypeSpec changes and the
-   dependency rules that the step makes true. The ESLint rule lists the cleaned directories. Each later
-   step adds the directories that it has cleaned.
+- **Step 0.** The golden tests. A swap of two keys in one `snapshot()` fails 16 of them and no other
+  test.
+- **Step 1.** `LocalLLMHistory` was an abstract class with one subclass for each provider. It is now a
+  concrete class that receives a list of `HistoryProvider`. `CodexHistory` and `ClaudeHistory` implement
+  the port and receive a root path. The three jobs of the old base class are separate classes:
+  `HistoryWindow`, `SourceDiscovery`, and `JsonlRecords` with `TranscriptBatches`. Four checks for an
+  absent `claudePath` went away, because a Claude Code provider exists only when the path is configured.
 
-The sample for steps 0 and 1 had plain and compressed Codex rollouts, archived rollouts, and Claude Code
-transcripts with subagents. Each message in the sample had a native ID. Only the parser tests of item 1
-cover the fallback text IDs.
+### Step 2. One directory for each provider and for each layer
 
-### Step 1. The history reader receives its providers
-
-1. Red: the new scenarios, and a unit test of `LocalLLMHistory` with two mock providers.
-2. Split `local-llm-history.ts` by its three jobs. Create `HistoryWindow`, `JsonlRecords` and
-   `TranscriptBatches`. Move `captured-transcript-file.ts` and `transcript-directories.ts` to
-   `transcript/`.
-3. Create `CodexHistory` and `ClaudeHistory`. They implement `HistoryProvider`, receive a root path and
-   use the transcript classes by composition. `providers/` starts with no top-level function, so
-   `codexRolloutName` and `compatibleCodexCopies` become class members in this step.
-4. Make `LocalLLMHistory` a concrete class. `CollectorCommand` builds it from `LocalProviders`. The
-   scanner constructs the two providers itself until step 3.
-5. Update 57 constructor calls in the tests and the README example.
-
-Size: medium. About 1,000 lines of `history/` change shape.
-
-### Step 2. Group the provider code and name the layers
-
-Moves and import edits only. Move the parsers to `providers/`, the schedule to `watch/` and the
-storage files to their subdirectories. Move the two shared leaf modules (decision 4). Move each test
-file with its subject. Update the package exports,
-[component.yaml](../../apps/collector/component.yaml), the Knip entries and the dependency rule paths.
-
-A test file moves when the class or module that it tests has moved. A test of `LocalCollector`,
-`CollectorCommand`, the CLI or `InMemoryCollectorStorage` stays, because its subject stays. A test file
-keeps its name. The step definitions stay with their feature files.
-
-Size: small risk, large diff. About 35 source files move or change name.
+Done in PR 29. Moves and import edits only: 37 source files and 33 test files have a new path or a new
+name. The parsers went to `providers/`, the schedule to `watch/`, and the storage files to `http/`,
+`claude/` and `codex/`. The two shared leaf modules went to `packages/shared`, so that `storage/` imports
+no other collector directory. A test file moved when its subject moved.
 
 ### Step 3. The scanner receives its providers
 
-1. Write `ScanProvider` and the source model of each provider in [scan.tsp](local-collector/scan.tsp)
-   before the code changes. Then add `ScanProvider`. Move each row of the table in finding 3 into
-   `CodexHistory`, `ClaudeHistory` or one of their collaborators.
-2. Remove the provider fields from the generic source type. Each provider declares its own source type.
-3. `LocalCollector` takes one options object. Update 29 constructor calls in the tests.
-4. Turn on `scan-engine-is-provider-neutral`.
+Done in PR 30. The table in [The scanner](#the-scanner) gives the port member for each provider
+decision. No row stayed in the engine. `scan/` and `watch/` import nothing from `providers/`, and `scan/`
+does not test the name of a harness.
 
-Size: large. This step has the most risk. It changes `local-collector.ts`, `source-presence.ts` and
-`source-sightings.ts`, about 700 lines. The 31 scan scenarios, the 34 test files in
-`test/integration/scan` and the two in `test/integration/watch` cover it.
+Two differences from the code before step 3 are known. No input of a real scan reaches them.
+
+- `CodexScan.parserFor` throws an `Error` when no discovery ran before it. The old closure threw a
+  `TypeError` there. The scanner selects a parser only for a source that a discovery gave.
+- A parser state that no collector can write can name a line after its checkpoint as the first copy of
+  a later message. If that line is a Codex record of type `user`, the old scanner added a prefix digest
+  for that line to `messageOrigins`, and the new scanner does not. A collector writes only positions at
+  or before its checkpoint, and it names only an `event_msg` record as such a first copy.
+
+### Changes of steps 1 to 3 for a TypeScript caller
+
+- **The reader.** `new LocalLLMHistoryCodex(config)` is now
+  `new LocalLLMHistory([new CodexHistory(config.codexPath)])`, or
+  `new LocalLLMHistory(LocalProviders.fromConfig(config))` for the configured providers.
+- **The scanner.** `new LocalCollector(config, storage, ...)` is now
+  `new LocalCollector({ providers, storage, ... })`. A scanner for one provider is possible.
+- **Package exports.** `./providers` and `./transcript` are new. The provider classes moved from
+  `./history` to `./providers`. `TranscriptChangedError` and the generic transcript types moved from
+  `./history` to `./transcript`. `./scan` also exports the port types. `ClaudeSubagent` is an export of
+  `./providers`. `codexRolloutName` has no public replacement.
+- **`@tracerelic/shared`** exports six more names: `isRecordedTimestamp`, `isHistoryTimestamp`,
+  `recordedInstant`, `compareRecordedInstants`, `claudeCopyFallbackFields` and `claudeCopyStem`.
+- **Sources.** The source types are `CodexRolloutSource` and `ClaudeTranscriptSource`. A discovered Codex
+  source has no `previousCopy`. `readBatches` gives a `recordPrefixDigest` only to the conversation
+  records of its provider. Before, it gave one to a record of each of the four types for each provider.
+- **Parser formats.** `ParserFormat` has `checkpointFields` in place of `codexFork` and
+  `claudeCallOrigins`.
 
 ### Step 4. Functions to classes
 
-Four bounded tasks. Each worker owns a set of files and each caller of what it renames.
+The code is in the draft PR 31. At the start of this step, 260 top-level functions remain: 256 in
+`apps/collector/src` and 4 in the two shared leaf modules. Each function becomes a member of the class
+that owns its rule. No logic changes. The object `systemClock` in `watch/scheduled-scanner.ts` holds two
+more functions that are not in a class. They become the class `SystemClock`.
 
-| Task | Files | Functions | Extra checks |
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | No change. No scenario is new, because a caller can do nothing new. The scenarios, the tests and the golden texts are the specification. After each code commit, run the output comparison and the trace comparison. |
+| Observability | Out of scope. Each logger call stays in `cli.ts`, on the same line as before. One difference is known, and the owner accepted it: in the compiled `dist/cli.js`, each call is one line lower. |
+| Architecture | The structure rule applies to all of `apps/collector/src` and to the two shared leaf modules. During the step, a `pending` list names each file that is not clean, and each task removes its names. At the end the list is gone. The dependency rules do not change. `storage/` imports no other collector directory, so `BatchValues` stays in `storage/` and `JsonRecord` stays in `transcript/`. |
+| Interface | No TypeSpec change. No `.tsp` file declares one of the 260 functions as an operation. The TypeScript names that a caller imports change. |
+
+Many functions have a caller in a different directory. Thus the step starts with one task for the
+shared rules, the border task. After it, no remaining function has a caller in another task area, and
+the other four tasks can run at the same time in separate checkouts.
+
+| Task | Files | Functions |
+| --- | --- | ---: |
+| Border | The shared classes, each function that has a caller in another task area, and the API files that import a changed name | 43 |
+| 4a | `providers/codex/` | 46 |
+| 4b | `providers/claude/` | 12 |
+| 4c | `cli.ts`, `commands/`, `scan/`, `transcript/`, `watch/` | 26 |
+| 4d | `storage/` | 133 |
+
+The API replays each stored write through `InMemoryCollectorStorage`, so the border task and task 4d
+must pass `check:collector-api` and `check:collector-postgres`.
+
+The rules for each conversion:
+
+- **No logic change.** The statements, the conditions and their sequence stay. A conversion changes only
+  where a helper is and how a caller names it.
+- **Stored and hashed data keeps its bytes.** A parser state, an ID, a batch, a checkpoint and a wire
+  record stay plain objects with the same key order. No stored record becomes an instance of a class.
+- **Two copies of a rule merge only if they give the same result for each input.** If they differ in
+  one case, both stay.
+- **A helper that needs no instance is a static method.** A caller names it through its class, not
+  through `this`. Thus a static method that goes to `map`, `filter` or `sort` as a value needs no
+  receiver.
+- **A type predicate stays a type predicate**, and a function that returns `never` keeps that type.
+- **A test changes only the name through which it gets a helper.** No assertion goes away, and no golden
+  text changes.
+
+The class of each function:
+
+| Task | Now | Functions | Becomes |
 | --- | --- | ---: | --- |
-| 4a | `providers/codex/` | 51 | `bun run check:collector-structure`, after the Codex names leave `pending` |
-| 4b | `providers/claude/` | 17 | `bun run check:collector-structure`, after the Claude Code names leave `pending` |
-| 4c | `scan/`, `watch/`, `transcript/`, `commands/`, `cli.ts`, shared classes | 44 | |
-| 4d | `storage/`, and three API files that import the renamed helpers | 150 | `bun run check:collector-api`, `bun run check:collector-postgres` |
+| Border | `packages/shared/src/recorded-instant.ts` | 3 | `RecordedInstant`: `isTimestamp`, `parse`, `compare` |
+| Border | `packages/shared/src/claude-transcript-copy.ts` | 1 | `ClaudeTranscriptCopy`: `stem`, and the list `fallbackFields` |
+| Border | The plain-object, string and count checks of the parsers (9 copies) | 9 | `JsonRecord` in `transcript/json-record.ts`: `is`, `object`, `identifier`, `isCount` |
+| Border | `scan/parser-state.ts` | 4 | `ParserState`: `digest`, `record`, `string`, `invalid` |
+| Border | `scan/scan-recovery.ts` | 5 | `CheckpointProof` in `scan/checkpoint-proof.ts`: `prefixes`, `verifiedBy`, `capture`, `same`. `readStorage` becomes `ScanRecovery.read`. |
+| Border | The stream key and session key text (4 copies in `scan/`, `watch/` and `storage/`) | 4 | `StreamKeys` in the port file: `session`, `stream`, `sourceId` |
+| Border | `transcript/transcript-directories.ts` | 2 | `TranscriptDirectories`: `listDirectory`, and the private `missing` |
+| Border | `storage/collector-storage.ts` | 7 | `LegacyScannerSource`: `location`, `stream`, `line`, `needsHistoryVerification`, `historyDiagnostic`, and the private `position`. `SourceScopes.matches`. |
+| Border | `storage/http/packed-batch.ts` | 8 | `PackedBatches`: `pack`, `unpack`, `digest`, `stateBytes`, `fitsWireRecords`, `decodeBase64`, and two private methods |
+| 4a | `codex-chat.ts` | 13 | `CodexVisibleText` in `codex-visible-text.ts`: `role`, `completedRole`, `completedBlocks`, `blocks`, and three private methods. The other six become private static methods of `CodexChat`. |
+| 4a | `codex-token-counts.ts` | 7 | `CodexTokenCounts`: `fromProvider`, `restore`, `sameTotals`, `mergeRepeated`, `minus`, `partition`, and the private `counts` |
+| 4a | `codex-usage-report.ts` | 14 | `CodexCallContext`: `after`, and the private `advance`. `CodexUsageReport`: `read`, `initialHistory`, `recorded`, and nine private methods. |
+| 4a | `codex-usage.ts`, `codex-fork-evidence.ts`, `codex-fork-sources.ts` | 12 | Static methods of `CodexUsage`, `ForkCapture`, `CodexForkEvidence` and `CodexForkSources` |
+| 4b | `claude-chat.ts` | 2 | `ClaudeVisibleText` in `claude-visible-text.ts`: `blocks`, and the private `injected` |
+| 4b | `claude-usage.ts` | 4 | `ClaudeAssistantRecord` in `claude-assistant-record.ts`: `message`. The other three become private static methods of `ClaudeUsage`. |
+| 4b | `claude-usage-counts.ts`, `claude-source-copy.ts` | 6 | Private static methods of `ClaudeUsageCounts`. Members of `ClaudeEarlierCopies`. |
+| 4c | `cli.ts` | 2 | `CollectorCli`: `run`, and the private `configuredStorage` |
+| 4c | `commands/collector-command.ts` | 4 | `CommandArguments` in `commands/command-arguments.ts`: `instant`, `projectPath`, `watchInterval`. `untilShutdown` becomes a private static method of `CollectorCommand`. |
+| 4c | `scan/replay-occurrences.ts` | 5 | `ReplayOccurrences`: `restore`, `plan`, `count`, `reconcile`, and the private `fallbackId` |
+| 4c | The other files of `scan/`, `transcript/` and `watch/` | 15 | Private static methods of the class in the same file. `ScanRejectedError.batch` and `ScheduledScanner.checkedIntervalMs` are public. |
+| 4d | `batch-values.ts` | 14 | `BatchValues` |
+| 4d | `checkpoint-transition.ts` | 18 | `CheckpointTransition`: `new CheckpointTransition(batch, current).failure()` |
+| 4d | `session-usage.ts` | 13 | `SessionUsage`: `apply`, and twelve private static methods |
+| 4d | `codex/usage-windows.ts` | 26 | `UsageIntervals` in `codex/usage-intervals.ts` for the fifteen interval rules. `UsageWindows.isWindow`. The other ten become private static methods of `UsageWindows`. |
+| 4d | `codex/observed-counter-spans.ts`, `codex/codex-source-identity.ts` | 16 | `ObservedCounterSpans`: `epochsWithSharedObservations`, `shared`. `CodexSourceIdentity.correction`. The others are private. |
+| 4d | The other files of `storage/` | 46 | Private static methods of the class in the same file. `SessionMetadata.isValid` and `CodexCallAliases.valid` are public. |
 
-These counts are the 262 functions that remain after step 1.
+Four names need a reason:
 
-Tasks 4a, 4b and 4d touch separate files and can run at the same time. Task 4c follows 4a and 4b,
-because it renames helpers that they call. Task 4d is the largest. The API replays each stored write
-through `InMemoryCollectorStorage`
-([postgres-collector-storage.ts:1](../../apps/api/src/storage/postgres-collector-storage.ts#L1)), so
-the PostgreSQL suites must pass.
+- **`PackedBatches`, not `PackedBatch`.** `PackedBatch` is the wire record of the contract, and it keeps
+  its name. A class and an interface with one name are an unsafe declaration merge.
+- **The type `ReplayBounds`.** The class has the name `ReplayOccurrences`. The record that it reads and
+  writes had the same name, and that type is now `ReplayBounds`. The parser state keeps the key
+  `replayOccurrences`.
+- **`RecordedInstant.compare` is static.** A parsed instant stays a plain object, as the history window
+  and the session metadata hold it.
+- **`ClaudeAssistantRecord` has the rule of `claude-usage.ts` only.** `ClaudeChat.read` applies its rule
+  to user records too, so the two rules do not give the same result for each input.
 
 ### Step 5. Finish
 
+Not approved. When the owner approves it, record its four constraint decisions here before the code
+changes.
+
 1. Tests import public classes through the package exports and internal classes through `#src/…`.
-   Remove the relative `../src` imports. Fix the Knip resolution of `#src/…`.
-2. Remove the four test-only methods from production code (decision 2).
-3. Apply the ESLint rule to all of `apps/collector/src`.
-4. Update the README, the specification links and both component manifests.
+   Remove the relative `../src` imports. Fix the Knip resolution of `#src/…`. Decide if the port types of
+   the earlier copies are exports of `./scan`: `EarlierCopies`, `EarlierCopy`, `SourceCopy` and
+   `CopyAssessment`.
+2. Remove what only a test reads from production code and from [scan.tsp](local-collector/scan.tsp), and
+   move it to test fixtures: `readRollouts`, `readTranscripts`, `ClaudeChat.decode`, `CodexChat.decode`
+   and the source field `currentFilePath`.
+3. Give new names to the four test files that do not have the name of their subject:
+   `local-llm-history-codex.test.ts`, `local-llm-history-claude.test.ts`, `transcript-replay.test.ts` and
+   `test/interface/transcript/source-presence.test.ts`.
+4. Add a golden test that reads the main Codex fixture with the lookahead, as a real scan does. Only the
+   small lookahead fixture has such a test now.
+5. Forbid `this` in a static method with one lint selector. Three static methods that are older than
+   step 4 use `this`: `CodexSessionParser.forFork`, `ClaudeReportEvidence.select` and
+   `ClaudeUsageLedger.merge`.
+
+Two decisions are open for the owner. The contracts state both points as preconditions now.
+
+- Must the constructor of a provider reject a root that is not an absolute path? Before step 1, a reader
+  received a `GlobalConfig`, which rejects such a path.
+- Must the constructor of `LocalCollector` reject two providers that have one harness?
+
+## Points that later work must know
+
+- **A restored parser can write different text.** A parser that resumes from a checkpoint does not
+  always write the same text as one continuous scan. The golden tests pin five cases as they are. Four
+  are a different key order: three have a test with the name "known restore difference, kept as it is",
+  and one is in the main Codex golden. The fifth is also in the main Codex golden. Its one scan reads
+  the batches without the lookahead of a real scan, so only its restored parser gives one message a
+  native ID. A change to this behavior is a separate decision.
+- **Two block builders, two key orders.** Paginated Codex items build a text block as
+  `{ blockIndex, text }`. Legacy Codex records build it as `{ text, blockIndex }`. Claude Code builds
+  `{ blockIndex, text }`. The fallback message ID hashes the block, so the builders must stay apart.
+- **The logger calls of `cli.ts`.** The log prefix shows the file and the line of a logger call. A change
+  that moves a call changes the prefix. The CLI tests accept each line number, so only the output
+  comparison shows a call that moved. Step 4 keeps the four calls on their lines in `cli.ts`. In the
+  compiled `dist/cli.js` each call is one line lower after step 4, and the owner accepted that.
+- **Bun and Node.js give a different order.** For the same sample at the same commit, the Bun run of the
+  source and the Node.js run of the compiled files do not give the same bytes. The content is the same,
+  but the sequence of the sessions and of some messages is different. Compare one runtime with itself.
+- **Build after a change to `packages/shared`.** Bun and Node.js load `@tracerelic/shared` from
+  `packages/shared/dist`. Run `bun run build` before `bun run collector`.
+- **The function members of the port use method syntax.** `ScanProvider`, `ProviderScan`, `EarlierCopies`
+  and `ParserFormat` declare each function as a method, not as a property that holds a function. Thus a
+  provider that has its own entry type and source type fits the default type of the port. The compiler
+  does not check three things that the code does by construction: the scanner gives a pass only the
+  sources that this pass discovered, the scanner keeps each pass with its own presence scan, and `locate`
+  gives a location whose root is the root of its provider.
+- **Two preconditions that no code checks.** A provider receives its root as an absolute path, as
+  `GlobalConfig` gives it. A scanner receives at most one provider for each harness. The contracts state
+  both.
+- **Contract fields in `scan/` are not provider decisions.** `scan/` reads `codexFork`,
+  `claudeCallOrigins`, `claudeUsageReports`, `codexCallClaims`, `codexCallAliases` and `currentFileCwd`,
+  because they are fields of `Checkpoint`, `Batch` and `SourceLocation` in the storage contract.
+- **`providers/` imports `scan/`.** The provider files import the port and the engine classes that a
+  parser needs, such as `ParserState` and `DecodedChat`. No rule forbids this direction.
+- **Methods that only a pass and the tests call.** `discoverSources`, `confirmedAbsent`, `identitiesAt`
+  and `recoveryCandidates` are public on `CodexHistory` and `ClaudeHistory`, and they are not in the
+  contract. Each pass class receives its history class as a `Pick` of the methods that it calls.
+- **Knip does not see an import through `#src/…`.** The package export `./scan` exports the port types,
+  and the mock provider and the tests import them through the package.
+
+Step 4 adds these points:
+
+- **A static method that is used as a value must not use `this`.** A caller names a static helper
+  through its class, also inside the class.
+- **Pairs that look alike and stay two rules.** `StreamKeys.stream` and `StreamKeys.sourceId` give
+  different text for a source that has no installation ID. `ForkCapture.later` and the comparison in
+  `SessionMetadata.selectBranch` are not `RecordedInstant.compare`. `ClaudeUsage.text` ignores a string
+  of spaces, and `JsonRecord.identifier` accepts it. The list of token breakdown fields is in
+  `codex-token-counts.ts` and in `usage-intervals.ts`, because a provider file and a storage file cannot
+  import each other.
 
 ## Risks
 
 | Risk | Control |
 | --- | --- |
-| A cleanup changes a stored ID. The two parsers build a text block with different key orders (`claude-chat.ts:80`, `codex-chat.ts:438`). The block goes into the hash of a fallback message ID. If one shared type changes a key order, an anonymous message gets a different ID. A replay or a second copy of the chat then stores that message two times. | Step 0, items 1 and 2. Keep `CodexVisibleText` and `ClaudeVisibleText` separate. |
-| A cleanup changes the key order of `snapshot()`. A checkpoint from before the change then looks different, and a lost reply cannot be confirmed. | Step 0, item 1. |
-| A helper moves back into a class and the file passes 500 lines. | Finding 6. Run `bun run habit-hooks --branch main` in each step. |
-| A storage change breaks the API. | Step 4d runs the API and PostgreSQL suites. The storage contract files do not change. |
-| A logger call moves out of `cli.ts` and the log prefix changes. | All logger calls stay in `cli.ts`. The CLI tests match `cli.ts` in the prefix. |
-| Two workers edit the same file. | The task table in step 4 gives each worker separate files. |
+| A change gives a stored ID or a saved parser state different bytes. A replay then stores a message two times, or a lost reply cannot be confirmed. | The golden tests. Stored and hashed data stays plain objects with the same key order. |
+| A change to the engine or to storage changes the sequence of the work, and the CLI output does not show it. | The trace comparison. |
+| A storage change breaks the API. | `check:collector-api` and `check:collector-postgres`. The storage contract files do not change. |
+| A helper moves into a class and the file passes 500 lines. | Give each group of helpers its own small class. Run `bun run habit-hooks --branch main`. |
+| A logger call moves and the log prefix changes. | Each logger call stays in `cli.ts`, on its line. |
 
 ## Left alone on purpose
 
 - The parser logic, the stored contract, the checkpoint format and the HTTP wire format.
 - The names `LocalLLMHistory`, `LocalCollector` and `InMemoryCollectorStorage`.
-- The Codex and Claude parsers stay separate. They share little. A shared base class would bring back
-  the inheritance problem of finding 1.
+- The Codex and Claude Code parsers stay separate. They share little. A shared base class would bring
+  back the inheritance problem of finding 1.
 - Three Codex classes read the same turn events for three different purposes. They stay separate.
 
-## Decisions for the owner
+## Decisions
 
-1. **Provider class names.** The plan uses `CodexHistory` and `ClaudeHistory`. The request said
-   "Anthropic". The configuration key (`claudePath`), the stored `harness` value and the specification
-   all say `claude`. Recommendation: keep `Claude`.
-2. **Test-only methods.** `readRollouts` and `readTranscripts` are in [scan.tsp](local-collector/scan.tsp),
-   but only tests call them. `ClaudeChat.decode` and `CodexChat.decode` are the same. Recommendation:
-   remove them from the contract and move them to test fixtures.
-3. **Scope of `storage/`.** It holds 150 of the 265 functions and the API runs it. Recommendation:
-   include it as step 4d. The alternative is to stop after step 4c and plan storage separately.
-4. **Two shared leaf modules.** History, scan and storage all need `RecordedInstant` and
-   `ClaudeTranscriptCopy`. Recommendation: move both to `packages/shared`, beside `recorded-path.ts`,
-   and move `ajv` and `ajv-formats` to its dependencies. `storage/` is then self-contained. The
-   alternative keeps both in `storage/` and lets `history/` import one storage file.
-5. **Enforcement.** Recommendation: add `check:collector-structure` to the PR workflow, so that a new
-   top-level function fails the check.
+The owner accepted these five decisions.
+
+1. **Provider class names.** `CodexHistory` and `ClaudeHistory`. The configuration key (`claudePath`),
+   the stored `harness` value and the specification all say `claude`.
+2. **Test-only methods.** `readRollouts`, `readTranscripts`, `ClaudeChat.decode` and `CodexChat.decode`
+   have test callers only. Step 5 removes them from the contract and moves them to test fixtures.
+3. **Scope of `storage/`.** Step 4 includes `storage/`, which had 150 of the 265 functions and which the
+   API runs.
+4. **Two shared leaf modules.** `recorded-instant.ts` and `claude-transcript-copy.ts` are in
+   `packages/shared`, with `ajv` and `ajv-formats` as its dependencies. `storage/` is then self-contained.
+5. **Enforcement.** The PR workflow runs `check:collector-structure`, so that a new function outside a
+   class fails the check.
+
+## The review that started the cleanup
+
+The review read the code at commit `21ab8a9`: 65 files, 9,188 lines, 57 classes and 265 top-level
+functions in `apps/collector/src`. Of the 265 functions, 68 were exports, and thirteen files had
+functions and no class. The [first version of this plan](https://github.com/tomer-mayara/TraceRelic/blob/f88a0d175fca0a1b9a4586e17f210a6000c8f948/docs/specs/local-collector-structure-cleanup.md#findings)
+has the detail of each finding. Its line numbers refer to commit `21ab8a9`.
+
+| # | Finding | Fixed in |
+| --- | --- | --- |
+| 1 | The date reader was an abstract class, and inheritance hid it. Nothing was injected. No class read both providers. The command and the scanner each built the two readers. | Steps 1 and 3 |
+| 2 | The base class did three jobs: the date window, the selection of scan sources, and the JSONL reading with batches and digests. | Step 1 |
+| 3 | Provider code was in four places, and the scan engine made twelve provider decisions itself. A third provider would need an edit in each place. | Steps 2 and 3 |
+| 4 | Functions outnumbered classes by more than four to one. The same small rule had up to six copies. | Step 4 |
+| 5 | Directories mixed concerns. `scan/` held parsers, the engine and the schedule. `storage/` held the port, the HTTP client, provider accounting and the session model. Two files sat loose in `src/`. | Step 2 |
+| 6 | The limit of 500 lines for a file is the likely reason that helpers left a large class for a file of functions. | Step 4 gives each group of helpers its own small class |
+| 7 | Tests reach the source in three ways: package exports, `#src/…` and relative paths. Four production methods have test callers only. | Step 5 |

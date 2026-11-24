@@ -8,6 +8,24 @@ import { ClaudeHistory, LocalProviders } from "@tracerelic/collector/providers";
 import type { ScanSelection } from "@tracerelic/collector/transcript";
 import { ClaudeProjectFixture as Claude } from "../../../fixtures/claude-project-fixture.ts";
 
+test("a discovered Claude Code source has previousCopy, and only its user and assistant records get the digest through their own line", async t => {
+  const fixture = await Claude.create();
+  t.after(() => fixture.close());
+  const at = "2026-02-01T12:00:00Z";
+  const rows = [Claude.user("native", at, "Plan"), Claude.assistant("native", at, "Answer"), { sessionId: "native", type: "progress" },
+    { sessionId: "native", type: "response_item" }, { sessionId: "native", type: "event_msg" }];
+  const sourceFile = await fixture.write("project", "chat", rows);
+  const bytes = await readFile(sourceFile);
+  const [source] = await Array.fromAsync(new ClaudeHistory(fixture.home).discoverSources());
+  assert.equal(source.previousCopy, false);
+  const entries = (await Array.fromAsync(source.readBatches({ offset: 0, lineNumber: 0 }))).flatMap(batch => batch.entries);
+  const digest = (offset: number) => createHash("sha256").update(bytes.subarray(0, offset)).digest("hex");
+  assert.deepEqual(entries.map(entry => [entry.record.type, entry.recordPrefixDigest]), [
+    ["user", digest(entries[0].endOffset)], ["assistant", digest(entries[1].endOffset)], ["progress", undefined],
+    ["response_item", undefined], ["event_msg", undefined],
+  ]);
+});
+
 test("selects Claude sessions by ID, first recorded working directory, or exact transcript project directory", async t => {
   const fixture = await Claude.create();
   t.after(() => fixture.close());

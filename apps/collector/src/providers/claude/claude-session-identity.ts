@@ -1,5 +1,9 @@
 import type { LocalHistoryEntry } from "../../history/index.ts";
-import type { ClaudeSubagent } from "../../transcript/index.ts";
+
+export interface ClaudeSubagent {
+  readonly parentSessionId: string;
+  readonly agentId: string;
+}
 
 /** The session key of a Claude Code record: its native ID, or a subagent ID under the parent of its directory. */
 export class ClaudeSessionIdentity {

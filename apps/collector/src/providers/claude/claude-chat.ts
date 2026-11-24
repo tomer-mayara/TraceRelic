@@ -1,4 +1,4 @@
-import type { ClaudeTranscript, ClaudeTranscriptEntry } from "../index.ts";
+import type { ClaudeTranscript, ClaudeTranscriptEntry } from "./claude-history.ts";
 import type { Metadata } from "../../storage/collector-storage.ts";
 import { stateRecord, TextOccurrences } from "../../scan/parser-state.ts";
 import type { ChatParser, DecodedChat } from "../../scan/decoded-chat.ts";

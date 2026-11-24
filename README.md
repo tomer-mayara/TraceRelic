@@ -10,7 +10,7 @@ Pass the configuration file to the collector with `--config`. The supplied file 
 { "codexPath": "~/.codex", "claudePath": "~/.claude" }
 ```
 
-From the repository root, run the history command with an inclusive start and exclusive end. It compares all supplied fractional seconds and writes matching records as a JSON array. Codex history and scans read both plain rollouts and Zstandard-compressed `.jsonl.zst` rollouts. Checkpoints count uncompressed bytes.
+Install the dependencies and build the workspace one time, with `bun install --frozen-lockfile` and `bun run build`. Build again after a change to `packages/shared`, because the collector loads the compiled package. From the repository root, run the history command with an inclusive start and exclusive end. It compares all supplied fractional seconds and writes matching records as a JSON array. Codex history and scans read both plain rollouts and Zstandard-compressed `.jsonl.zst` rollouts. Checkpoints count uncompressed bytes.
 
 ```sh
 bun run collector history --config ./tracerelic.config.json --from 2026-02-01T00:00:00Z --to 2026-02-02T00:00:00Z
@@ -55,6 +55,23 @@ Each pass writes one JSON line to standard output. For example, `{"status":"comp
 Diagnostics go to standard error. Each line begins with a UTC timestamp, a level, and the calling file and line. For structured diagnostics, parse the JSON message after that prefix. The `--silent` option in the example suppresses Bun's script banner. [Shared log format](docs/specs/shared-logging.md)
 
 By default, the standalone CLI keeps its workspace in memory for the life of the process. Each `watch` pass uses that same workspace. TypeScript callers can pass the same workspace storage to a fresh `LocalCollector` to resume at the last accepted newline. Each batch saves its messages, token measurements, parser state, next byte and prefix digest together. The scanner leaves an unfinished line for the next scan, including a line that ends inside a UTF-8 character.
+
+The scanner receives its providers and its storage in one options object. It reads the providers in the sequence that it receives them.
+
+```ts
+import { GlobalConfigLoader } from "@tracerelic/collector/config";
+import { InMemoryCollectorStorage } from "@tracerelic/collector/memory-storage";
+import { LocalProviders } from "@tracerelic/collector/providers";
+import { LocalCollector } from "@tracerelic/collector/scan";
+
+const config = await GlobalConfigLoader.load("./tracerelic.config.json");
+const scanner = new LocalCollector({
+  providers: LocalProviders.fromConfig(config),
+  storage: new InMemoryCollectorStorage(),
+  installationId: config.installationId,
+});
+const sessions = await scanner.scanOnce();
+```
 
 If a write loses its connection, the scanner checks which bytes storage accepted. When the outcome is still unknown, `scan --once` logs the pending report at `WARN` and exits with status 75. The report gives the source, the attempted byte range when available, and a suggested retry time. If storage cannot list the acknowledged sources, the report identifies the affected selection in `scope`. Run the scan again after reconnecting to resume from storage’s checkpoint.
 
@@ -149,7 +166,7 @@ Database tests start disposable PostgreSQL 18.7 containers on loopback. To reuse
 
 Run `bun run check:shared-logging` to build the log record schema, check package dependencies, and run the logging scenarios on Bun and Node. [Shared logging plan](docs/specs/shared-logging.md)
 
-Run `bun run check:collector-structure` to check that the cleaned collector directories declare no top-level function. The check does not yet apply to ten parser files in `providers/`. The `pending` list of the [rule](.habit-hooks/collector-structure.eslint.mjs) names them, and the cleanup plan gives the steps that clean them. The PR workflow runs the same check. [Cleanup plan](docs/specs/local-collector-structure-cleanup.md)
+Run `bun run check:collector-structure` to check that each function of the cleaned collector directories is in a class. The check does not yet apply to some parser files in `providers/`. The `pending` list of the [rule](.habit-hooks/collector-structure.eslint.mjs) names them, and the cleanup plan gives the steps that clean them. The PR workflow runs the same check. [Cleanup plan](docs/specs/local-collector-structure-cleanup.md)
 
 For a suite that spans components, place it in `test/acceptance/` at the repository root. Declare the workspace packages it imports in the root `devDependencies`. The same `bun run test` command runs it.
 

@@ -3,9 +3,10 @@ import { copyFile, rename } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
-import { LocalCollector, ScanRejectedError } from "@tracerelic/collector/scan";
+import { ScanRejectedError } from "@tracerelic/collector/scan";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture as Codex } from "../../fixtures/codex-rollout-fixture.ts";
+import { ConfiguredCollector } from "../../fixtures/configured-collector.ts";
 import { RejectingBatchStorage } from "../../fixtures/rejecting-batch-storage.ts";
 
 const at = "2026-02-01T12:00:00Z";
@@ -27,7 +28,7 @@ test("a rejected Codex batch stops its stream across copies and preserves other 
   await claude.write("project", "b", [Claude.user("b", at, "another session")]);
 
   const storage = new RejectingBatchStorage(batch => batch.messages.some(message => message.text === "rejected"));
-  const result: unknown = await new LocalCollector(config, storage).scanOnce().catch((error: unknown) => error);
+  const result: unknown = await ConfiguredCollector.from(config, storage).scanOnce().catch((error: unknown) => error);
   assert(result instanceof ScanRejectedError);
   const source = { harness: "codex", sessionId: "a", streamId: basename(active), installationId: "desktop" } as const;
   const startOffset = Buffer.byteLength(prefix.map(record => JSON.stringify(record) + "\n").join(""));
@@ -52,7 +53,7 @@ test("a first invalid Claude batch skips every remaining stream in that file and
   // Claude discovery always processes earlier copies after current files.
   await claude.write("project", "b.orphaned-1700000000000-a", [{ ...Claude.user("b", at, "accepted"), uuid: "b-1" }]);
   const storage = new RejectingBatchStorage(batch => batch.source.sessionId === "a");
-  const result: unknown = await new LocalCollector(config, storage).scanOnce().catch((error: unknown) => error);
+  const result: unknown = await ConfiguredCollector.from(config, storage).scanOnce().catch((error: unknown) => error);
   assert(result instanceof ScanRejectedError);
   assert.deepEqual(storage.attempts.map(batch => batch.source.sessionId), ["a", "b"]);
   assert.equal(await storage.readSession({ harness: "claude", sessionId: "a" }), null);

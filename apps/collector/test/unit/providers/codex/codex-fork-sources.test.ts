@@ -12,7 +12,7 @@ test("omitting a grandparent from the next selection preserves a verified child 
     baseline: { inputTokens: 200, outputTokens: 0 } };
   const saved = { offset: 400, prefixDigest: "a".repeat(64), parserState: "{}", codexFork };
   const format = await selected.format(source, saved);
-  assert.deepEqual(format.codexFork, codexFork);
+  assert.deepEqual(format.checkpointFields?.codexFork, codexFork);
 });
 
 test("a child-only scan locates an uncertain row again if the earlier scan had not accepted that row", async () => {
@@ -21,6 +21,6 @@ test("a child-only scan locates an uncertain row again if the earlier scan had n
   const [source] = await Array.fromAsync(selected.sources());
   const codexFork = { parentSessionId: "parent", firstUncertain: { offset: 400, lineNumber: 5 } };
   const saved = { offset: 100, prefixDigest: "a".repeat(64), parserState: "{}", codexFork };
-  assert.deepEqual((await selected.format(source, saved)).codexFork,
+  assert.deepEqual((await selected.format(source, saved)).checkpointFields?.codexFork,
     { parentSessionId: "parent", firstUncertain: { offset: 100, lineNumber: 2 } });
 });

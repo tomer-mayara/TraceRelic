@@ -14,10 +14,9 @@ export class TranscriptBatches {
   constructor(private readonly jsonl: JsonlRecords) {}
 
   transcriptSource<H extends LocalHistoryEntry["harness"]>(source: SelectedFile<H>): TranscriptSource<TranscriptEntry<H>> {
-    const { file, sessionId, previousCopy, selectionCwd, projectDir } = source;
+    const { file, sessionId } = source;
     return {
-      sessionId, previousCopy, sourceFile: file.sourceFile, fileSize: file.fileSize,
-      ...(selectionCwd && { selectionCwd }), ...(projectDir && { projectDir }),
+      sessionId, sourceFile: file.sourceFile, fileSize: file.fileSize,
       completeEnd: () => file.completeEnd(),
       prefixDigests: offsets => file.prefixDigests(offsets),
       readBatches: (position, maxBatchBytes = defaultBatchBytes, endOffset = file.fileSize) =>
@@ -85,8 +84,7 @@ export class TranscriptBatches {
       if (record && source.matches(record, lineNumber)) {
         const { timestamp } = record;
         records.entries.push({ harness, sessionId, sourceFile: file.sourceFile, record, lineNumber, startOffset, endOffset: offset,
-          ...((record.type === "response_item" || record.type === "event_msg" || record.type === "user" || record.type === "assistant")
-            && { recordPrefixDigest: hash.copy().digest("hex") }),
+          ...(source.isConversation(record) && { recordPrefixDigest: hash.copy().digest("hex") }),
           ...(offset === source.blankPrefixHeaderEnd && { afterBlankPrefix: true }),
           ...(isHistoryTimestamp(timestamp) ? { timestamp } : {}) });
       } else if (!record && !JsonlRecords.isBlankLine(line)) {

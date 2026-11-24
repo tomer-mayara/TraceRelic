@@ -1,20 +1,22 @@
 import { join } from "node:path";
-import type { ClaudeTranscriptEntry } from "../index.ts";
+import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "./claude-history.ts";
 import { TranscriptChangedError, type TranscriptSource } from "../../transcript/index.ts";
 import type { AcknowledgedSource, Checkpoint, ObservedExtent, SourceLocation } from "../../storage/collector-storage.ts";
 import { captureProof, checkpointPrefixes, verifiedCheckpoint } from "../../scan/scan-recovery.ts";
+import type { CopyAssessment, EarlierCopies, EarlierCopy, SourceCopy } from "../../scan/scan-provider.ts";
+import type { ParserFormat } from "../../scan/transcript-cursor.ts";
+import { ClaudeSessionParser } from "./claude-session-parser.ts";
 
-type ClaudeSource = TranscriptSource<ClaudeTranscriptEntry>;
+type ClaudeSource = ClaudeTranscriptSource;
 
-export interface ClaudeBackup<Entry> { currentPath: string; path: string; sources: TranscriptSource<Entry>[] }
-interface Candidate<Entry> { transcript: TranscriptSource<Entry>; path: string; end: number; suffix: "matches" | "unknown" | "differs" }
+interface Candidate<Source> { transcript: Source; path: string; end: number; suffix: "matches" | "unknown" | "differs" }
 
-export function unreadableCopy(error: unknown): boolean {
+function unreadableCopy(error: unknown): boolean {
   return error instanceof TranscriptChangedError || (error instanceof Error && "code" in error && (error.code === "EACCES" || error.code === "EPERM"));
 }
 
-async function compareCopy<Entry>(copy: ClaudeBackup<Entry>, sessionId: string, checkpoint: Checkpoint | null,
-  wanted: ObservedExtent): Promise<Candidate<Entry> | false | undefined> {
+async function compareCopy<Source extends TranscriptSource<unknown>>(copy: EarlierCopy<Source>, sessionId: string, checkpoint: Checkpoint | null,
+  wanted: ObservedExtent): Promise<Candidate<Source> | false | undefined> {
   if (!copy.sources.length) return;
   const transcript = copy.sources.find(source => source.sessionId === sessionId);
   if (!transcript) return false;
@@ -31,15 +33,15 @@ async function compareCopy<Entry>(copy: ClaudeBackup<Entry>, sessionId: string, 
   return { transcript, path: copy.path, end, suffix };
 }
 
-function through<Entry>(source: TranscriptSource<Entry>, end: number): TranscriptSource<Entry> {
+function through<Source extends TranscriptSource<unknown>>(source: Source, end: number): Source {
   return { ...source, fileSize: end, completeEnd: async () => end,
     readBatches: (position, size, limit = end) => source.readBatches(position, size, Math.min(limit, end)) };
 }
 
 /** Resume only the common, proved bytes when equally plausible copies disagree. */
-export async function assessClaudeCopies<Entry>(row: AcknowledgedSource, checkpoint: Checkpoint | null, copies: ClaudeBackup<Entry>[]) {
+async function assessClaudeCopies<Source extends TranscriptSource<unknown>>(row: AcknowledgedSource, checkpoint: Checkpoint | null, copies: EarlierCopy<Source>[]) {
   const excluded: string[] = [];
-  const candidates: Candidate<Entry>[] = [];
+  const candidates: Candidate<Source>[] = [];
   const wanted = row.unrecovered ?? { offset: row.observedEnd, prefixDigest: row.observedPrefixDigest };
   for (const copy of copies) {
     try {
@@ -73,7 +75,7 @@ export async function assessClaudeCopies<Entry>(row: AcknowledgedSource, checkpo
 }
 
 /** A named earlier file can resume the logical current stream only from verified bytes. */
-export class ClaudeSourceCopy {
+export class ClaudeSourceCopy implements SourceCopy<ClaudeTranscriptEntry, ClaudeSource> {
   constructor(private readonly copy: ClaudeSource) {}
 
   async verify(checkpoint: Checkpoint | null): Promise<Map<number, string> | undefined> {
@@ -90,5 +92,31 @@ export class ClaudeSourceCopy {
         yield { ...batch, entries: batch.entries.map(entry => ({ ...entry, sourceFile })) };
       }
     } };
+  }
+
+  /** The scanner reads the copy as the current stream. */
+  format(): ParserFormat<ClaudeTranscriptEntry> {
+    return ClaudeSessionParser.forSource(false, this.copy.claudeSubagent);
+  }
+}
+
+/** The earlier copies of the current Claude Code transcripts. A copy can continue an absent current file. */
+export class ClaudeEarlierCopies implements EarlierCopies<ClaudeTranscriptEntry, ClaudeSource> {
+  constructor(private readonly history: Pick<ClaudeHistory, "recoveryCandidates">) {}
+
+  candidates(paths: ReadonlySet<string>): AsyncIterable<EarlierCopy<ClaudeSource>> {
+    return this.history.recoveryCandidates(paths);
+  }
+
+  assess(row: AcknowledgedSource, checkpoint: Checkpoint | null, copies: EarlierCopy<ClaudeSource>[]): Promise<CopyAssessment<ClaudeSource>> {
+    return assessClaudeCopies(row, checkpoint, copies);
+  }
+
+  unreadable(error: unknown): boolean {
+    return unreadableCopy(error);
+  }
+
+  open(copy: ClaudeSource): ClaudeSourceCopy {
+    return new ClaudeSourceCopy(copy);
   }
 }

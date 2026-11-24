@@ -1,4 +1,4 @@
-import type { CodexRolloutEntry } from "../index.ts";
+import type { CodexRolloutEntry } from "./codex-history.ts";
 import type { DamagedLine } from "../../transcript/index.ts";
 import type { Metadata, Role } from "../../storage/collector-storage.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";

@@ -1,11 +1,9 @@
-import type { CodexRolloutEntry } from "../../src/providers/index.ts";
-import type { TranscriptSource } from "../../src/transcript/index.ts";
+import type { CodexRolloutSource } from "../../src/providers/index.ts";
 import { CodexUsageFixture as Usage } from "./codex-usage-fixture.ts";
 
 type Row = ReturnType<typeof Usage.record> | null;
 
-export class ForkEvidenceSource implements TranscriptSource<CodexRolloutEntry> {
-  readonly previousCopy = false;
+export class ForkEvidenceSource implements CodexRolloutSource {
   readonly fileSize: number;
   readonly sourceFile: string;
   reads = 0;

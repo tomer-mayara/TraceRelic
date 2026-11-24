@@ -5,8 +5,8 @@ import { test } from "node:test";
 import { GlobalConfig } from "@tracerelic/collector/config";
 import { ClaudeHistory } from "@tracerelic/collector/providers";
 import type { ScanSelection } from "@tracerelic/collector/transcript";
-import { LocalCollector } from "@tracerelic/collector/scan";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
+import { ConfiguredCollector } from "../../fixtures/configured-collector.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 
 test("two Claude sessions in one file verify their different saved offsets together", async t => {
@@ -14,7 +14,7 @@ test("two Claude sessions in one file verify their different saved offsets toget
   t.after(() => root.close());
   const config = new GlobalConfig(join(root.home, "codex"), root.home);
   const store = new InMemoryCollectorStorage();
-  const freshScan = (sessionIds?: string[]) => new LocalCollector(config, store).scanOnce({ sessionIds });
+  const freshScan = (sessionIds?: string[]) => ConfiguredCollector.from(config, store).scanOnce({ sessionIds });
   const at = "2026-01-01T00:00:00Z";
   const a = Claude.user("a", at, "First session");
   const b = Claude.user("b", at, "Second session");

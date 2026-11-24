@@ -32,7 +32,7 @@ Given("the child copied the prefix of {int} and its next cumulative total is {in
 When("I discover the child before the archived parent and scan twice", async function (this: ForkScenario) {
   const sources = await this.fork.discover();
   assert.deepEqual(sources.map(source => source.sessionId), ["child", "parent"]);
-  for (const source of sources) assert(scanContract.validate("TranscriptSourceInfo.json", source), scanContract.errorsText());
+  for (const source of sources) assert(scanContract.validate("CodexRolloutSource.json", source), scanContract.errorsText());
   this.seen = await this.fork.scan();
   this.progress = await this.fork.checkpoints();
   assert.deepEqual(await this.fork.scan(), this.seen);

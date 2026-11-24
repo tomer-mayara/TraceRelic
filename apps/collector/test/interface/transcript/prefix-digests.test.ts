@@ -6,6 +6,27 @@ import { ClaudeHistory, CodexHistory } from "@tracerelic/collector/providers";
 import { ClaudeProjectFixture as Claude } from "../../fixtures/claude-project-fixture.ts";
 import { CodexRolloutFixture as Rollout } from "../../fixtures/codex-rollout-fixture.ts";
 import { CapturedTranscriptFile } from "#src/transcript/captured-transcript-file";
+import { JsonlRecords } from "#src/transcript/jsonl-records";
+import { TranscriptBatches } from "#src/transcript/transcript-batches";
+
+test("a record gets the digest of the file through its own line exactly when its selected file names it a conversation record", async t => {
+  const fixture = await Rollout.create();
+  t.after(() => fixture.close());
+  const rows = [{ type: "user", text: "one" }, { type: "note", text: "two" }, { type: "assistant", text: "three" }, { type: "note", text: "four" }];
+  const path = await fixture.write(rows);
+  const bytes = await readFile(path);
+  const jsonl = new JsonlRecords();
+  const { file } = await jsonl.inspectFile(path, async () => {});
+  const source = new TranscriptBatches(jsonl).transcriptSource({
+    sessionId: "chat", file, harness: "codex", matches: () => true, isConversation: record => record.type === "note",
+  });
+  const entries = (await Array.fromAsync(source.readBatches({ offset: 0, lineNumber: 0 }))).flatMap(batch => batch.entries);
+  const digest = (offset: number) => createHash("sha256").update(bytes.subarray(0, offset)).digest("hex");
+  assert.deepEqual(entries.map(entry => entry.record), rows);
+  assert.deepEqual(entries.map(entry => entry.recordPrefixDigest),
+    [undefined, digest(entries[1].endOffset), undefined, digest(entries[3].endOffset)]);
+  assert.deepEqual(entries.map(entry => "recordPrefixDigest" in entry), [false, true, false, true]);
+});
 
 test("a genuine append during discovery and again during batching keeps the selected bytes and avoids rereading them per batch", async t => {
   const root = await Rollout.create();
