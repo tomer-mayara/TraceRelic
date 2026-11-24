@@ -6,14 +6,14 @@ import {
   type CheckpointSnapshot, type CollectorStorage, type CommitResult, type Coverage, type MissingSource, type PresenceWrite,
   type SessionKey, type SessionView, type SourceScope, type SourceUsageDiagnostic, type StreamKey, type Usage,
 } from "./collector-storage.ts";
-import { checkpointFailure } from "./checkpoint-validation.ts";
-import { ClaudeCallOwners } from "./claude-call-owners.ts";
-import { CodexCallOwners } from "./codex-call-owners.ts";
-import { codexSourceIdentity } from "./codex-source-identity.ts";
+import { checkpointFailure } from "./checkpoint-transition.ts";
+import { ClaudeCallOwners } from "./claude/claude-call-owners.ts";
+import { CodexCallOwners } from "./codex/codex-call-owners.ts";
+import { codexSourceIdentity } from "./codex/codex-source-identity.ts";
 import { mergeMeasurements, type StoredUsage, type UsageWrite } from "./session-usage.ts";
 import { StoredSource } from "./source-inventory.ts";
 import { SourceUsageDiagnostics } from "./source-usage-diagnostics.ts";
-import { isCount, isIdentifier, isRecord } from "./usage-validation.ts";
+import { isCount, isIdentifier, isRecord } from "./batch-values.ts";
 
 function encodeSessionKey(key: SessionKey): string {
   return JSON.stringify([key.harness, key.sessionId]);

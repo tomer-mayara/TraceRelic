@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ClaudeCallOwners } from "#src/storage/claude-call-owners";
+import { ClaudeCallOwners } from "#src/storage/claude/claude-call-owners";
 import type { Batch, ClaudeCallOrigin, ClaudeUsageReport, Usage } from "../../src/storage/collector-storage.ts";
 
 export class ClaudeCallOwnershipFixture {

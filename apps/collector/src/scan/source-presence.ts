@@ -3,10 +3,10 @@ import type { TranscriptSource } from "../transcript/index.ts";
 import { StorageBackoffError, StorageUnavailableError, type AcknowledgedSource, type CommitResult, type MissingSource, type PresenceWrite,
   type ObservedExtent, type SourceObservation, type SourceScope, type StreamKey } from "../storage/collector-storage.ts";
 import { ScanPendingError } from "./scan-pending.ts";
-import { assessClaudeCopies, unreadableCopy, type ClaudeBackup } from "./claude-source-copy.ts";
+import { assessClaudeCopies, unreadableCopy, type ClaudeBackup } from "../providers/claude/claude-source-copy.ts";
 import { captureProof, readStorage } from "./scan-recovery.ts";
 import { sourceId, SourceSighting, SourceSightings } from "./source-sightings.ts";
-import { CodexIdentityRepair } from "./codex-identity-repair.ts";
+import { CodexIdentityRepair } from "../providers/codex/codex-identity-repair.ts";
 
 interface SourceLocations<Entry> {
   identitiesAt?(paths: ReadonlySet<string>): AsyncIterable<{ path: string; sessionId: string }>;

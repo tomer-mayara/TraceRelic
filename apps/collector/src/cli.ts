@@ -13,7 +13,7 @@ async function configuredStorage(): Promise<CollectorStorage> {
   if (apiUrl === undefined || token === undefined) {
     throw new Error("Set both TRACERELIC_COLLECTOR_API_URL and TRACERELIC_COLLECTOR_TOKEN for remote scans");
   }
-  const { HttpCollectorStorage } = await import("./storage/http-collector-storage.ts");
+  const { HttpCollectorStorage } = await import("./storage/http/http-collector-storage.ts");
   return new HttpCollectorStorage(apiUrl, token);
 }
 

@@ -1,5 +1,5 @@
 import type { GlobalConfig } from "../config/global-config.ts";
-import { claudeCopyFallbackFields } from "../claude-transcript-copy.ts";
+import { claudeCopyFallbackFields } from "@tracerelic/shared";
 import { CodexRolloutFiles } from "../providers/codex/codex-rollout-files.ts";
 import { ClaudeHistory, CodexHistory, type ClaudeTranscriptEntry, type CodexRolloutEntry } from "../providers/index.ts";
 import { TranscriptChangedError, type ScanSelection, type TranscriptSource } from "../transcript/index.ts";
@@ -7,11 +7,11 @@ import {
   StorageAuthenticationError, type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage,
   type Harness, type MissingSource, type SessionView, type StreamKey,
 } from "../storage/collector-storage.ts";
-import { ClaudeSourceCopy } from "./claude-source-copy.ts";
-import { ClaudeSessionParser } from "./claude-session-parser.ts";
-import { CodexForkSources } from "./codex-fork-sources.ts";
+import { ClaudeSourceCopy } from "../providers/claude/claude-source-copy.ts";
+import { ClaudeSessionParser } from "../providers/claude/claude-session-parser.ts";
+import { CodexForkSources } from "../providers/codex/codex-fork-sources.ts";
 import type { DecodedChat } from "./decoded-chat.ts";
-import type { ScanProgress } from "./scan-activity.ts";
+import type { ScanProgress } from "../watch/scan-activity.ts";
 import { ScanRecovery, checkpointPrefixes, readStorage, verifiedCheckpoint, type ScanRestart } from "./scan-recovery.ts";
 import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 import { ScanPendingError } from "./scan-pending.ts";

@@ -4,7 +4,7 @@ import { dirname, join } from "node:path";
 import { CollectorCommand } from "@tracerelic/collector/command";
 import { GlobalConfigLoader } from "@tracerelic/collector/config";
 import { CodexHistory } from "@tracerelic/collector/providers";
-import { CodexSessionParser } from "#src/scan/codex-session-parser";
+import { CodexSessionParser } from "#src/providers/codex/codex-session-parser";
 import { TranscriptCursor } from "#src/scan/transcript-cursor";
 import type { CollectorStorage, SessionView, StreamKey } from "../../src/storage/collector-storage.ts";
 import { CodexRolloutFixture as Rollout } from "./codex-rollout-fixture.ts";

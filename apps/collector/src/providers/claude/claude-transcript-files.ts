@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { claudeCopyStem } from "../../claude-transcript-copy.ts";
+import { claudeCopyStem } from "@tracerelic/shared";
 import type { ClaudeSubagent } from "../../transcript/index.ts";
 import { listDirectory } from "../../transcript/transcript-directories.ts";
 

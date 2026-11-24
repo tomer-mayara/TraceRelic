@@ -1,4 +1,4 @@
-import { compareRecordedInstants, isHistoryTimestamp, recordedInstant } from "../recorded-timestamp.ts";
+import { compareRecordedInstants, isHistoryTimestamp, recordedInstant } from "@tracerelic/shared";
 
 interface WindowInstant {
   readonly second: number;

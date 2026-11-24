@@ -1,5 +1,5 @@
 import type { LocalHistoryEntry } from "../../history/index.ts";
-import { isHistoryTimestamp } from "../../recorded-timestamp.ts";
+import { isHistoryTimestamp } from "@tracerelic/shared";
 import { JsonlRecords } from "../../transcript/jsonl-records.ts";
 
 /** The native session ID, working directory and fork parent in a Codex session_meta record. */
