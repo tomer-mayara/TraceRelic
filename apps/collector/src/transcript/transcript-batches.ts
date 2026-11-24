@@ -2,10 +2,9 @@ import type { LocalHistoryEntry } from "../history/history-provider.ts";
 import { RecordedInstant } from "@tracerelic/shared";
 import { JsonlRecords } from "./jsonl-records.ts";
 import type {
-  BatchRecords, ReadPosition, RecordBatch, SelectedFile, Transcript, TranscriptEntry, TranscriptSource,
+  BatchRecords, ReadPosition, RecordBatch, SelectedFile, TranscriptEntry, TranscriptSource,
 } from "./transcript-source.ts";
 
-const beginning: ReadPosition = { offset: 0, lineNumber: 0 };
 const defaultBatchBytes = 256 * 1024;
 const newline = Buffer.from([0x0a]);
 
@@ -22,17 +21,6 @@ export class TranscriptBatches {
       readBatches: (position, maxBatchBytes = defaultBatchBytes, endOffset = file.fileSize) =>
         this.readBatches(source, position, maxBatchBytes, endOffset),
     };
-  }
-
-  async snapshot<H extends LocalHistoryEntry["harness"]>(
-    source: TranscriptSource<TranscriptEntry<H>>,
-  ): Promise<Transcript<TranscriptEntry<H>> | undefined> {
-    const entries: TranscriptEntry<H>[] = [];
-    for await (const batch of source.readBatches(beginning)) {
-      for (const { startOffset: _startOffset, afterBlankPrefix: _afterBlankPrefix, recordPrefixDigest: _digest, ...entry } of batch.entries) entries.push(entry);
-    }
-    const last = entries.at(-1);
-    if (last) return { sessionId: source.sessionId, sourceFile: source.sourceFile, entries, endOffset: last.endOffset };
   }
 
   private async *readBatches<H extends LocalHistoryEntry["harness"]>(

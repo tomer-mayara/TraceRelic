@@ -3,7 +3,7 @@ import { test } from "node:test";
 import type { UsageWindow } from "../../../../src/storage/collector-storage.ts";
 import { UsageWindows } from "#src/storage/codex/usage-windows";
 import {
-  archivedCopy, coarse, counts, earlier, first, history, last, later, rollout, window, zero,
+  archivedCopy, coarse, counts, earlier, first, history, last, later, mayCover, rollout, window, zero,
 } from "../../../fixtures/usage-windows-fixture.ts";
 
 test("a copy publishes a finer partition only after both ends of the established interval are covered", () => {
@@ -159,18 +159,18 @@ test("only another source's published and unattributed range can cover a loose c
   const base = UsageWindows.merge(undefined, [coarse], rollout);
   assert.ok(base);
   const afterStart = { usageId: "loose", historyId: history, after: first };
-  assert.equal(base.mayCover(afterStart, archivedCopy), true);
-  assert.equal(base.mayCover({ ...afterStart, after: last }, archivedCopy), false);
-  assert.equal(base.mayCover({ ...afterStart, after: undefined }, archivedCopy), true);
-  assert.equal(base.mayCover({ ...afterStart, after: undefined }, rollout), false);
+  assert.equal(mayCover(base, afterStart, archivedCopy), true);
+  assert.equal(mayCover(base, { ...afterStart, after: last }, archivedCopy), false);
+  assert.equal(mayCover(base, { ...afterStart, after: undefined }, archivedCopy), true);
+  assert.equal(mayCover(base, { ...afterStart, after: undefined }, rollout), false);
   const staged = UsageWindows.merge(base, [later], archivedCopy);
   assert.ok(staged);
-  assert.equal(staged.mayCover(afterStart, archivedCopy), true);
+  assert.equal(mayCover(staged, afterStart, archivedCopy), true);
   const published = UsageWindows.merge(staged, [earlier], archivedCopy);
   assert.ok(published);
-  assert.equal(published.mayCover(afterStart, { ...rollout, streamId: "third" }), false);
-  assert.equal(published.mayCover({ ...afterStart, historyId: "verified:different" }, rollout), true);
-  assert.equal(published.mayCover({ ...afterStart, historyId: history + ":reset:drop" }, rollout), false);
+  assert.equal(mayCover(published, afterStart, { ...rollout, streamId: "third" }), false);
+  assert.equal(mayCover(published, { ...afterStart, historyId: "verified:different" }, rollout), true);
+  assert.equal(mayCover(published, { ...afterStart, historyId: history + ":reset:drop" }, rollout), false);
 });
 
 test("a loose call before the first reliable snapshot stays visible alongside later deltas in its own copy", () => {
@@ -178,9 +178,9 @@ test("a loose call before the first reliable snapshot stays visible alongside la
   const base = UsageWindows.merge(undefined, [{ ...window(first, last, "delta"), historyId }], rollout);
   assert.ok(base);
   const loose = { usageId: "before-snapshot", historyId };
-  assert.equal(base.mayCover(loose, rollout), false);
+  assert.equal(mayCover(base, loose, rollout), false);
   const otherInstallation = { ...rollout, installationId: "elsewhere" };
-  assert.equal(base.mayCover(loose, otherInstallation), true);
+  assert.equal(mayCover(base, loose, otherInstallation), true);
   const attempt = UsageWindows.merge(base, [{ ...earlier, historyId }], otherInstallation);
   assert.equal(attempt?.hasGap, true);
   assert.deepEqual(attempt?.measurements, base.measurements);
@@ -197,7 +197,7 @@ test("a copy must identify an established reset before it can prove a further re
   assert.ok(uncertain);
   assert.deepEqual(uncertain.measurements, original.measurements);
   assert.equal(uncertain.hasGap, true);
-  assert.equal(uncertain.mayCover({ usageId: "loose", historyId: nextEpoch.historyId }, archivedCopy), true);
+  assert.equal(mayCover(uncertain, { usageId: "loose", historyId: nextEpoch.historyId }, archivedCopy), true);
   const proven = UsageWindows.merge(uncertain, [firstEpoch, nextEpoch], archivedCopy);
   assert.deepEqual(proven?.measurements, [...original.measurements, ...nextEpoch.parts]);
   assert.deepEqual(UsageWindows.merge(original, [nextEpoch], rollout)?.measurements, proven?.measurements);
@@ -223,5 +223,5 @@ test("unmatched ranges can add independent native calls when every accepted toke
   const fallback = { ...established, parts: [{ ...established.parts[0], requestId: undefined, id: "anonymous" }] };
   const noNativeId = UsageWindows.merge(undefined, [fallback, native], archivedCopy);
   assert.deepEqual(noNativeId?.measurements, fallback.parts);
-  assert.equal(noNativeId?.mayCover({ usageId: "loose", historyId: otherOrigin }, archivedCopy), true);
+  assert.equal(noNativeId && mayCover(noNativeId, { usageId: "loose", historyId: otherOrigin }, archivedCopy), true);
 });

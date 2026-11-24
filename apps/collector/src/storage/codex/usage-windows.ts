@@ -268,10 +268,6 @@ export class UsageWindows {
     return new UsageWindows(this.state, visible, [...pending.values()], previous?.measurements);
   }
 
-  mayCover(anchor: UsageAnchor, source: StreamKey, generation = 0): boolean {
-    return this.mayCoverCall([{ anchor, source, generation }]);
-  }
-
   mayCoverCall(placements: readonly AnchoredCall[]): boolean {
     if (!placements.length || !this.visible.histories.size) return false;
     const matched = placements.filter(({ anchor, source, generation }) =>

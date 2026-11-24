@@ -1,5 +1,5 @@
 import type { HistoryProvider, HistoryWindow, LocalHistoryEntry } from "../../history/index.ts";
-import type { ScanSelection, SourceDiscoveryOptions, Transcript, TranscriptEntry, TranscriptSource } from "../../transcript/index.ts";
+import type { ScanSelection, SourceDiscoveryOptions, TranscriptEntry, TranscriptSource } from "../../transcript/index.ts";
 import { JsonlRecords } from "../../transcript/jsonl-records.ts";
 import { SourceDiscovery } from "../../transcript/source-discovery.ts";
 import { TranscriptBatches } from "../../transcript/transcript-batches.ts";
@@ -12,7 +12,6 @@ import { CodexSessionHeader } from "./codex-session-header.ts";
 
 export type CodexSelection = ScanSelection;
 export type CodexRolloutEntry = TranscriptEntry<"codex">;
-export type CodexRollout = Transcript<CodexRolloutEntry>;
 
 /** One session in one Codex rollout. */
 export interface CodexRolloutSource extends TranscriptSource<CodexRolloutEntry> {
@@ -65,13 +64,6 @@ export class CodexHistory implements HistoryProvider, ScanProvider<CodexRolloutE
       }
     }
     return { entries, sessionId };
-  }
-
-  async *readRollouts(selection: CodexSelection = {}): AsyncGenerator<CodexRollout> {
-    for await (const source of this.discoverSources(selection)) {
-      const rollout = await this.batches.snapshot(source);
-      if (rollout) yield rollout;
-    }
   }
 
   async *discoverSources(selection: CodexSelection = {}, options: SourceDiscoveryOptions = {}): AsyncGenerator<CodexRolloutSource> {

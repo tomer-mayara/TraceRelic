@@ -18,13 +18,6 @@ export interface TranscriptEntry<Harness extends LocalHistoryEntry["harness"]> e
   readonly recordPrefixDigest?: string;
 }
 
-export interface Transcript<Entry> {
-  readonly sessionId: string;
-  readonly sourceFile: string;
-  readonly endOffset: number;
-  readonly entries: readonly Entry[];
-}
-
 export interface ReadPosition {
   readonly offset: number;
   readonly lineNumber: number;

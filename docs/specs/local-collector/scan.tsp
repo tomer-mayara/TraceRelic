@@ -19,21 +19,8 @@ model TranscriptEntry<Provider extends string> {
   endOffset: Count;
 }
 
-model Transcript<Entry> {
-  ...PickProperties<LocalHistoryEntry, "sessionId" | "sourceFile">;
-  endOffset: Count;
-  entries: Entry[];
-}
-
 model CodexRolloutEntry is TranscriptEntry<"codex">;
-model CodexRollout is Transcript<CodexRolloutEntry>;
 model ClaudeTranscriptEntry is TranscriptEntry<"claude">;
-
-model ClaudeTranscript {
-  ...Transcript<ClaudeTranscriptEntry>;
-  /** An orphaned or superseded transcript can supply additional UUID-backed rows. */
-  previousCopy: boolean;
-}
 
 model ReadPosition {
   /** Next unread byte and number of physical lines through this byte. Both start at zero. */
@@ -89,8 +76,6 @@ model ClaudeTranscriptSource extends TranscriptSourceInfo {
   claudeSubagent?: ClaudeSubagent;
   /** A distinct working directory inherited from the current transcript. */
   currentFileCwd?: string;
-  /** For a named earlier copy, the current transcript path relative to the configured root. */
-  currentFilePath?: Identifier;
 }
 
 model ClaudeSubagent {
@@ -354,8 +339,6 @@ interface CodexHistory extends HistoryProvider {
   harness(): Harness;
   root(): string;
   openScan(selection: ScanSelection): CodexScan;
-  /** Yield one selected rollout at a time. Preserve undated metadata and source order. */
-  readRollouts(selection?: ScanSelection): CodexRollout[];
 }
 
 /** One Claude Code scan pass. It has no identity repair and no logical name. */
@@ -376,9 +359,6 @@ interface ClaudeHistory extends HistoryProvider {
   harness(): Harness;
   root(): string;
   openScan(selection: ScanSelection): ClaudeScan;
-  /** Yield complete records grouped by file and effective session ID.
-   * Include earlier copies of a selected file for the same session. */
-  readTranscripts(selection?: ScanSelection): ClaudeTranscript[];
 }
 
 /** A scan could not confirm its work. The CLI writes this JSON as a WARN message on stderr.

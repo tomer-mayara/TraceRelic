@@ -1,4 +1,5 @@
-import type { StreamKey, TokenCounts, Usage, UsageWindow } from "../../src/storage/collector-storage.ts";
+import type { StreamKey, TokenCounts, Usage, UsageAnchor, UsageWindow } from "../../src/storage/collector-storage.ts";
+import type { UsageWindows } from "#src/storage/codex/usage-windows";
 
 export const rollout: StreamKey = { harness: "codex", sessionId: "planning", streamId: "active" };
 export const archivedCopy: StreamKey = { ...rollout, streamId: "archived", installationId: "second" };
@@ -25,3 +26,7 @@ export const last = counts(160, 40);
 export const coarse = window(zero, last, "coarse");
 export const earlier = window(zero, first, "earlier");
 export const later = window(first, last, "later", "call");
+
+export function mayCover(windows: UsageWindows, anchor: UsageAnchor, source: StreamKey, generation = 0): boolean {
+  return windows.mayCoverCall([{ anchor, source, generation }]);
+}

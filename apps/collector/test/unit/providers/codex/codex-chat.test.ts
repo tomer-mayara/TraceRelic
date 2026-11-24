@@ -12,14 +12,14 @@ test("paginated completed items honor the provider's recorded display decision",
     completed("Blocked", { moderated: true, display: { version: 1, mode: "block", reason: { kind: "protection", protectionType: "fixture" } } }),
     completed("Restricted", { moderated: true }), completed("Unsupported display", { moderated: false, display: { version: 2, mode: "show" } }),
     completed("Shown", { moderated: true, display: { version: 1, mode: "show", trustedContacts: "skip" } }));
-  assert.deepEqual(CodexChat.decode(rows).messages.map(row => row.text), ["Shown"]);
+  assert.deepEqual(F.decode(rows).messages.map(row => row.text), ["Shown"]);
 });
 
 test("the joined legacy assistant mirror identifies every original block once in either order", () => {
   const typed = F.response("assistant", [F.output("First "), F.output("second")], { id: "answer" });
   const joined = F.event("agent_message", "First second", { moderation: { item_id: "answer", moderated: false } });
   for (const rows of [[typed, joined], [joined, typed]]) {
-    assert.deepEqual(CodexChat.decode(F.entries(...rows)).messages.map(row => [row.id, row.text]), [
+    assert.deepEqual(F.decode(F.entries(...rows)).messages.map(row => [row.id, row.text]), [
       ["native:answer:0", "First "], ["native:answer:1", "second"],
     ]);
   }
@@ -47,7 +47,7 @@ test("keeps source and block order, recorded time, and one copy of mirrored text
     F.event("agent_message", "Then measure it"),
     { ...F.event("user_message", "Continue"), timestamp: "2026-04-15T08:55:00-06:00" },
   );
-  const { messages, metadata, branchObservation } = CodexChat.decode(entries);
+  const { messages, metadata, branchObservation } = F.decode(entries);
   assert.deepEqual(messages.map(m => [m.role, m.text, m.at, m.sourceOrder, m.blockIndex]), [
     ["user", "Plan search", F.at, 1, 0],
     ["assistant", " Start with ranking\n", F.at, 3, 1],
@@ -63,18 +63,18 @@ test("preserves identical prompts and consumes each opposite-format mirror only 
   const first = F.event("user_message", "Again?");
   const response = F.response("user", [F.input("Again?")]);
   const entries = F.entries(first, response, response, first, first);
-  const prior = CodexChat.decode(entries.slice(0, 1)).messages;
-  const { messages } = CodexChat.decode(entries);
+  const prior = F.decode(entries.slice(0, 1)).messages;
+  const { messages } = F.decode(entries);
   assert.deepEqual(messages.map(m => m.sourceOrder), [1, 3, 5]);
   assert.deepEqual(messages[0], prior[0]);
   assert.equal(new Set(messages.map(m => m.id)).size, 3);
-  assert.deepEqual(CodexChat.decode(entries).messages, messages);
+  assert.deepEqual(F.decode(entries).messages, messages);
 });
 
 test("a later native mirror cannot renumber the other occurrences of an unidentified prompt", () => {
   const prompt = F.event("user_message", "Again?");
-  const before = CodexChat.decode(F.entries(prompt, prompt)).messages;
-  const after = CodexChat.decode(F.entries(
+  const before = F.decode(F.entries(prompt, prompt)).messages;
+  const after = F.decode(F.entries(
     prompt, prompt, F.response("user", [F.input("Again?")], { id: "native-first" }), prompt,
   )).messages;
   assert.equal(after[1].id, before[1].id);
@@ -87,7 +87,7 @@ test("a typed user message and its flattened event keep the original text blocks
     F.input("Plan "), { type: "input_image", image_url: "fixture-image" }, F.input("search"),
   ]);
   for (const entries of [F.entries(response, event), F.entries(event, response)]) {
-    assert.deepEqual(CodexChat.decode(entries).messages.map(m => [m.text, m.sourceOrder, m.blockIndex]), [
+    assert.deepEqual(F.decode(entries).messages.map(m => [m.text, m.sourceOrder, m.blockIndex]), [
       ["Plan ", 1, 0], ["search", 1, 2],
     ]);
   }
@@ -102,11 +102,11 @@ test("the typed mirror supplies its native identity and context while keeping th
     }),
     timestamp: F.later,
   };
-  const [native] = CodexChat.decode(F.entries(typed)).messages;
-  assert.deepEqual(CodexChat.decode(F.entries(event, typed)).messages, [
+  const [native] = F.decode(F.entries(typed)).messages;
+  assert.deepEqual(F.decode(F.entries(event, typed)).messages, [
     { ...native, at: F.at, sourceOrder: 1 },
   ]);
-  assert.deepEqual(CodexChat.decode(F.entries(typed, event)).messages, [native]);
+  assert.deepEqual(F.decode(F.entries(typed, event)).messages, [native]);
 });
 
 test("a new turn, role change or distinct message ID keeps equal prompts independent", () => {
@@ -125,7 +125,7 @@ test("a new turn, role change or distinct message ID keeps equal prompts indepen
     F.response("user", [F.input("Another turn")], { turn_id: "c" }),
     F.event("user_message", "Another turn", { turn_id: "d" }),
   );
-  assert.deepEqual(CodexChat.decode(entries).messages.map(m => [m.text, m.turnId]), [
+  assert.deepEqual(F.decode(entries).messages.map(m => [m.text, m.turnId]), [
     ["Again?", "a"], ["Again?", "b"], ["First reply", "b"], ["Again?", "b"],
     ["Explicit", "b"], ["Explicit", "b"], ["Another turn", "c"], ["Another turn", "d"],
   ]);
@@ -152,7 +152,7 @@ test("only user and assistant text enters the chat, including prompts that quote
     F.response("assistant", [F.output(env)]),
     { ...F.event("agent_message", "Undated answer"), timestamp: undefined },
   );
-  assert.deepEqual(CodexChat.decode(entries).messages.map(m => [m.role, m.text, m.blockIndex]), [
+  assert.deepEqual(F.decode(entries).messages.map(m => [m.role, m.text, m.blockIndex]), [
     ["user", quoted, 3], ["assistant", env, 0],
   ]);
 });
@@ -163,8 +163,8 @@ test("records native IDs independently of text or file position, plus the real b
       const item = F.response("assistant", [F.output(first), F.output(last)], recordId ? {} : { id: "msg-01" });
       return recordId ? { ...item, id: "row-01" } : item;
     };
-    const original = CodexChat.decode(F.entries(make("one", "two"))).messages;
-    const replay = CodexChat.decode(F.entries(F.record("session_meta", { id: "planning" }), make("changed", "new"))).messages;
+    const original = F.decode(F.entries(make("one", "two"))).messages;
+    const replay = F.decode(F.entries(F.record("session_meta", { id: "planning" }), make("changed", "new"))).messages;
     assert.deepEqual(original.map(m => m.id), replay.map(m => m.id));
     assert.notEqual(original[0].id, original[1].id);
   }
@@ -187,7 +187,7 @@ test("uses native user text attribution and omits harness instructions and shell
     F.event("user_message", "Please explain the tag <skill>."),
     F.response("assistant", [F.output("private analysis")], { channel: "analysis" }),
   );
-  assert.deepEqual(CodexChat.decode(entries).messages.map(m => [m.text, m.blockIndex]), [
+  assert.deepEqual(F.decode(entries).messages.map(m => [m.text, m.blockIndex]), [
     [example, 2], ["Legacy prompt", 4], ["Please explain the tag <skill>.", 0],
   ]);
 });
@@ -204,7 +204,7 @@ test("captures recorded message context and the actual line and time of the last
     F.response("user", [F.input("On next")]),
     F.record("event_msg", { type: "token_count" }, "2026-04-16T00:00:00Z"),
   );
-  const { messages, metadata, branchObservation } = CodexChat.decode(entries);
+  const { messages, metadata, branchObservation } = F.decode(entries);
   assert.deepEqual(messages.map(m => [m.turnId, m.requestId, m.context]), [
     ["a", "r-1", { cwd: "/work/search", repository }],
     ["b", "r-2", { cwd: "/work/search/tools", branch: "main", repository }],
@@ -220,7 +220,7 @@ test("a branch hint from a previous repository does not identify a message in an
     F.record("turn_context", { turn_id: "b", cwd: "/work/two", git: { repository_url: "repo-two" } }),
     F.event("user_message", "Continue here"),
   );
-  const { messages, metadata, branchObservation } = CodexChat.decode(entries);
+  const { messages, metadata, branchObservation } = F.decode(entries);
   assert.deepEqual(messages[0].context, { cwd: "/work/two", repository: "repo-two" });
   assert.equal(metadata.branch, "main");
   assert.deepEqual(branchObservation, { at: F.at, sourceOrder: 1 });
@@ -241,7 +241,7 @@ test("a fresh parser restores turn context and anonymous occurrences but emits o
   assert.ok(!saved.includes("A repeated private prompt"));
   const fresh = CodexChat.resume(JSON.parse(saved));
   const suffix = fresh.decodeBatch(entries.slice(3, 4));
-  assert.deepEqual(suffix.messages, CodexChat.decode(entries).messages.slice(1));
+  assert.deepEqual(suffix.messages, F.decode(entries).messages.slice(1));
   assert.notEqual(suffix.messages[0].id, accepted.messages[0].id);
   assert.deepEqual(suffix.messages[0].context, { cwd: "/work", repository: "repo", branch: "main" });
   assert.equal(suffix.messages[0].turnId, "turn");
@@ -260,14 +260,14 @@ test("opposite-format rows across a checkpoint consume one pending copy and pres
     const entries = F.entries(original, mirror, mirror);
     const first = CodexChat.resume();
     const accepted = first.decodeBatch(entries.slice(0, 1));
-    assert.deepEqual(accepted.messages, CodexChat.decode(entries.slice(0, 1)).messages);
+    assert.deepEqual(accepted.messages, F.decode(entries.slice(0, 1)).messages);
     const saved = JSON.stringify(first.snapshot());
     assert.ok(!saved.includes("private "));
     const fresh = CodexChat.resume(JSON.parse(saved));
     assert.deepEqual(fresh.decodeBatch(entries.slice(1, 2)).messages, []);
     const later = fresh.decodeBatch(entries.slice(2)).messages;
     assert.deepEqual(later.map(m => [m.text, m.sourceOrder, m.blockIndex]),
-      CodexChat.decode(entries.slice(2)).messages.map(m => [m.text, m.sourceOrder, m.blockIndex]));
+      F.decode(entries.slice(2)).messages.map(m => [m.text, m.sourceOrder, m.blockIndex]));
   }
 });
 
@@ -281,7 +281,7 @@ test("restored mirror evidence respects request IDs and role and turn boundaries
     event, F.event("agent_message", "Answer"), typed,
     F.record("event_msg", { type: "task_complete" }), event,
   );
-  const expected = CodexChat.decode(entries).messages;
+  const expected = F.decode(entries).messages;
   let parser = CodexChat.resume();
   const messages = entries.flatMap(entry => {
     parser = CodexChat.resume(JSON.parse(JSON.stringify(parser.snapshot())));
@@ -323,7 +323,7 @@ test("a typed copy later in the captured file supplies its blocks, identity and 
     await parser.prepareLookahead(first, F.batches(...tail), 0);
     assert.deepEqual(parser.snapshot(), initial);
     const visible = parser.decodeBatch(first);
-    assert.deepEqual(visible.messages, CodexChat.decode(entries).messages);
+    assert.deepEqual(visible.messages, F.decode(entries).messages);
     assert.deepEqual(visible.messages.map(m => [m.id, m.text, m.sourceOrder, m.at, m.context]), [
       ["native:typed:0", "Café ", 1, F.at, { cwd: "/first", repository: "repo" }],
       ["native:typed:2", "🦊", 1, F.at, { cwd: "/first", repository: "repo" }],
@@ -342,7 +342,7 @@ test("an event later in the captured file can identify a typed assistant block i
   const parser = CodexChat.resume();
   await parser.prepareLookahead(entries.slice(0, 1), F.batches(entries.slice(1, 2), entries.slice(2)), 0);
   const visible = parser.decodeBatch(entries.slice(0, 1));
-  assert.deepEqual(visible.messages, CodexChat.decode(entries).messages);
+  assert.deepEqual(visible.messages, F.decode(entries).messages);
   assert.deepEqual(visible.messages.map(m => [m.id, m.requestId, m.blockIndex]), [
     ["native:first:0", undefined, 0], ["native:second:2", "r2", 2],
   ]);

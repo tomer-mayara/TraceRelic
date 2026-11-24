@@ -137,8 +137,6 @@ test("an earlier Claude file retains both working directories regardless of how 
   const reader = new ClaudeHistory(fixture.home);
   for (const selection of [{}, { sessionIds: ["s"] }, { projectPaths: ["/work/a"] }, { projectPaths: ["/work/b"] }]) {
     const sources = await Array.fromAsync(reader.discoverSources(selection));
-    assert.equal(sources.find(source => source.sourceFile === previous)?.currentFilePath, relative(fixture.home, current));
-    assert.equal(sources.find(source => source.sourceFile === current)?.currentFilePath, undefined);
     const directories = sources.map(source => [source.sourceFile, source.selectionCwd, source.currentFileCwd]);
     const earlier = [previous, "/work/b", "/work/a"];
     assert.deepEqual(directories, selection.projectPaths?.includes("/work/b") ? [earlier] : [[current, "/work/a", undefined], earlier]);

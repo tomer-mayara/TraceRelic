@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { appendFile, copyFile, readFile, rename, stat, symlink, truncate, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { CodexHistory, type CodexRollout, type CodexSelection } from "@tracerelic/collector/providers";
+import { CodexHistory, type CodexSelection } from "@tracerelic/collector/providers";
 import { CodexRolloutFixture as Rollout } from "../../../fixtures/codex-rollout-fixture.ts";
+import { type CodexRollout, TranscriptSnapshots } from "../../../fixtures/transcript-snapshots.ts";
 
 test("a discovered Codex source has no previousCopy, and only its response_item and event_msg records get the digest through their own line", async t => {
   const fixture = await Rollout.create();
@@ -45,7 +46,7 @@ test("selects Codex rollouts by their first native header within the configured 
   const reader = new CodexHistory(configured.home);
   const sessionIds = async (selection?: CodexSelection) => {
     const ids: string[] = [];
-    for await (const rollout of reader.readRollouts(selection)) ids.push(rollout.sessionId);
+    for await (const rollout of TranscriptSnapshots.rollouts(reader, selection)) ids.push(rollout.sessionId);
     const sources = await Array.fromAsync(reader.discoverSources(selection));
     assert.deepEqual(sources.map(source => source.sessionId).sort(), ids.sort());
     return ids;
@@ -142,7 +143,7 @@ test("marks the native header after a verified blank prefix across batches and r
       assert.equal(entries[0].lineNumber, lineNumber + 1);
       assert.equal(entries[0].startOffset, offset);
     }
-    const [rollout] = await Array.fromAsync(reader.readRollouts());
+    const [rollout] = await Array.fromAsync(TranscriptSnapshots.rollouts(reader));
     assert(rollout.entries.every(entry => !("afterBlankPrefix" in entry)));
   }
 });
@@ -227,7 +228,7 @@ test("returns undated Codex metadata and the byte position after the last decode
 
   const reader = new CodexHistory(fixture.home);
   const rollouts: CodexRollout[] = [];
-  for await (const rollout of reader.readRollouts()) rollouts.push(rollout);
+  for await (const rollout of TranscriptSnapshots.rollouts(reader)) rollouts.push(rollout);
   assert.equal(rollouts.length, 1);
   const [rollout] = rollouts;
   assert.equal(rollout.sessionId, "c1");
