@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runCollectorCli } from "#src/cli";
+import { CollectorCli } from "#src/cli";
 import { captureCollectorCli, captureCollectorStderr } from "../../fixtures/capture-collector-cli.ts";
 import { collectorLogMessage } from "../../fixtures/collector-log-message.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
@@ -32,7 +32,7 @@ test("watch uses the default interval and accepts both interval limits", async t
     const waits: number[] = [];
     const clock = { now: () => 0, wait: async (ms: number) => { waits.push(ms); stop.abort(); } };
     const report = t.mock.fn();
-    const code = await runCollectorCli(["watch", "--config", config, ...args], new InMemoryCollectorStorage(),
+    const code = await CollectorCli.run(["watch", "--config", config, ...args], new InMemoryCollectorStorage(),
       { signal: stop.signal, clock, onReport: report });
     assert.equal(code, 0);
     assert.deepEqual(waits, [expected]);
@@ -78,7 +78,7 @@ test("watch writes a sanitized diagnostic for an unexpected scan failure", async
   const { lines } = captureCollectorStderr(t);
   const stop = new AbortController();
   const reports: unknown[] = [];
-  const code = await runCollectorCli(["watch", "--config", config], storage, {
+  const code = await CollectorCli.run(["watch", "--config", config], storage, {
     signal: stop.signal, onReport: report => { reports.push(report); stop.abort(); },
   });
   assert.equal(code, 0);

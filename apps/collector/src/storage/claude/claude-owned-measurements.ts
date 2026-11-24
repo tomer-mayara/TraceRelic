@@ -10,18 +10,6 @@ interface Publication {
   measurement?: Usage;
 }
 
-function sameReport(left: ClaudeUsageReport, right: ClaudeUsageReport): boolean {
-  return left === right || isDeepStrictEqual(left, right);
-}
-
-function retainsReports(previous: readonly ClaudeUsageReport[], reports: readonly ClaudeUsageReport[]): boolean {
-  let retained = 0;
-  for (const row of reports) {
-    if (retained < previous.length && sameReport(previous[retained], row)) retained++;
-  }
-  return retained === previous.length;
-}
-
 /** Apply the ordinary Claude whole-report rules after the workspace has identified each call's owner. */
 export class ClaudeOwnedMeasurements {
   readonly measurements: readonly Usage[];
@@ -56,18 +44,30 @@ export class ClaudeOwnedMeasurements {
     }
   }
 
+  private static sameReport(left: ClaudeUsageReport, right: ClaudeUsageReport): boolean {
+    return left === right || isDeepStrictEqual(left, right);
+  }
+
+  private static retainsReports(previous: readonly ClaudeUsageReport[], reports: readonly ClaudeUsageReport[]): boolean {
+    let retained = 0;
+    for (const row of reports) {
+      if (retained < previous.length && ClaudeOwnedMeasurements.sameReport(previous[retained], row)) retained++;
+    }
+    return retained === previous.length;
+  }
+
   static merge(previous: ClaudeOwnedMeasurements | undefined, sessionId: string, reports: readonly OwnedReport[]): ClaudeOwnedMeasurements {
     // An append can reuse the session ledger. New ownership evidence can withdraw, insert or reassign earlier observations.
     const advisors = reports.some(row => row.iterationPosition !== undefined)
       ? new ClaudeAdvisorIterations(reports, previous?.ledger.measurements ?? []) : undefined;
     const normalized = advisors?.reports ?? reports;
     const append = previous && previous.reports.length <= normalized.length &&
-      previous.reports.every((value, i) => sameReport(value, normalized[i]));
+      previous.reports.every((value, i) => ClaudeOwnedMeasurements.sameReport(value, normalized[i]));
     if (append && previous.reports.length === normalized.length && !advisors) return previous;
     const additional = append ? normalized.slice(previous.reports.length) : normalized;
     const ledger = ClaudeUsageLedger.fromValidatedReports(append ? previous.ledger : undefined, additional, sessionId);
     const hasGap = ledger.hasGap || Boolean(advisors?.unresolved.length)
-      || (previous?.ledger.hasGap === true && (append === true || retainsReports(previous.reports, normalized)));
+      || (previous?.ledger.hasGap === true && (append === true || ClaudeOwnedMeasurements.retainsReports(previous.reports, normalized)));
     return new ClaudeOwnedMeasurements(previous, normalized, ledger, hasGap, advisors);
   }
 

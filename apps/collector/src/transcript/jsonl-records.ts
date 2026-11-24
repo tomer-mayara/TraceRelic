@@ -1,5 +1,6 @@
 import type { LocalHistoryEntry } from "../history/history-provider.ts";
 import { CapturedTranscriptFile } from "./captured-transcript-file.ts";
+import { JsonRecord } from "./json-record.ts";
 import type { DecodedRecord } from "./transcript-source.ts";
 
 /** Splits JSONL bytes into complete lines and decodes each line as one UTF-8 JSON object. */
@@ -9,10 +10,6 @@ export class JsonlRecords {
   static isBlankLine(line: Buffer): boolean {
     // The terminating LF is already removed. A JSON line can also contain space, tab or CR.
     return line.every(byte => byte === 0x20 || byte === 0x09 || byte === 0x0d);
-  }
-
-  static isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
   }
 
   inspectFile<T>(sourceFile: string, inspect: (records: AsyncIterable<DecodedRecord>) => Promise<T>, include?: (line: Buffer) => boolean) {
@@ -39,7 +36,7 @@ export class JsonlRecords {
   decode(line: Buffer): LocalHistoryEntry["record"] | undefined {
     try {
       const record: unknown = JSON.parse(this.decoder.decode(line));
-      if (JsonlRecords.isRecord(record)) return record;
+      if (JsonRecord.is(record)) return record;
     } catch {
       // Batches report the physical range of an unreadable record.
     }

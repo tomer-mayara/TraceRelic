@@ -1,5 +1,5 @@
 import { InMemoryCollectorStorage, type SessionRevision } from "@tracerelic/collector/memory-storage";
-import { legacyScannerLocation, type Batch, type CollectorStorage, type CommitResult, type PresenceWrite, type SessionKey, type SourceScope, type StreamKey } from "@tracerelic/collector/storage";
+import { LegacyScannerSource, type Batch, type CollectorStorage, type CommitResult, type PresenceWrite, type SessionKey, type SourceScope, type StreamKey } from "@tracerelic/collector/storage";
 import { SessionVersionConflict, type CollectorTransaction, type JournalWrite,
   type PostgresCollectorDatabase } from "./collector-database.ts";
 import { projectSession, type SessionRecords } from "./collector-projection.ts";
@@ -101,7 +101,7 @@ export class PostgresCollectorStorage implements CollectorStorage {
 
   readSession(key: SessionKey) { return this.database.readSession(this.workspaceId, key); }
   async canonicalSource(source: StreamKey) {
-    if (legacyScannerLocation(source.harness, source.streamId)) return this.database.canonical(this.workspaceId, source);
+    if (LegacyScannerSource.location(source.harness, source.streamId)) return this.database.canonical(this.workspaceId, source);
   }
   async mergeSourceAlias(source: StreamKey, target: string, expectedVersion: number) {
     return await this.enqueue({ kind: "alias", value: { source, target, expectedVersion } }) === "committed";

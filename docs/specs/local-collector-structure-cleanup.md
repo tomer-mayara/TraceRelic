@@ -16,31 +16,32 @@ modules) and `apps/api` (only its imports of the names that change).
 | 1 | The history reader receives its providers | Done, [PR 28](https://github.com/tomer-mayara/TraceRelic/pull/28) |
 | 2 | One directory for each provider and for each layer | Done, [PR 29](https://github.com/tomer-mayara/TraceRelic/pull/29) |
 | 3 | The scanner receives its providers through a port | Done, [PR 30](https://github.com/tomer-mayara/TraceRelic/pull/30) |
-| 4 | Each function is a member of a class | The code is in the draft [PR 31](https://github.com/tomer-mayara/TraceRelic/pull/31). It is not on `main`. |
+| 4 | Each function is a member of a class | Done, [PR 31](https://github.com/tomer-mayara/TraceRelic/pull/31) |
 | 5 | Finish | Not approved. Not started. |
 
 The description of each PR has the check results of its step.
 
-| Measure | Before | After step 1 | After step 2 | After step 3 |
-| --- | ---: | ---: | ---: | ---: |
-| Top-level functions in `apps/collector/src` | 265 | 262 | 258 | 256 |
-| Classes | 57 | 67 | 67 | 70 |
-| Node tests | 687 | 778 | 778 | 809 |
-| Collector scenarios | 47 | 49 | 49 | 52 |
+| Measure | Before | After step 1 | After step 2 | After step 3 | After step 4 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Top-level functions in `apps/collector/src` | 265 | 262 | 258 | 256 | 0 |
+| Classes | 57 | 67 | 67 | 70 | 93 |
+| Node tests | 687 | 778 | 778 | 809 | 809 |
+| Collector scenarios | 47 | 49 | 49 | 52 | 52 |
 
 "Before" is commit `21ab8a9`. Step 2 moved four of the functions to `packages/shared` with two leaf
-modules. Step 3 moved two functions into provider classes.
+modules. Step 3 moved two functions into provider classes. After step 4, each function of
+`apps/collector/src` and of the two leaf modules is in a class.
 
 ## Structure
 
-Steps 1 to 3 made this structure. Step 4 adds the seven files that have the mark `+4`.
+Steps 1 to 4 made this structure.
 
 ```text
 apps/collector/src/
 ├── cli.ts                     the logger, the standard output and the exit codes
 ├── commands/
 │   ├── collector-command.ts   CollectorCommand: builds the providers, the reader, the scanner and the schedule
-│   └── command-arguments.ts   +4  CommandArguments: checks the CLI options
+│   └── command-arguments.ts   CommandArguments: checks the CLI options
 ├── config/                    the configuration file, its schema and its loader
 ├── history/                   the date reader
 │   ├── local-llm-history.ts   LocalLLMHistory: readLocalHistory(from, to) over the providers that it receives
@@ -52,19 +53,19 @@ apps/collector/src/
 │   │   ├── codex-history.ts          CodexHistory: implements HistoryProvider and ScanProvider
 │   │   ├── codex-scan.ts             CodexScan: one scan pass, with the fork evidence of its latest discovery
 │   │   ├── codex-rollout-files.ts, codex-rollout-copies.ts, codex-session-header.ts
-│   │   ├── codex-session-parser.ts, codex-chat.ts, codex-visible-text.ts (+4)
+│   │   ├── codex-session-parser.ts, codex-chat.ts, codex-visible-text.ts
 │   │   ├── codex-usage.ts, codex-usage-report.ts, codex-token-counts.ts
 │   │   └── codex-fork-evidence.ts, codex-fork-sources.ts, codex-fork-usage.ts, codex-identity-repair.ts
 │   └── claude/                all code that knows Claude Code files and records
 │       ├── claude-history.ts         ClaudeHistory: implements HistoryProvider and ScanProvider
 │       ├── claude-scan.ts            ClaudeScan: one scan pass
 │       ├── claude-transcript-files.ts, claude-session-identity.ts, claude-source-copy.ts
-│       ├── claude-session-parser.ts, claude-chat.ts, claude-visible-text.ts (+4)
-│       └── claude-usage.ts, claude-usage-counts.ts, claude-assistant-record.ts (+4)
+│       ├── claude-session-parser.ts, claude-chat.ts, claude-visible-text.ts
+│       └── claude-usage.ts, claude-usage-counts.ts, claude-assistant-record.ts
 ├── transcript/                provider-neutral file reading
 │   ├── captured-transcript-file.ts, transcript-directories.ts
 │   ├── jsonl-records.ts       JsonlRecords: complete lines to JSON objects
-│   ├── json-record.ts         +4  JsonRecord: the checks on one decoded JSON value
+│   ├── json-record.ts         JsonRecord: the checks on one decoded JSON value
 │   ├── transcript-batches.ts  TranscriptBatches: byte-bounded batches with prefix digests
 │   ├── source-discovery.ts    SourceDiscovery: the selection by session and project
 │   └── transcript-source.ts   TranscriptSource, RecordBatch, ReadPosition, ScanSelection
@@ -72,7 +73,7 @@ apps/collector/src/
 │   ├── local-collector.ts     LocalCollector: scanOnce, scanForChanges; receives providers and storage
 │   ├── scan-provider.ts       ScanProvider and ProviderScan (port)
 │   ├── transcript-cursor.ts, parser-state.ts, replay-occurrences.ts, decoded-chat.ts
-│   ├── scan-recovery.ts, checkpoint-proof.ts (+4), source-presence.ts, source-sightings.ts
+│   ├── scan-recovery.ts, checkpoint-proof.ts, source-presence.ts, source-sightings.ts
 │   └── scan-pending.ts, scan-rejected.ts, scan-progress.ts
 ├── watch/                     scheduled-scanner.ts, scan-activity.ts
 └── storage/                   the API imports only this directory
@@ -80,9 +81,9 @@ apps/collector/src/
     ├── in-memory-collector-storage.ts, checkpoint-transition.ts, batch-values.ts
     ├── session-messages.ts, session-metadata.ts, session-usage.ts
     ├── source-inventory.ts, source-usage-diagnostics.ts
-    ├── http/                  HttpCollectorStorage, CollectorWireContract, the packed batch
+    ├── http/                  HttpCollectorStorage, CollectorWireContract, PackedBatches
     ├── claude/                usage ledger, call owners, origin reports, advisor iterations
-    └── codex/                 call aliases, call owners, source identity, usage windows, usage intervals (+4)
+    └── codex/                 call aliases, call owners, source identity, usage windows, usage intervals
 ```
 
 `config/`, `history/`, `providers/` and `transcript/` each have an `index.ts`. It is the package export of
@@ -160,10 +161,9 @@ to `history/` and `transcript/` only.
 forbids a function that is not in a class body. One selector finds each such function: a declaration, a
 function expression or an arrow function, at the top level or in an object. `bun run
 check:collector-structure` checks it, and the [PR workflow](../../.github/workflows/collector.yml) runs
-that script. Habit Hooks applies the same rule through its own configuration. Until step 4 is on `main`,
-the rule applies to `history/` and `providers/`, and its `pending` list names the parser files of
-`providers/` that still have top-level functions. Step 4 applies the rule to all of `apps/collector/src`
-and to the two shared leaf modules, with no list.
+that script. Habit Hooks applies the same rule through its own configuration. The rule applies to all
+of `apps/collector/src` and to the two shared leaf modules. It does not apply to `apps/api/src`, and it
+does not apply to `packages/shared/src/recorded-path.ts`, which has two functions.
 
 ## Constraint decisions
 
@@ -270,21 +270,21 @@ Two differences from the code before step 3 are known. No input of a real scan r
 
 ### Step 4. Functions to classes
 
-The code is in the draft PR 31. At the start of this step, 260 top-level functions remain: 256 in
-`apps/collector/src` and 4 in the two shared leaf modules. Each function becomes a member of the class
-that owns its rule. No logic changes. The object `systemClock` in `watch/scheduled-scanner.ts` holds two
-more functions that are not in a class. They become the class `SystemClock`.
+Done in PR 31. At the start of this step, 260 top-level functions remained: 256 in
+`apps/collector/src` and 4 in the two shared leaf modules. Each function became a member of the class
+that owns its rule. No logic changed. The object `systemClock` in `watch/scheduled-scanner.ts` held two
+more functions that were not in a class. They are the class `SystemClock` now.
 
 | Constraint | Decision and check |
 | --- | --- |
 | Behavior | No change. No scenario is new, because a caller can do nothing new. The scenarios, the tests and the golden texts are the specification. After each code commit, run the output comparison and the trace comparison. |
 | Observability | Out of scope. Each logger call stays in `cli.ts`, on the same line as before. One difference is known, and the owner accepted it: in the compiled `dist/cli.js`, each call is one line lower. |
-| Architecture | The structure rule applies to all of `apps/collector/src` and to the two shared leaf modules. During the step, a `pending` list names each file that is not clean, and each task removes its names. At the end the list is gone. The dependency rules do not change. `storage/` imports no other collector directory, so `BatchValues` stays in `storage/` and `JsonRecord` stays in `transcript/`. |
+| Architecture | The structure rule applies to all of `apps/collector/src` and to the two shared leaf modules. During the step, a `pending` list named each file that was not clean, and each task removed its names. The list is gone. The dependency rules did not change. `storage/` imports no other collector directory, so `BatchValues` is in `storage/` and `JsonRecord` is in `transcript/`. |
 | Interface | No TypeSpec change. No `.tsp` file declares one of the 260 functions as an operation. The TypeScript names that a caller imports change. |
 
-Many functions have a caller in a different directory. Thus the step starts with one task for the
-shared rules, the border task. After it, no remaining function has a caller in another task area, and
-the other four tasks can run at the same time in separate checkouts.
+Many functions had a caller in a different directory. Thus the step started with one task for the
+shared rules, the border task. After it, no remaining function had a caller in another task area, and
+the other four tasks ran at the same time in separate checkouts.
 
 | Task | Files | Functions |
 | --- | --- | ---: |
@@ -295,7 +295,7 @@ the other four tasks can run at the same time in separate checkouts.
 | 4d | `storage/` | 133 |
 
 The API replays each stored write through `InMemoryCollectorStorage`, so the border task and task 4d
-must pass `check:collector-api` and `check:collector-postgres`.
+had to pass `check:collector-api` and `check:collector-postgres`.
 
 The rules for each conversion:
 
@@ -354,6 +354,33 @@ Four names need a reason:
   and the session metadata hold it.
 - **`ClaudeAssistantRecord` has the rule of `claude-usage.ts` only.** `ClaudeChat.read` applies its rule
   to user records too, so the two rules do not give the same result for each input.
+
+The results:
+
+- **The conversion.** The 260 functions are 254 methods, because twelve copies of a rule became six
+  methods of `JsonRecord` and `StreamKeys`. Of the 254 methods, 165 are private and 8 are instance
+  methods. The step made 23 classes in `apps/collector/src` and 2 classes in `packages/shared`. It added
+  no test and no scenario.
+- **Statement comparison.** A script read each function before the step and its method after the step.
+  It replaced each old name with the new name and compared the tokens. Of the 260 bodies, 247 have the
+  same tokens. The other 13 are different by design: six copies that `JsonRecord` replaced had a
+  different form of the same rule, the six decisions of `CheckpointTransition` start with
+  `const { batch, current } = this;`, and `ClaudeEarlierCopies.assess` calls `this.unreadable`.
+- **Review.** Five independent reviews, one for each task, compared the old statements with the new
+  statements. They found no behavior difference.
+
+Changes of step 4 for a TypeScript caller. No `.tsp` file changed. The exported functions are members of
+exported classes:
+
+- **`@tracerelic/shared`.** `RecordedInstant` (`isTimestamp`, `parse`, `compare`) replaces
+  `isHistoryTimestamp`, `recordedInstant` and `compareRecordedInstants`. `ClaudeTranscriptCopy` (`stem`,
+  `fallbackFields`) replaces `claudeCopyStem` and `claudeCopyFallbackFields`.
+- **`@tracerelic/collector/storage`.** `LegacyScannerSource` (`location`, `stream`, `line`,
+  `needsHistoryVerification`, `historyDiagnostic`) and `SourceScopes.matches` replace six functions.
+  `StreamKeys` is new.
+- **`@tracerelic/collector/wire-contract`.** `PackedBatches` (`pack`, `unpack`, `digest`, `stateBytes`,
+  `fitsWireRecords`, `decodeBase64`) replaces six functions.
+- **`cli.ts`.** `CollectorCli.run` replaces `runCollectorCli`.
 
 ### Step 5. Finish
 
@@ -421,9 +448,6 @@ Two decisions are open for the owner. The contracts state both points as precond
   contract. Each pass class receives its history class as a `Pick` of the methods that it calls.
 - **Knip does not see an import through `#src/…`.** The package export `./scan` exports the port types,
   and the mock provider and the tests import them through the package.
-
-Step 4 adds these points:
-
 - **A static method that is used as a value must not use `this`.** A caller names a static helper
   through its class, also inside the class.
 - **Pairs that look alike and stay two rules.** `StreamKeys.stream` and `StreamKeys.sourceId` give

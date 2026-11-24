@@ -9,19 +9,6 @@ export type PendingScan = PendingTarget & {
   sourceFile?: string;
 };
 
-function target(reason: PendingScan["reason"], key: StreamKey | SourceScope, byteRange?: ByteRange): PendingTarget {
-  const { harness, installationId } = key;
-  const installation = installationId === undefined ? {} : { installationId };
-  if ("root" in key) {
-    const { root, projectPaths, sessionIds } = key;
-    return { reason: reason === "source-changed" ? reason : "storage-unavailable", scope: { harness, root, ...installation, ...(sessionIds && { sessionIds: [...sessionIds] }),
-      ...(projectPaths && { projectPaths: [...projectPaths] }) } };
-  }
-  const { sessionId, streamId } = key;
-  return { reason, source: { harness, sessionId, streamId, ...installation },
-    ...(byteRange && { byteRange: { startOffset: byteRange.startOffset, endOffset: byteRange.endOffset } }) };
-}
-
 export class ScanPendingError extends Error {
   readonly pending: PendingScan;
   private timed = false;
@@ -49,8 +36,21 @@ export class ScanPendingError extends Error {
     this.name = "ScanPendingError";
     this.pending = {
       status: "pending",
-      ...target(reason, key, byteRange),
+      ...ScanPendingError.target(reason, key, byteRange),
       retryAt: ScanPendingError.retryAt(Date.now(), retryAfterMs),
     };
+  }
+
+  private static target(reason: PendingScan["reason"], key: StreamKey | SourceScope, byteRange?: ByteRange): PendingTarget {
+    const { harness, installationId } = key;
+    const installation = installationId === undefined ? {} : { installationId };
+    if ("root" in key) {
+      const { root, projectPaths, sessionIds } = key;
+      return { reason: reason === "source-changed" ? reason : "storage-unavailable", scope: { harness, root, ...installation, ...(sessionIds && { sessionIds: [...sessionIds] }),
+        ...(projectPaths && { projectPaths: [...projectPaths] }) } };
+    }
+    const { sessionId, streamId } = key;
+    return { reason, source: { harness, sessionId, streamId, ...installation },
+      ...(byteRange && { byteRange: { startOffset: byteRange.startOffset, endOffset: byteRange.endOffset } }) };
   }
 }

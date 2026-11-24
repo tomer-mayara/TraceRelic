@@ -1,5 +1,5 @@
 import type { LocalHistoryEntry } from "../history/history-provider.ts";
-import { isHistoryTimestamp } from "@tracerelic/shared";
+import { RecordedInstant } from "@tracerelic/shared";
 import { JsonlRecords } from "./jsonl-records.ts";
 import type {
   BatchRecords, ReadPosition, RecordBatch, SelectedFile, Transcript, TranscriptEntry, TranscriptSource,
@@ -86,7 +86,7 @@ export class TranscriptBatches {
         records.entries.push({ harness, sessionId, sourceFile: file.sourceFile, record, lineNumber, startOffset, endOffset: offset,
           ...(source.isConversation(record) && { recordPrefixDigest: hash.copy().digest("hex") }),
           ...(offset === source.blankPrefixHeaderEnd && { afterBlankPrefix: true }),
-          ...(isHistoryTimestamp(timestamp) ? { timestamp } : {}) });
+          ...(RecordedInstant.isTimestamp(timestamp) ? { timestamp } : {}) });
       } else if (!record && !JsonlRecords.isBlankLine(line)) {
         (records.damagedLines ??= []).push({ lineNumber, startOffset, endOffset: offset });
       }

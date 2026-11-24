@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ScanPendingError } from "#src/scan/scan-pending";
-import { ScanRejectedError, rejectedBatch } from "#src/scan/scan-rejected";
+import { ScanRejectedError } from "#src/scan/scan-rejected";
 import { ScheduledScanner } from "#src/watch/scheduled-scanner";
 import { StorageAuthenticationError } from "#src/storage/collector-storage";
 import { source } from "../../fixtures/collector-storage-fixture.ts";
@@ -136,7 +136,7 @@ test("a pending deadline that elapsed during a scan waits for the next regular t
 
 test("rejected and failed passes report their outcome and retry on regular ticks", async () => {
   const f = new ScheduledScannerFixture();
-  const rejection = rejectedBatch(source, { startOffset: 1, endOffset: 3 });
+  const rejection = ScanRejectedError.batch(source, { startOffset: 1, endOffset: 3 });
   const failure = new Error("private transcript text");
   f.work = async () => { throw new ScanRejectedError([], [rejection]); };
   const done = f.run();

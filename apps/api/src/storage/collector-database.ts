@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { DatabaseError, Pool, type PoolClient, type QueryResultRow } from "pg";
 import type { CollectorScope } from "../collector-credentials.ts";
 import type { SessionRevision } from "@tracerelic/collector/memory-storage";
-import { matchesSourceScope, needsHistoryVerification, sourceHistoryDiagnostic, StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint,
+import { LegacyScannerSource, SourceScopes, StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint,
   type CheckpointSnapshot, type Message, type PresenceWrite, type SessionKey, type SessionView,
   type SourceScope, type StreamKey, type Usage } from "@tracerelic/collector/storage";
 import type { PersistedSession, RecordChanges, SessionRecords } from "./collector-projection.ts";
@@ -79,13 +79,13 @@ async function flagUnverifiedHistory(sql: Queries): Promise<void> {
       if (!source || !prior) continue;
       const key = sessionKey(workspace_key, source);
       let location = reset ? write.value.sourceObservation?.location : inventory?.location;
-      if (reset && !location && !needsHistoryVerification(source, prior)) {
+      if (reset && !location && !LegacyScannerSource.needsHistoryVerification(source, prior)) {
         const [saved] = await sql.rows<Pick<Row, "inventory">>(`SELECT inventory FROM tracerelic_collector.sources
           WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 AND installation_key=$4 AND stream_key=$5`,
         [...key, identity(source.installationId), identity(source.streamId)]);
         location = saved?.inventory?.location;
       }
-      if (!needsHistoryVerification(source, prior, location)) continue;
+      if (!LegacyScannerSource.needsHistoryVerification(source, prior, location)) continue;
       const [row] = await sql.rows<{ summary: Omit<SessionView, "messages" | "usage"> }>(
         "SELECT summary FROM tracerelic_collector.sessions WHERE workspace_key=$1 AND harness=$2 AND session_key=$3 FOR UPDATE", key);
       const summary = row.summary;
@@ -93,7 +93,7 @@ async function flagUnverifiedHistory(sql: Queries): Promise<void> {
       if (diagnostics.some(d => d.code === "unverified-source-history" && d.streamId === source.streamId && d.installationId === source.installationId)) continue;
       const coverage = summary.observedTotalTokens === null ? "unknown" : "partial";
       await sql.rows("UPDATE tracerelic_collector.sessions SET summary=$4 WHERE workspace_key=$1 AND harness=$2 AND session_key=$3",
-        [...key, JSON.stringify({ ...summary, coverage, usageDiagnostics: [...diagnostics, sourceHistoryDiagnostic(source)] })]);
+        [...key, JSON.stringify({ ...summary, coverage, usageDiagnostics: [...diagnostics, LegacyScannerSource.historyDiagnostic(source)] })]);
     }
   }
   await sql.rows("CLOSE prior_sources");
@@ -341,7 +341,7 @@ export class PostgresCollectorDatabase {
              = (src.workspace_key,src.harness,src.session_key,src.installation_key,src.stream_key))
        ORDER BY s.first_position, src.first_position`,
       [identity(workspaceId), scope.harness, identity(scope.installationId), identity(scope.root)]);
-    return rows.filter(({ inventory }) => matchesSourceScope(scope, inventory.source, inventory.location))
+    return rows.filter(({ inventory }) => SourceScopes.matches(scope, inventory.source, inventory.location))
       .map(({ inventory, version }) => ({ ...inventory, version }));
   }
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import type { TestContext } from "node:test";
-import { runCollectorCli } from "#src/cli";
+import { CollectorCli } from "#src/cli";
 import type { CollectorStorage } from "../../src/storage/collector-storage.ts";
 
 export function captureCollectorStderr(t?: TestContext) {
@@ -25,7 +25,7 @@ export async function captureCollectorCli(t: TestContext, args: string[], storag
   const stderr = captureCollectorStderr();
   const out = t.mock.method(console, "log", (line: string) => { stdout.push(line); });
   try {
-    return { code: await runCollectorCli(args, storage), stdout, stderr: stderr.lines };
+    return { code: await CollectorCli.run(args, storage), stdout, stderr: stderr.lines };
   } finally {
     out.mock.restore();
     stderr.restore();

@@ -1,50 +1,11 @@
-import { isDeepStrictEqual } from "node:util";
-import { TranscriptChangedError, type TranscriptSource, type VerifiedPrefix } from "../transcript/index.ts";
+import { TranscriptChangedError, type TranscriptSource } from "../transcript/index.ts";
 import {
   type Batch, type ByteRange, type Checkpoint, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
   type SourceScope, type StreamKey, StorageBackoffError, StorageUnavailableError,
 } from "../storage/collector-storage.ts";
+import { CheckpointProof } from "./checkpoint-proof.ts";
 import { ScanPendingError } from "./scan-pending.ts";
-import { rejectedBatch, type RejectedBatch } from "./scan-rejected.ts";
-
-export async function readStorage<T>(target: StreamKey | SourceScope, read: () => Promise<T>, byteRange?: ByteRange): Promise<T> {
-  try {
-    return await read();
-  } catch (error) {
-    if (!StorageUnavailableError.is(error)) throw error;
-    const delay = error instanceof StorageBackoffError ? error.retryAfterMs : undefined;
-    throw new ScanPendingError("storage-unavailable", target, byteRange, delay);
-  }
-}
-
-export function checkpointPrefixes(checkpoint: Checkpoint | null): VerifiedPrefix[] {
-  if (!checkpoint?.prefixDigest) return [];
-  const accepted = { offset: checkpoint.offset, prefixDigest: checkpoint.prefixDigest };
-  const prefixes = checkpoint.replayThrough ? [accepted, checkpoint.replayThrough] : [accepted];
-  const fork = checkpoint.codexFork?.inheritedThrough;
-  if (fork?.prefixDigest && fork.offset > accepted.offset) prefixes.push({ offset: fork.offset, prefixDigest: fork.prefixDigest });
-  return prefixes;
-}
-
-export function verifiedCheckpoint(checkpoint: Checkpoint, digests: ReadonlyMap<number, string>): boolean {
-  return !!checkpoint.prefixDigest && checkpointPrefixes(checkpoint).every(prefix => digests.get(prefix.offset) === prefix.prefixDigest);
-}
-
-export async function captureProof(source: Pick<TranscriptSource<unknown>, "fileSize" | "prefixDigests">, checkpoint: Checkpoint | null) {
-  if (!checkpoint?.prefixDigest) return;
-  const offsets = checkpointPrefixes(checkpoint).map(p => p.offset);
-  if (offsets.some(end => end > source.fileSize)) return;
-  const prefixes = await source.prefixDigests(offsets);
-  const digests = new Map(prefixes.map(p => [p.offset, p.prefixDigest]));
-  if (verifiedCheckpoint(checkpoint, digests)) return digests;
-}
-
-export function sameCheckpoint(left: Checkpoint | null, right: Checkpoint | null): boolean {
-  if (!left || !right) return left === right;
-  return left.offset === right.offset && left.prefixDigest === right.prefixDigest && left.parserState === right.parserState
-    && left.evidenceVersion === right.evidenceVersion && left.claudeCallOrigins === right.claudeCallOrigins
-    && isDeepStrictEqual(left.replayThrough, right.replayThrough) && isDeepStrictEqual(left.codexFork, right.codexFork);
-}
+import { ScanRejectedError, type RejectedBatch } from "./scan-rejected.ts";
 
 export interface ScanRestart extends CheckpointSnapshot {
   reset?: true;
@@ -57,6 +18,17 @@ export class ScanRecovery {
     private readonly storage: Pick<CollectorStorage, "commit" | "readCheckpoint">,
     private readonly transcript: Pick<TranscriptSource<unknown>, "fileSize" | "prefixDigests">,
   ) {}
+
+  /** Read from storage. If the request fails in transport, the scan of the target becomes pending. */
+  static async read<T>(target: StreamKey | SourceScope, read: () => Promise<T>, byteRange?: ByteRange): Promise<T> {
+    try {
+      return await read();
+    } catch (error) {
+      if (!StorageUnavailableError.is(error)) throw error;
+      const delay = error instanceof StorageBackoffError ? error.retryAfterMs : undefined;
+      throw new ScanPendingError("storage-unavailable", target, byteRange, delay);
+    }
+  }
 
   /** Return a rejection or the durable starting point for a replacement cursor. */
   async commit(batch: Batch, previous: Checkpoint | null, startOffset: number): Promise<ScanRestart | RejectedBatch | undefined> {
@@ -72,15 +44,15 @@ export class ScanRecovery {
       outcome = "storage-unavailable";
     }
     if (outcome === "committed") return;
-    if (outcome === "invalid") return rejectedBatch(batch.source, { startOffset, endOffset });
-    const winner = await readStorage(batch.source, () => this.storage.readCheckpoint(batch.source), byteRange);
+    if (outcome === "invalid") return ScanRejectedError.batch(batch.source, { startOffset, endOffset });
+    const winner = await ScanRecovery.read(batch.source, () => this.storage.readCheckpoint(batch.source), byteRange);
     const reason = outcome === "conflict" ? "version-conflict" : "storage-unavailable";
     const pending = () => new ScanPendingError(reason, batch.source, byteRange);
     const offset = winner.checkpoint?.offset ?? 0;
     if (winner.version <= batch.expectedVersion || (!winner.checkpoint && previous)) throw pending();
-    if (offset === this.lastRecoveryOffset && !sameCheckpoint(winner.checkpoint, batch.checkpoint)) throw pending();
+    if (offset === this.lastRecoveryOffset && !CheckpointProof.same(winner.checkpoint, batch.checkpoint)) throw pending();
     // A session version alone can explain a conflict, but cannot confirm a lost write on this source.
-    if (sameCheckpoint(winner.checkpoint, previous)) {
+    if (CheckpointProof.same(winner.checkpoint, previous)) {
       if (outcome === "storage-unavailable") throw pending();
       if (batch.resetFrom) {
         // Another source advanced the session. This source still needs the same compare-and-reset.
@@ -96,7 +68,7 @@ export class ScanRecovery {
 
   private async matchesCapture(checkpoint: Checkpoint): Promise<boolean> {
     try {
-      return !!await captureProof(this.transcript, checkpoint);
+      return !!await CheckpointProof.capture(this.transcript, checkpoint);
     } catch (error) {
       if (error instanceof TranscriptChangedError) return false;
       throw error;

@@ -1,20 +1,8 @@
 import type { Batch, CodexCallClaim, Usage } from "../collector-storage.ts";
 import type { CodexCallAliases } from "./codex-call-aliases.ts";
-import { isIdentifier, isNativeCodexCall, isRecord } from "../batch-values.ts";
+import { BatchValues } from "../batch-values.ts";
 
 type ParentLookup = (sessionId: string) => string | undefined;
-
-/** Check the whole chain before using it. A cycle cannot establish an owner. */
-function hasAncestor(child: string, ancestor: string, parentOf: ParentLookup): boolean {
-  const visited = new Set([child]);
-  let found = false;
-  for (let next = parentOf(child); next !== undefined; next = parentOf(next)) {
-    if (visited.has(next)) return false;
-    visited.add(next);
-    found ||= next === ancestor;
-  }
-  return found;
-}
 
 interface OwnershipUpdate {
   sessionId: string;
@@ -64,6 +52,18 @@ export class CodexCallOwners {
   private bySession = new Map<string, SessionCallBindings>();
   private receipts?: ClaimReceipt;
 
+  /** Check the whole chain before using it. A cycle cannot establish an owner. */
+  private static hasAncestor(child: string, ancestor: string, parentOf: ParentLookup): boolean {
+    const visited = new Set([child]);
+    let found = false;
+    for (let next = parentOf(child); next !== undefined; next = parentOf(next)) {
+      if (visited.has(next)) return false;
+      visited.add(next);
+      found ||= next === ancestor;
+    }
+    return found;
+  }
+
   visible(sessionId: string, usage: Usage[], aliases?: CodexCallAliases): Usage[] {
     const bindings = this.bySession.get(sessionId);
     if (!bindings) return usage;
@@ -85,7 +85,7 @@ export class CodexCallOwners {
     const update: OwnershipUpdate = { sessionId, bindings: new SessionCallBindings(), decisions: new Map(), transfers: new Set() };
     if (claims?.length) update.receipt = { source, sessionId, claims, previous: this.receipts };
     const calls = new Set([...stored, ...batch.usage, ...(batch.usageWindows ?? []).flatMap(window => window.parts)]
-      .filter(isNativeCodexCall).map(record => record.id));
+      .filter(BatchValues.isNativeCodexCall).map(record => record.id));
     for (const claim of claims ?? []) {
       if (!this.validClaim(batch, claim, calls, parentOf) || !update.bindings.bind(claim, known)) return null;
       this.recordCandidate(update.decisions, claim);
@@ -142,7 +142,7 @@ export class CodexCallOwners {
     for (const [id, decision] of update.decisions) {
       let owner = decision.owner;
       for (const candidate of decision.candidates ?? []) {
-        if (candidate !== owner && hasAncestor(owner, candidate, parentOf)) owner = candidate;
+        if (candidate !== owner && CodexCallOwners.hasAncestor(owner, candidate, parentOf)) owner = candidate;
       }
       if (owner !== decision.owner) {
         update.decisions.set(id, { ...decision, owner });
@@ -153,12 +153,12 @@ export class CodexCallOwners {
   }
 
   private validClaim(batch: Batch, claim: CodexCallClaim, calls: ReadonlySet<string>, parentOf: ParentLookup): boolean {
-    if (!isRecord(claim) || !isIdentifier(claim.ownerSessionId) || !isIdentifier(claim.usageId)
+    if (!BatchValues.isRecord(claim) || !BatchValues.isIdentifier(claim.ownerSessionId) || !BatchValues.isIdentifier(claim.usageId)
       || typeof claim.providerId !== "string" || !/^[a-f0-9]{64}$/.test(claim.providerId)) return false;
     if (claim.ownerSessionId === batch.source.sessionId) return calls.has(claim.usageId);
     const proof = batch.checkpoint.codexFork;
     return proof?.inheritedThrough !== undefined && claim.ownerSessionId === proof.parentSessionId
-      && hasAncestor(batch.source.sessionId, claim.ownerSessionId, parentOf)
+      && CodexCallOwners.hasAncestor(batch.source.sessionId, claim.ownerSessionId, parentOf)
       && (calls.has(claim.usageId) || /^call:native:[a-f0-9]{64}$/.test(claim.usageId));
   }
 

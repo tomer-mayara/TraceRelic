@@ -1,8 +1,8 @@
 import { isIPv4 } from "node:net";
-import { matchesSourceScope, StorageAuthenticationError, StorageBackoffError, StorageUnavailableError,
+import { SourceScopes, StorageAuthenticationError, StorageBackoffError, StorageUnavailableError,
   type AcknowledgedSource, type Batch, type Checkpoint, type CheckpointSnapshot, type CollectorStorage, type CommitResult,
   type PresenceWrite, type SessionKey, type SessionView, type SourceLocation, type SourceScope, type StreamKey } from "../collector-storage.ts";
-import { batchPartBytes, collectorRequestBytes, CollectorWireContract, fitsWireRecords, legacyScannerStream, packBatch } from "./collector-wire-contract.ts";
+import { batchPartBytes, collectorRequestBytes, CollectorWireContract, LegacyScannerSource, PackedBatches } from "./collector-wire-contract.ts";
 
 type Route = "session" | "checkpoint" | "sources" | "batches" | "presence";
 type Transport = (url: URL, init: RequestInit) => Promise<Response>;
@@ -15,44 +15,6 @@ interface HttpOptions {
 const invalidResponse = "Collector API returned an invalid response";
 const writeStatus = { committed: 200, conflict: 409, invalid: 422 } satisfies Record<CommitResult, number>;
 
-function apiOrigin(address: string): string {
-  const url = URL.parse(address);
-  if (url && url.href === url.origin + "/") {
-    const loopback = url.hostname === "localhost" || url.hostname === "[::1]" || (isIPv4(url.hostname) && url.hostname.startsWith("127."));
-    if (url.protocol === "https:" || (url.protocol === "http:" && loopback)) return url.origin;
-  }
-  throw new Error("Collector API URL must be an HTTPS origin or an HTTP loopback origin");
-}
-
-function httpDate(value: string, now: number): number | undefined {
-  // RFC 9110 section 5.6.7 defines two older spellings and a 50-year cutoff for two-digit years.
-  const rfc850 = /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-([A-Z][a-z]{2})-(\d{2}) (\d{2}:\d{2}:\d{2}) GMT$/.exec(value);
-  const asctime = /^([A-Z][a-z]{2}) ([A-Z][a-z]{2}) ( \d|\d{2}) (\d{2}:\d{2}:\d{2}) (\d{4})$/.exec(value);
-  let canonical = value;
-  if (rfc850) {
-    const [, weekday, day, month, shortYear, time] = rfc850;
-    const cutoff = new Date(now);
-    cutoff.setUTCFullYear(cutoff.getUTCFullYear() + 50);
-    let year = cutoff.getUTCFullYear() - (cutoff.getUTCFullYear() - Number(shortYear)) % 100;
-    if (Date.parse(`${day} ${month} ${year} ${time} GMT`) > cutoff.getTime()) year -= 100;
-    canonical = `${weekday.slice(0, 3)}, ${day} ${month} ${year} ${time} GMT`;
-  } else if (asctime) {
-    const [, weekday, month, day, time, year] = asctime;
-    canonical = `${weekday}, ${day.replace(" ", "0")} ${month} ${year} ${time} GMT`;
-  }
-  if (canonical.length !== 29) return;
-  const normalized = canonical.replace(" 23:59:60 GMT", " 23:59:59 GMT");
-  const timestamp = Date.parse(normalized);
-  if (new Date(timestamp).toUTCString() === normalized) return timestamp + (canonical !== normalized ? 1000 : 0);
-}
-
-function retryAfter(value: string | null, now: number): number | undefined {
-  if (value === null) return;
-  if (/^\d+$/.test(value)) return Math.min(Number(value) * 1000, Number.MAX_SAFE_INTEGER);
-  const timestamp = httpDate(value, now);
-  return timestamp === undefined ? undefined : timestamp - now;
-}
-
 export class HttpCollectorStorage implements CollectorStorage {
   readonly #authorization: string;
   private readonly origin: string;
@@ -62,7 +24,7 @@ export class HttpCollectorStorage implements CollectorStorage {
   private readonly contract = new CollectorWireContract();
 
   constructor(apiUrl: string, token: string, options: HttpOptions = {}) {
-    this.origin = apiOrigin(apiUrl);
+    this.origin = HttpCollectorStorage.apiOrigin(apiUrl);
     if (typeof token !== "string" || !/^[a-z0-9._~+/-]+=*$/i.test(token)) throw new StorageAuthenticationError();
     this.#authorization = "Bearer " + token;
     this.transport = options.fetch ?? globalThis.fetch;
@@ -71,6 +33,44 @@ export class HttpCollectorStorage implements CollectorStorage {
       throw new Error("Collector API timeout must be a positive 32-bit integer in milliseconds");
     }
     this.now = options.now ?? Date.now;
+  }
+
+  private static apiOrigin(address: string): string {
+    const url = URL.parse(address);
+    if (url && url.href === url.origin + "/") {
+      const loopback = url.hostname === "localhost" || url.hostname === "[::1]" || (isIPv4(url.hostname) && url.hostname.startsWith("127."));
+      if (url.protocol === "https:" || (url.protocol === "http:" && loopback)) return url.origin;
+    }
+    throw new Error("Collector API URL must be an HTTPS origin or an HTTP loopback origin");
+  }
+
+  private static httpDate(value: string, now: number): number | undefined {
+    // RFC 9110 section 5.6.7 defines two older spellings and a 50-year cutoff for two-digit years.
+    const rfc850 = /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), (\d{2})-([A-Z][a-z]{2})-(\d{2}) (\d{2}:\d{2}:\d{2}) GMT$/.exec(value);
+    const asctime = /^([A-Z][a-z]{2}) ([A-Z][a-z]{2}) ( \d|\d{2}) (\d{2}:\d{2}:\d{2}) (\d{4})$/.exec(value);
+    let canonical = value;
+    if (rfc850) {
+      const [, weekday, day, month, shortYear, time] = rfc850;
+      const cutoff = new Date(now);
+      cutoff.setUTCFullYear(cutoff.getUTCFullYear() + 50);
+      let year = cutoff.getUTCFullYear() - (cutoff.getUTCFullYear() - Number(shortYear)) % 100;
+      if (Date.parse(`${day} ${month} ${year} ${time} GMT`) > cutoff.getTime()) year -= 100;
+      canonical = `${weekday.slice(0, 3)}, ${day} ${month} ${year} ${time} GMT`;
+    } else if (asctime) {
+      const [, weekday, month, day, time, year] = asctime;
+      canonical = `${weekday}, ${day.replace(" ", "0")} ${month} ${year} ${time} GMT`;
+    }
+    if (canonical.length !== 29) return;
+    const normalized = canonical.replace(" 23:59:60 GMT", " 23:59:59 GMT");
+    const timestamp = Date.parse(normalized);
+    if (new Date(timestamp).toUTCString() === normalized) return timestamp + (canonical !== normalized ? 1000 : 0);
+  }
+
+  private static retryAfter(value: string | null, now: number): number | undefined {
+    if (value === null) return;
+    if (/^\d+$/.test(value)) return Math.min(Number(value) * 1000, Number.MAX_SAFE_INTEGER);
+    const timestamp = HttpCollectorStorage.httpDate(value, now);
+    return timestamp === undefined ? undefined : timestamp - now;
   }
 
   async readSession({ harness, sessionId }: SessionKey): Promise<SessionView | null> {
@@ -94,14 +94,14 @@ export class HttpCollectorStorage implements CollectorStorage {
       if (!this.contract.is("AcknowledgedSource", row)) throw new Error(invalidResponse);
       // Local discovery omits the installation field when the credential supplies it.
       if (scope.installationId === undefined) delete row.source.installationId;
-      if (!matchesSourceScope(scope, row.source, row.location)) throw new Error(invalidResponse);
+      if (!SourceScopes.matches(scope, row.source, row.location)) throw new Error(invalidResponse);
       return row;
     });
   }
 
   async resolveSource(source: StreamKey, location: SourceLocation, verify: (checkpoint: Checkpoint) => Promise<boolean>): Promise<StreamKey> {
     const { harness, sessionId, installationId } = source;
-    const legacy = legacyScannerStream(harness, location);
+    const legacy = LegacyScannerSource.stream(harness, location);
     if (!legacy) return source;
     const alternate = source.streamId === location.path ? legacy : source.streamId === legacy ? location.path : undefined;
     if (!alternate) return source;
@@ -117,10 +117,10 @@ export class HttpCollectorStorage implements CollectorStorage {
   async commit(batch: Batch): Promise<CommitResult> {
     const body = JSON.stringify(batch);
     if (Buffer.byteLength(body) <= collectorRequestBytes) return this.write("batches", body);
-    if (!fitsWireRecords(batch) || Buffer.byteLength(JSON.stringify(batch.source)) > collectorRequestBytes) return "invalid";
+    if (!PackedBatches.fitsWireRecords(batch) || Buffer.byteLength(JSON.stringify(batch.source)) > collectorRequestBytes) return "invalid";
     const snapshot = await this.readCheckpoint(batch.source);
     if (snapshot.version !== batch.expectedVersion || (snapshot.checkpoint?.offset ?? 0) !== batch.expectedOffset) return "conflict";
-    const { header, bytes } = packBatch(batch, body, snapshot.checkpoint?.parserState);
+    const { header, bytes } = PackedBatches.pack(batch, body, snapshot.checkpoint?.parserState);
     const final = JSON.stringify(header);
     if (Buffer.byteLength(final) > collectorRequestBytes) return "invalid";
     for (let index = 0; index < (header.parts ?? 0); index++) {
@@ -162,7 +162,7 @@ export class HttpCollectorStorage implements CollectorStorage {
       if (route === "batches" && status === 413) return { status, value: undefined };
       if (status === 401 || status === 403) throw new StorageAuthenticationError();
       if (status === 408 || status === 429 || (status >= 500 && status < 600)) {
-        throw new StorageBackoffError(retryAfter(response.headers.get("retry-after"), this.now()));
+        throw new StorageBackoffError(HttpCollectorStorage.retryAfter(response.headers.get("retry-after"), this.now()));
       }
       throw new Error("Collector API returned HTTP " + status);
     }

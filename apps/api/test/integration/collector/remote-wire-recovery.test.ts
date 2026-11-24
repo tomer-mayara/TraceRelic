@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { ScanRejectedError } from "@tracerelic/collector/scan";
 import { CollectorCommand } from "@tracerelic/collector/command";
 import { CodexRolloutFixture } from "#collector-fixture/codex-rollout-fixture";
-import { unpackBatch, packBatch, stateBytes, batchPartBytes } from "@tracerelic/collector/wire-contract";
+import { PackedBatches, batchPartBytes } from "@tracerelic/collector/wire-contract";
 import { CollectorApiFixture } from "../../fixtures/collector-api-fixture.ts";
 import { batch, scope, source } from "../../fixtures/collector-wire-payloads.ts";
 import { stagedUploads } from "../../fixtures/collector-database-write.ts";
@@ -19,10 +19,10 @@ test("a packed append copies old parser bytes exactly, including replay reservat
   const previous = parser(old);
   const input = { ...batch, expectedVersion: 1, expectedOffset: batch.checkpoint.offset,
     checkpoint: { ...batch.checkpoint, offset: 300, parserState: parser([...old, one("last")]) }, repairEvidenceFrom: { ...batch.checkpoint, parserState: previous } };
-  const encoded = packBatch(input, JSON.stringify(input), previous);
+  const encoded = PackedBatches.pack(input, JSON.stringify(input), previous);
   assert(encoded.header.base);
   assert(encoded.bytes.length < 32_768);
-  assert.deepEqual(unpackBatch(encoded.bytes, encoded.header, stateBytes(previous)), input);
+  assert.deepEqual(PackedBatches.unpack(encoded.bytes, encoded.header, PackedBatches.stateBytes(previous)), input);
 });
 
 test("staged data survives an API restart and becomes visible only after an authenticated, verified final write", async t => {
@@ -30,7 +30,7 @@ test("staged data survives an API restart and becomes visible only after an auth
   t.after(() => fixture.close());
   const large = { ...batch, messages: Array.from({ length: 1400 }, (_, i) =>
     ({ ...batch.messages[0], id: "m-" + i, sourceOrder: i + 1, text: "ordinary message ".repeat(60) })) };
-  const { header, bytes } = packBatch(large, JSON.stringify(large));
+  const { header, bytes } = PackedBatches.pack(large, JSON.stringify(large));
   assert(header.parts && header.parts > 1);
   const api = await fixture.start();
   for (let index = 0; index < header.parts; index++) {

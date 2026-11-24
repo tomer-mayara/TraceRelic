@@ -5,9 +5,9 @@ export class TextOccurrences {
 
   static restore(state: unknown): TextOccurrences {
     const occurrences = new TextOccurrences();
-    for (const [digest, count] of Object.entries(stateRecord(state))) {
+    for (const [digest, count] of Object.entries(ParserState.record(state))) {
       if (!/^[a-f0-9]{64}$/.test(digest) || typeof count !== "number" || !Number.isSafeInteger(count) || count < 1) {
-        invalidState();
+        ParserState.invalid();
       }
       occurrences.counts.set(digest, count);
     }
@@ -15,7 +15,7 @@ export class TextOccurrences {
   }
 
   identify(fields: readonly unknown[]): string {
-    const digest = jsonDigest(fields);
+    const digest = ParserState.digest(fields);
     const occurrence = (this.counts.get(digest) ?? 0) + 1;
     this.counts.set(digest, occurrence);
     return `text:${digest}:${occurrence}`;
@@ -26,23 +26,26 @@ export class TextOccurrences {
   }
 }
 
-export function jsonDigest(value: string | readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
-}
+/** The digest of a JSON value, and the checks of a saved parser state. A parser state that is not correct causes an error. */
+export class ParserState {
+  static digest(value: string | readonly unknown[]): string {
+    return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  }
 
-export function stateRecord(value: unknown, fields?: readonly string[]): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) invalidState();
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== null && prototype !== Object.prototype) invalidState();
-  if (fields && Object.keys(value).some(key => !fields.includes(key))) invalidState();
-  return value as Record<string, unknown>;
-}
+  static record(value: unknown, fields?: readonly string[]): Record<string, unknown> {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) ParserState.invalid();
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== null && prototype !== Object.prototype) ParserState.invalid();
+    if (fields && Object.keys(value).some(key => !fields.includes(key))) ParserState.invalid();
+    return value as Record<string, unknown>;
+  }
 
-export function stateString(value: unknown): string | undefined {
-  if (value !== undefined && (typeof value !== "string" || !value.length)) invalidState();
-  return value;
-}
+  static string(value: unknown): string | undefined {
+    if (value !== undefined && (typeof value !== "string" || !value.length)) ParserState.invalid();
+    return value;
+  }
 
-export function invalidState(): never {
-  throw new Error("Invalid chat parser state");
+  static invalid(): never {
+    throw new Error("Invalid chat parser state");
+  }
 }

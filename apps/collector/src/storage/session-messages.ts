@@ -1,64 +1,11 @@
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { Batch, Message } from "./collector-storage.ts";
-import { definedFields, isCount, isIdentifier, isRecord } from "./batch-values.ts";
-import { hasValidMetadata } from "./session-metadata.ts";
-
-function hasValidMessage(message: Message): boolean {
-  return isRecord(message) && isIdentifier(message.id) && isRecordedTimestamp(message.at)
-    && (message.role === "user" || message.role === "assistant")
-    && typeof message.text === "string"
-    && (message.sourceOrder === undefined || (isCount(message.sourceOrder) && message.sourceOrder > 0))
-    && (message.blockIndex === undefined || isCount(message.blockIndex))
-    && (message.turnId === undefined || isIdentifier(message.turnId))
-    && (message.requestId === undefined || isIdentifier(message.requestId))
-    && hasValidMetadata(message.context);
-}
+import { BatchValues } from "./batch-values.ts";
+import { SessionMetadata } from "./session-metadata.ts";
 
 interface StoredMessage {
   streamId: string;
   value: Message;
-}
-
-function conflictingFields<T extends object>(known: T, incoming: T): boolean {
-  for (const key in incoming) {
-    if (known[key] !== undefined && incoming[key] !== undefined && known[key] !== incoming[key]) return true;
-  }
-  return false;
-}
-
-function replayMessage(known: StoredMessage, incoming: Message, streamId: string): StoredMessage | null {
-  const { sourceOrder, blockIndex, context, ...fields } = incoming;
-  const previous = known.value;
-  if (conflictingFields(previous, fields) || conflictingFields(previous.context ?? {}, context ?? {})) return null;
-  const value = { ...fields, ...previous };
-  if (context) value.context = { ...context, ...previous.context };
-  const positioned = previous.sourceOrder !== undefined || previous.blockIndex !== undefined;
-  const sameRecord = sourceOrder === undefined || previous.sourceOrder === undefined || sourceOrder === previous.sourceOrder;
-  if (!positioned || (streamId === known.streamId && sameRecord)) {
-    if (sourceOrder !== undefined) value.sourceOrder ??= sourceOrder;
-    if (blockIndex !== undefined) value.blockIndex ??= blockIndex;
-  }
-  return { streamId: positioned ? known.streamId : streamId, value };
-}
-
-function orderedMessages(records: Map<string, StoredMessage>): Message[] {
-  const messages: Message[] = [];
-  const positions = new Map<string, number[]>();
-  for (const { streamId, value } of records.values()) {
-    if (value.sourceOrder !== undefined) {
-      const slots = positions.get(streamId) ?? [];
-      slots.push(messages.length);
-      positions.set(streamId, slots);
-    }
-    messages.push(value);
-  }
-  // Order only the slots whose records share a source. Leave unrelated and unpositioned messages in place.
-  for (const slots of positions.values()) {
-    const ordered = slots.map(slot => messages[slot]).sort((left, right) =>
-      (left.sourceOrder ?? 0) - (right.sourceOrder ?? 0) || (left.blockIndex ?? 0) - (right.blockIndex ?? 0));
-    slots.forEach((slot, index) => { messages[slot] = ordered[index]; });
-  }
-  return messages;
 }
 
 interface MessageWrite {
@@ -73,27 +20,6 @@ interface MessageGeneration {
   stream: string;
   generation: number;
   messages: SessionMessages;
-}
-
-function groupOccurrences(write: MessageWrite): Map<string | number, Message[]> | undefined {
-  const origins = new Map<number, string>();
-  for (const origin of write.origins) {
-    if (!isRecord(origin) || !isCount(origin.sourceOrder) || origin.sourceOrder < 1 || origins.has(origin.sourceOrder)
-      || typeof origin.prefixDigest !== "string" || !/^[a-f0-9]{64}$/.test(origin.prefixDigest)
-      || (origin.refinesAccepted !== undefined && origin.refinesAccepted !== true)) return;
-    origins.set(origin.sourceOrder, JSON.stringify([write.path, origin.prefixDigest]));
-  }
-  const groups = new Map<string | number, Message[]>();
-  for (const row of write.rows) {
-    if (!hasValidMessage(row)) return;
-    const proof = row.sourceOrder !== undefined && origins.get(row.sourceOrder);
-    const key = proof || groups.size;
-    const group = groups.get(key) ?? [];
-    group.push(row);
-    groups.set(key, group);
-  }
-  if (origins.size !== [...groups.keys()].filter(key => typeof key === "string").length) return;
-  return groups;
 }
 
 interface History {
@@ -115,7 +41,81 @@ export class SessionMessages {
     this.history = previous?.history;
   }
 
-  ordered(): Message[] { return orderedMessages(this.records); }
+  private static hasValidMessage(message: Message): boolean {
+    return BatchValues.isRecord(message) && BatchValues.isIdentifier(message.id) && isRecordedTimestamp(message.at)
+      && (message.role === "user" || message.role === "assistant")
+      && typeof message.text === "string"
+      && (message.sourceOrder === undefined || (BatchValues.isCount(message.sourceOrder) && message.sourceOrder > 0))
+      && (message.blockIndex === undefined || BatchValues.isCount(message.blockIndex))
+      && (message.turnId === undefined || BatchValues.isIdentifier(message.turnId))
+      && (message.requestId === undefined || BatchValues.isIdentifier(message.requestId))
+      && SessionMetadata.isValid(message.context);
+  }
+
+  private static conflictingFields<T extends object>(known: T, incoming: T): boolean {
+    for (const key in incoming) {
+      if (known[key] !== undefined && incoming[key] !== undefined && known[key] !== incoming[key]) return true;
+    }
+    return false;
+  }
+
+  private static replayMessage(known: StoredMessage, incoming: Message, streamId: string): StoredMessage | null {
+    const { sourceOrder, blockIndex, context, ...fields } = incoming;
+    const previous = known.value;
+    if (SessionMessages.conflictingFields(previous, fields) || SessionMessages.conflictingFields(previous.context ?? {}, context ?? {})) return null;
+    const value = { ...fields, ...previous };
+    if (context) value.context = { ...context, ...previous.context };
+    const positioned = previous.sourceOrder !== undefined || previous.blockIndex !== undefined;
+    const sameRecord = sourceOrder === undefined || previous.sourceOrder === undefined || sourceOrder === previous.sourceOrder;
+    if (!positioned || (streamId === known.streamId && sameRecord)) {
+      if (sourceOrder !== undefined) value.sourceOrder ??= sourceOrder;
+      if (blockIndex !== undefined) value.blockIndex ??= blockIndex;
+    }
+    return { streamId: positioned ? known.streamId : streamId, value };
+  }
+
+  private static orderedMessages(records: Map<string, StoredMessage>): Message[] {
+    const messages: Message[] = [];
+    const positions = new Map<string, number[]>();
+    for (const { streamId, value } of records.values()) {
+      if (value.sourceOrder !== undefined) {
+        const slots = positions.get(streamId) ?? [];
+        slots.push(messages.length);
+        positions.set(streamId, slots);
+      }
+      messages.push(value);
+    }
+    // Order only the slots whose records share a source. Leave unrelated and unpositioned messages in place.
+    for (const slots of positions.values()) {
+      const ordered = slots.map(slot => messages[slot]).sort((left, right) =>
+        (left.sourceOrder ?? 0) - (right.sourceOrder ?? 0) || (left.blockIndex ?? 0) - (right.blockIndex ?? 0));
+      slots.forEach((slot, index) => { messages[slot] = ordered[index]; });
+    }
+    return messages;
+  }
+
+  private static groupOccurrences(write: MessageWrite): Map<string | number, Message[]> | undefined {
+    const origins = new Map<number, string>();
+    for (const origin of write.origins) {
+      if (!BatchValues.isRecord(origin) || !BatchValues.isCount(origin.sourceOrder) || origin.sourceOrder < 1 || origins.has(origin.sourceOrder)
+        || typeof origin.prefixDigest !== "string" || !/^[a-f0-9]{64}$/.test(origin.prefixDigest)
+        || (origin.refinesAccepted !== undefined && origin.refinesAccepted !== true)) return;
+      origins.set(origin.sourceOrder, JSON.stringify([write.path, origin.prefixDigest]));
+    }
+    const groups = new Map<string | number, Message[]>();
+    for (const row of write.rows) {
+      if (!SessionMessages.hasValidMessage(row)) return;
+      const proof = row.sourceOrder !== undefined && origins.get(row.sourceOrder);
+      const key = proof || groups.size;
+      const group = groups.get(key) ?? [];
+      group.push(row);
+      groups.set(key, group);
+    }
+    if (origins.size !== [...groups.keys()].filter(key => typeof key === "string").length) return;
+    return groups;
+  }
+
+  ordered(): Message[] { return SessionMessages.orderedMessages(this.records); }
 
   static apply(previous: SessionMessages | undefined, batch: Batch, stream: string, generation: number): SessionMessages | null {
     const location = batch.sourceObservation?.location;
@@ -189,7 +189,7 @@ export class SessionMessages {
     for (const [index, record] of known.entries()) {
       const incoming = rows[rows.length === 1 ? 0 : index];
       if (rows.length === known.length && incoming.text !== record.value.text) return false;
-      const next = replayMessage(record, { ...incoming, id: record.value.id, text: record.value.text,
+      const next = SessionMessages.replayMessage(record, { ...incoming, id: record.value.id, text: record.value.text,
         blockIndex: record.value.blockIndex }, stream);
       if (!next) return false;
       this.records.set(record.value.id, next);
@@ -202,7 +202,7 @@ export class SessionMessages {
 
   private splitJoined(known: StoredMessage, rows: Message[], stream: string): boolean {
     const first = known.value;
-    const split = rows.map(row => replayMessage({ ...known, value: { ...first,
+    const split = rows.map(row => SessionMessages.replayMessage({ ...known, value: { ...first,
       id: row.id, text: row.text, blockIndex: row.blockIndex } }, row, stream));
     if (split.some(item => !item)) return false;
     // Replace the joined slot in place so messages from independent streams keep their order.
@@ -221,7 +221,7 @@ export class SessionMessages {
   }
 
   private accept(write: MessageWrite): boolean {
-    const groups = groupOccurrences(write);
+    const groups = SessionMessages.groupOccurrences(write);
     if (!groups) return false;
     const refinements = new Set(write.origins.filter(origin => origin.refinesAccepted).map(origin => origin.sourceOrder));
     for (const [key, rows] of groups) {
@@ -234,11 +234,11 @@ export class SessionMessages {
         continue;
       }
       for (const entry of rows) {
-        const value = definedFields(entry);
+        const value = BatchValues.definedFields(entry);
         value.id = this.aliases.get(value.id) ?? value.id;
-        if (value.context) value.context = definedFields(value.context);
+        if (value.context) value.context = BatchValues.definedFields(value.context);
         const existing = this.records.get(value.id);
-        const next = existing ? replayMessage(existing, value, write.stream) : { streamId: write.stream, value };
+        const next = existing ? SessionMessages.replayMessage(existing, value, write.stream) : { streamId: write.stream, value };
         if (!next) return false;
         this.records.set(value.id, next);
       }

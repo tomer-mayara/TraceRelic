@@ -7,11 +7,6 @@ interface Owner extends ClaudeIdentity {
   key: string;
 }
 
-function rekey(report: OwnedReport, owner: Owner): OwnedReport {
-  const { requestId: _, messageId: __, ...fields } = report;
-  return { ...fields, ...(owner.requestId && { requestId: owner.requestId }), ...(owner.messageId && { messageId: owner.messageId }) };
-}
-
 /** Decide the owner before numeric reconciliation can group a single-ID report with a different request. */
 export class ClaudeSessionOwnership {
   readonly assigned = new Map<string, Owner | null>();
@@ -25,10 +20,15 @@ export class ClaudeSessionOwnership {
       if (owner) {
         const reports = this.contributions.get(owner.sessionId) ?? [];
         const located: OwnedReport = lc17 ? report : { ...report, origin };
-        reports.push(owner.sessionId === sessionId ? located : rekey(located, owner));
+        reports.push(owner.sessionId === sessionId ? located : ClaudeSessionOwnership.rekey(located, owner));
         this.contributions.set(owner.sessionId, reports);
       } else if (origin) this.note(origin);
     }
+  }
+
+  private static rekey(report: OwnedReport, owner: Owner): OwnedReport {
+    const { requestId: _, messageId: __, ...fields } = report;
+    return { ...fields, ...(owner.requestId && { requestId: owner.requestId }), ...(owner.messageId && { messageId: owner.messageId }) };
   }
 
   private owner(sessionId: string, call: NativeCall, parent?: ClaudeOriginReports, known?: ClaudeSessionOwnership): Owner | null {

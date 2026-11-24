@@ -1,9 +1,9 @@
 import type { ClaudeTranscript, ClaudeTranscriptEntry } from "./claude-history.ts";
+import { JsonRecord } from "../../transcript/json-record.ts";
 import type { Metadata } from "../../storage/collector-storage.ts";
-import { stateRecord, TextOccurrences } from "../../scan/parser-state.ts";
+import { ParserState, TextOccurrences } from "../../scan/parser-state.ts";
 import type { ChatParser, DecodedChat } from "../../scan/decoded-chat.ts";
-
-type TextBlock = { text: string; blockIndex: number };
+import { ClaudeVisibleText } from "./claude-visible-text.ts";
 
 export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
   private readonly previousCopy: boolean;
@@ -16,7 +16,7 @@ export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
 
   static resume(previousCopy: boolean, state?: unknown): ClaudeChat {
     if (state === undefined) return new ClaudeChat(previousCopy, new TextOccurrences());
-    const saved = stateRecord(state, ["occurrences"]);
+    const saved = ParserState.record(state, ["occurrences"]);
     return new ClaudeChat(previousCopy, TextOccurrences.restore(saved.occurrences));
   }
 
@@ -35,13 +35,13 @@ export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
   }
 
   private read({ record, timestamp, lineNumber, sourceFile }: ClaudeTranscriptEntry, result: DecodedChat): void {
-    const uuid = identifier(record.uuid);
+    const uuid = JsonRecord.identifier(record.uuid);
     if (this.previousCopy && !uuid) return;
 
     const context: Metadata = {};
-    const cwd = identifier(record.cwd);
-    const repository = identifier(record.repository);
-    const branch = identifier(record.gitBranch);
+    const cwd = JsonRecord.identifier(record.cwd);
+    const repository = JsonRecord.identifier(record.repository);
+    const branch = JsonRecord.identifier(record.gitBranch);
     if (cwd) context.cwd = result.metadata.cwd = cwd;
     if (repository) context.repository = result.metadata.repository = repository;
     if (branch) {
@@ -50,14 +50,14 @@ export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
     }
 
     const role = record.type;
-    const message = object(record.message);
+    const message = JsonRecord.object(record.message);
     if (!timestamp || (role !== "user" && role !== "assistant") || !message) return;
     if (message.role !== undefined && role !== message.role) return;
     if (record.isMeta === true || record.isCompactSummary === true || message.model === "<synthetic>") return;
-    const blocks = visibleBlocks(message.content, role === "user");
+    const blocks = ClaudeVisibleText.blocks(message.content, role === "user");
     if (!blocks.length) return;
-    const turnId = identifier(record.turnId);
-    const requestId = identifier(record.requestId);
+    const turnId = JsonRecord.identifier(record.turnId);
+    const requestId = JsonRecord.identifier(record.requestId);
     const identity = uuid ? `native:${uuid}`
       : this.occurrences.identify([sourceFile, role, timestamp, turnId, requestId, blocks]);
     for (const { text, blockIndex } of blocks) {
@@ -67,32 +67,4 @@ export class ClaudeChat implements ChatParser<ClaudeTranscriptEntry> {
       });
     }
   }
-}
-
-function visibleBlocks(content: unknown, user: boolean): TextBlock[] {
-  const parts = typeof content === "string" ? [{ type: "text", text: content }] : content;
-  if (!Array.isArray(parts)) return [];
-  const blocks: TextBlock[] = [];
-  for (const [blockIndex, part] of parts.entries()) {
-    const block = object(part);
-    if (block?.type !== "text" || typeof block.text !== "string" || !block.text.length) continue;
-    if (user && injectedText(block.text)) continue;
-    blocks.push({ blockIndex, text: block.text });
-  }
-  return blocks;
-}
-
-function injectedText(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed === "[Request interrupted by user]" || trimmed === "[Request interrupted by user for tool use]") return true;
-  return /^<(tick|goal|ide_opened_file|ide_selection|session-start-hook|system-reminder|local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*<\/\1>$/.test(trimmed)
-    || /^<command-name>[^<]*<\/command-name>(?:\s*<command-message>[^<]*<\/command-message>)?(?:\s*<command-args>[\s\S]*<\/command-args>)?$/.test(trimmed);
-}
-
-function identifier(value: unknown): string | undefined {
-  if (typeof value === "string" && value.length) return value;
-}
-
-function object(value: unknown): Readonly<Record<string, unknown>> | undefined {
-  if (typeof value === "object" && value !== null && !Array.isArray(value)) return value as Record<string, unknown>;
 }

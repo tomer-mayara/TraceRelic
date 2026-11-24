@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { runCollectorCli } from "#src/cli";
+import { CollectorCli } from "#src/cli";
 import type { ScheduledScanReport } from "../../src/watch/scan-activity.ts";
 import type { CollectorStorage } from "../../src/storage/collector-storage.ts";
 import { ManualScanClock } from "./manual-scan-clock.ts";
@@ -14,7 +14,7 @@ export class ScheduledScanFixture {
   constructor(storage: CollectorStorage, options: string[], timing: { intervalMs?: number; startMs?: number } = {}) {
     this.clock = new ManualScanClock(timing.startMs);
     this.intervalMs = timing.intervalMs ?? 10_000;
-    this.run = runCollectorCli(["watch", "--interval-ms", String(this.intervalMs), ...options], storage, {
+    this.run = CollectorCli.run(["watch", "--interval-ms", String(this.intervalMs), ...options], storage, {
       signal: this.shutdown.signal, clock: this.clock, onReport: report => this.reports.push(report),
     });
   }
