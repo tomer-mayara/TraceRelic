@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "../index.ts";
+import type { ClaudeHistory, ClaudeTranscriptEntry, ClaudeTranscriptSource } from "./claude-history.ts";
 import { TranscriptChangedError, type TranscriptSource } from "../../transcript/index.ts";
 import type { AcknowledgedSource, Checkpoint, ObservedExtent, SourceLocation } from "../../storage/collector-storage.ts";
 import { CheckpointProof } from "../../scan/checkpoint-proof.ts";

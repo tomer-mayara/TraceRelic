@@ -1,4 +1,4 @@
-import type { ClaudeTranscriptEntry } from "../index.ts";
+import type { ClaudeTranscriptEntry } from "./claude-history.ts";
 import { JsonRecord } from "../../transcript/json-record.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { ClaudeCallOrigin, ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../../storage/collector-storage.ts";

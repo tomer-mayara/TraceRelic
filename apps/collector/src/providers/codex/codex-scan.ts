@@ -1,4 +1,4 @@
-import type { CodexHistory, CodexRolloutEntry, CodexRolloutSource } from "../index.ts";
+import type { CodexHistory, CodexRolloutEntry, CodexRolloutSource } from "./codex-history.ts";
 import type { ScanSelection, SourceDiscoveryOptions } from "../../transcript/index.ts";
 import type { Checkpoint, StreamKey } from "../../storage/collector-storage.ts";
 import type { IdentityInventory, LocatedSource, ProviderScan } from "../../scan/scan-provider.ts";

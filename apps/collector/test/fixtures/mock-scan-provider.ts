@@ -92,7 +92,8 @@ class MockCallParser implements ChatParser<MockEntry> {
 
 /** The parser format of the mock provider. It adds no checkpoint fields and has no correction. */
 export class MockFormat implements ParserFormat<MockEntry> {
-  readonly version = 1;
+  // Version 1 is the format of an earlier collector. The cursor reads such a source again from byte zero.
+  readonly version = 2;
 
   resume(state?: unknown): ChatParser<MockEntry> {
     const decoded = typeof state === "object" && state !== null && "decoded" in state ? state.decoded : 0;

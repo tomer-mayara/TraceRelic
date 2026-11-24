@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ReplacedCheckpointFields, SavedDecoder, UsageCorrection } from "@tracerelic/collector/scan";
+import type { CorrectionBatchFields, SavedDecoder, UsageCorrection } from "@tracerelic/collector/scan";
 import type { Checkpoint } from "@tracerelic/collector/storage";
 import { TranscriptCursor } from "#src/scan/transcript-cursor";
 import { CorrectingFormat, MockFormat, MockTranscript } from "../../fixtures/mock-scan-provider.ts";
@@ -65,7 +65,7 @@ test("a correction that gives the corrected checkpoint gets the usage of the acc
   assert.equal(batch.checkpoint, corrected);
   assert.equal(batch.backfillClaudeOriginsFrom, accepted);
   assert.deepEqual(Object.keys(batch).slice(-2), ["checkpoint", "backfillClaudeOriginsFrom"]);
-  assert.deepEqual(received.map(([saved, reread]) => [saved?.version, saved?.decoder, reread]), [[1, { decoded: 2 }, { decoded: 2 }]]);
+  assert.deepEqual(received.map(([saved, reread]) => [saved?.version, saved?.decoder, reread]), [[2, { decoded: 2 }, { decoded: 2 }]]);
   assert.equal(received[0][2], format);
 });
 
@@ -85,7 +85,7 @@ test("a correction that gives a parser gets the checkpoint of that parser at the
   assert.deepEqual(batch.usage.map(call => call.id), ["call:1", "call:2"]);
   assert.deepEqual(batch.metadata, { parentSessionId: "parent" });
   assert.deepEqual(batch.checkpoint, {
-    offset: accepted.offset, parserState: JSON.stringify({ version: 1, lineNumber: 2, decoder: { decoded: 7 } }),
+    offset: accepted.offset, parserState: JSON.stringify({ version: 2, lineNumber: 2, decoder: { decoded: 7 } }),
     prefixDigest: accepted.prefixDigest, evidenceVersion: 1, codexFork,
   });
   assert.deepEqual(Object.keys(batch.checkpoint), [...scannerFields, "codexFork"]);
@@ -93,18 +93,20 @@ test("a correction that gives a parser gets the checkpoint of that parser at the
   assert.deepEqual(Object.keys(batch).slice(-2), ["checkpoint", "reconcileCodexForkFrom"]);
 });
 
-test("a correction can add only the batch fields that name an earlier checkpoint", () => {
-  // The typecheck fails unless this object has each field of ReplacedCheckpointFields and no other field.
-  const fields: Record<keyof ReplacedCheckpointFields, true> = {
-    repairEvidenceFrom: true, reconcileCodexForkFrom: true, backfillClaudeOriginsFrom: true, resetFrom: true,
-  };
-  assert.equal(Object.keys(fields).length, 4);
+test("a correction can add only a batch field in which a provider names the checkpoint that it replaces", () => {
+  // The typecheck fails unless this object has each field of CorrectionBatchFields and no other field.
+  const fields: Record<keyof CorrectionBatchFields, true> = { reconcileCodexForkFrom: true, backfillClaudeOriginsFrom: true };
+  assert.equal(Object.keys(fields).length, 2);
   const checkpoint: Checkpoint = { offset: 0, parserState: "{}" };
   const rejected: UsageCorrection<unknown>[] = [
     // @ts-expect-error A correction cannot replace the checkpoint of the batch.
     { accepted: (_saved, reread) => ({ parser: reread }), batchFields: { checkpoint } },
     // @ts-expect-error A correction cannot add messages to the batch.
     { accepted: (_saved, reread) => ({ parser: reread }), batchFields: { messages: [] } },
+    // @ts-expect-error Only the scanner resets a stream.
+    { accepted: (_saved, reread) => ({ parser: reread }), batchFields: { resetFrom: checkpoint } },
+    // @ts-expect-error Only the scanner repairs the evidence of a checkpoint.
+    { accepted: (_saved, reread) => ({ parser: reread }), batchFields: { repairEvidenceFrom: checkpoint } },
   ];
-  assert.equal(rejected.length, 2);
+  assert.equal(rejected.length, 4);
 });

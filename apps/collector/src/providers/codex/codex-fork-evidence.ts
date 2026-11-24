@@ -1,4 +1,4 @@
-import type { CodexRolloutEntry, CodexRolloutSource } from "../index.ts";
+import type { CodexRolloutEntry, CodexRolloutSource } from "./codex-history.ts";
 import type { DamagedLine, ReadPosition, RecordBatch } from "../../transcript/index.ts";
 import { JsonRecord } from "../../transcript/json-record.ts";
 import { RecordedInstant } from "@tracerelic/shared";

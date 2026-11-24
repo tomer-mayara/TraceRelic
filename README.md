@@ -10,7 +10,7 @@ Pass the configuration file to the collector with `--config`. The supplied file 
 { "codexPath": "~/.codex", "claudePath": "~/.claude" }
 ```
 
-From the repository root, run the history command with an inclusive start and exclusive end. It compares all supplied fractional seconds and writes matching records as a JSON array. Codex history and scans read both plain rollouts and Zstandard-compressed `.jsonl.zst` rollouts. Checkpoints count uncompressed bytes.
+Install the dependencies and build the workspace one time, with `bun install --frozen-lockfile` and `bun run build`. Build again after a change to `packages/shared`, because the collector loads the compiled package. From the repository root, run the history command with an inclusive start and exclusive end. It compares all supplied fractional seconds and writes matching records as a JSON array. Codex history and scans read both plain rollouts and Zstandard-compressed `.jsonl.zst` rollouts. Checkpoints count uncompressed bytes.
 
 ```sh
 bun run collector history --config ./tracerelic.config.json --from 2026-02-01T00:00:00Z --to 2026-02-02T00:00:00Z
@@ -166,7 +166,7 @@ Database tests start disposable PostgreSQL 18.7 containers on loopback. To reuse
 
 Run `bun run check:shared-logging` to build the log record schema, check package dependencies, and run the logging scenarios on Bun and Node. [Shared logging plan](docs/specs/shared-logging.md)
 
-Run `bun run check:collector-structure` to check that no file of `apps/collector/src` declares a top-level function. Each rule of the collector belongs to a class. The [check](.habit-hooks/collector-structure.eslint.mjs) also applies to two files of `packages/shared` that the collector layers share. The PR workflow runs the same check. [Cleanup plan](docs/specs/local-collector-structure-cleanup.md)
+Run `bun run check:collector-structure` to check that each function of `apps/collector/src` is in a class. The [check](.habit-hooks/collector-structure.eslint.mjs) also applies to two files of `packages/shared` that the collector layers share. The PR workflow runs the same check. [Cleanup plan](docs/specs/local-collector-structure-cleanup.md)
 
 For a suite that spans components, place it in `test/acceptance/` at the repository root. Declare the workspace packages it imports in the root `devDependencies`. The same `bun run test` command runs it.
 

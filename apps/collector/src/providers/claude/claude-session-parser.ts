@@ -1,5 +1,5 @@
 import { ClaudeTranscriptCopy } from "@tracerelic/shared";
-import type { ClaudeTranscriptEntry } from "../index.ts";
+import type { ClaudeTranscriptEntry } from "./claude-history.ts";
 import type { SessionView } from "../../storage/collector-storage.ts";
 import { ClaudeChat } from "./claude-chat.ts";
 import type { ClaudeSubagent } from "./claude-session-identity.ts";
