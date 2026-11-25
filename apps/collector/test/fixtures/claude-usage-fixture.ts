@@ -1,6 +1,5 @@
+import type { Fields } from "#src/transcript/json-record";
 import { ClaudeChatFixture } from "./claude-chat-fixture.ts";
-
-type Fields = Record<string, unknown>;
 
 export class ClaudeUsageFixture {
   static readonly at = ClaudeChatFixture.at;

@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { TestContext } from "node:test";
-
-type Fields = Readonly<Record<string, unknown>>;
+import type { Fields } from "#src/transcript/json-record";
 
 /** A JSON record, or the raw text of a damaged line that the reader cannot decode. */
 export type GoldenLine = Fields | string;

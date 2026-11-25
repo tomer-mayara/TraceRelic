@@ -1,7 +1,6 @@
 import type { CacheWriteDurations, TokenCounts, UsageDiagnosticCode } from "../../storage/collector-storage.ts";
-import { JsonRecord } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 
-type Fields = Readonly<Record<string, unknown>>;
 type CacheWrite = CacheWriteDurations & Pick<TokenCounts, "cacheWriteTokens">;
 export type ReportIssue = (code: UsageDiagnosticCode, hasGap: boolean) => void;
 

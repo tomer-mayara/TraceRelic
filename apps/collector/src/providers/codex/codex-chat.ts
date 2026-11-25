@@ -1,6 +1,6 @@
 import type { CodexRolloutEntry } from "./codex-history.ts";
 import type { DamagedLine } from "../../transcript/index.ts";
-import { JsonRecord } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 import type { Metadata, Role } from "../../storage/collector-storage.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import { ParserState, TextOccurrences } from "../../scan/parser-state.ts";
@@ -351,7 +351,6 @@ export class CodexChat implements ChatParser<ChatEntry> {
   }
 }
 
-type Fields = Readonly<Record<string, unknown>>;
 interface ChatItem {
   blocks: TextBlock[];
   role: Role;

@@ -1,7 +1,7 @@
 import type { ClaudeSessionParser } from "#src/providers/claude/claude-session-parser";
+import type { Fields } from "#src/transcript/json-record";
 import { type GoldenBatch, type GoldenDamage, type GoldenLine, GoldenTranscript } from "./parser-golden-fixture.ts";
 
-type Fields = Readonly<Record<string, unknown>>;
 type ClaudeEntry = Parameters<ClaudeSessionParser["decodeBatch"]>[0][number] & { readonly startOffset: number };
 type Subagent = NonNullable<Parameters<typeof ClaudeSessionParser.forSource>[1]>;
 type ClaudeBatch = GoldenBatch<ClaudeEntry, GoldenDamage>;

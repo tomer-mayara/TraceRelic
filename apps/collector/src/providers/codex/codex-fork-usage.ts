@@ -1,8 +1,9 @@
 import { RecordedInstant } from "@tracerelic/shared";
 import type { CodexForkCheckpoint } from "../../storage/collector-storage.ts";
+import type { Fields } from "../../transcript/json-record.ts";
 import { ParserState } from "../../scan/parser-state.ts";
 import { CodexTokenCounts, zero } from "./codex-token-counts.ts";
-import type { Fields, Report, UsageEntry } from "./codex-usage-report.ts";
+import type { Report, UsageEntry } from "./codex-usage-report.ts";
 
 /** Native events tie a turn to the child even when the parent is unavailable. */
 export class CodexForkTurn {

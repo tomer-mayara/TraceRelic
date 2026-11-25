@@ -1,10 +1,10 @@
 import type { DamagedLine } from "../../transcript/index.ts";
-import { JsonRecord } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 import type { TokenCounts, Usage, UsageDiagnostic, UsageWindow } from "../../storage/collector-storage.ts";
 import { ParserState } from "../../scan/parser-state.ts";
 import type { CodexForkUsage } from "./codex-fork-usage.ts";
 import { type Breakdown, breakdowns, CodexTokenCounts, zero } from "./codex-token-counts.ts";
-import { type Call, type CallContext, CodexCallContext, CodexUsageReport, type Fields,
+import { type Call, type CallContext, CodexCallContext, CodexUsageReport,
   type Report, type UsageEntry } from "./codex-usage-report.ts";
 import type { DecodedUsage } from "../../scan/decoded-chat.ts";
 
