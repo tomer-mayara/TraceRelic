@@ -1,4 +1,5 @@
 import type { LocalHistoryEntry } from "../../history/index.ts";
+import { JsonRecord } from "../../transcript/json-record.ts";
 
 export interface ClaudeSubagent {
   readonly parentSessionId: string;
@@ -9,10 +10,10 @@ export interface ClaudeSubagent {
 export class ClaudeSessionIdentity {
   static parse(record: LocalHistoryEntry["record"], directory?: ClaudeSubagent): { sessionId: string; subagent?: ClaudeSubagent } | undefined {
     const nativeId = record.sessionId;
-    if (typeof nativeId !== "string" || !nativeId.length) return;
+    if (!JsonRecord.isNonemptyString(nativeId)) return;
     if (!directory) return { sessionId: nativeId };
     const { parentSessionId } = directory;
-    const agentId = typeof record.agentId === "string" && record.agentId ? record.agentId : directory.agentId;
+    const agentId = JsonRecord.identifier(record.agentId) ?? directory.agentId;
     if (nativeId === parentSessionId) {
       return { sessionId: `${encodeURIComponent(nativeId)}/subagents/${encodeURIComponent(agentId)}`, subagent: { parentSessionId, agentId } };
     }

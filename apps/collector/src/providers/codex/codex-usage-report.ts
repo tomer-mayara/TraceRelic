@@ -81,7 +81,7 @@ export class CodexUsageReport {
   }
 
   private static identifies(header: Fields, sessionId: string): boolean {
-    const ids = [header.id, header.session_id].filter(id => typeof id === "string" && id.length);
+    const ids = [header.id, header.session_id].filter(id => JsonRecord.isNonemptyString(id));
     return ids.length > 0 && ids.every(id => id === sessionId);
   }
 

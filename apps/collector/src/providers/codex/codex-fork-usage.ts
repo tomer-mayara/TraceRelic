@@ -1,6 +1,6 @@
 import { RecordedInstant } from "@tracerelic/shared";
 import type { CodexForkCheckpoint } from "../../storage/collector-storage.ts";
-import type { Fields } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 import { ParserState } from "../../scan/parser-state.ts";
 import { CodexTokenCounts, zero } from "./codex-token-counts.ts";
 import type { Report, UsageEntry } from "./codex-usage-report.ts";
@@ -31,7 +31,7 @@ export class CodexForkTurn {
   }
 
   observe(entry: UsageEntry, payload: Fields): void {
-    const turn = typeof payload.turn_id === "string" && payload.turn_id ? payload.turn_id : undefined;
+    const turn = JsonRecord.identifier(payload.turn_id);
     if (entry.record.type === "turn_context") {
       if (this.ownTurn !== turn) this.ownTurn = undefined;
       return;

@@ -10,7 +10,7 @@ export class ClaudeVisibleText {
     const blocks: TextBlock[] = [];
     for (const [blockIndex, part] of parts.entries()) {
       const block = JsonRecord.object(part);
-      if (block?.type !== "text" || typeof block.text !== "string" || !block.text.length) continue;
+      if (block?.type !== "text" || !JsonRecord.isNonemptyString(block.text)) continue;
       if (user && ClaudeVisibleText.injected(block.text)) continue;
       blocks.push({ blockIndex, text: block.text });
     }
