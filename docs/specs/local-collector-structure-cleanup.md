@@ -66,7 +66,7 @@ apps/collector/src/
 ├── transcript/                provider-neutral file reading
 │   ├── captured-transcript-file.ts, transcript-directories.ts
 │   ├── jsonl-records.ts       JsonlRecords: complete lines to JSON objects
-│   ├── json-record.ts         JsonRecord: the checks on one decoded JSON value
+│   ├── json-record.ts         JsonRecord: the checks on one decoded JSON value. Fields: one decoded JSON object
 │   ├── transcript-batches.ts  TranscriptBatches: byte-bounded batches with prefix digests
 │   ├── source-discovery.ts    SourceDiscovery: the selection by session and project
 │   └── transcript-source.ts   TranscriptSource, RecordBatch, ReadPosition, ScanSelection
@@ -428,6 +428,20 @@ Changes of step 5 for a TypeScript caller:
 - **[scan.tsp](local-collector/scan.tsp).** The two readers, their three models and the field
   `currentFilePath` are gone.
 
+### After step 5. One declaration of `Fields`
+
+`Fields` is the type of one decoded JSON object. Six provider files and five test fixtures each
+declared this type, and one of the fixtures declared it without `Readonly`. The type is one export of
+[json-record.ts](../../apps/collector/src/transcript/json-record.ts), and it is the type that
+`JsonRecord.object` gives for a JSON object. The change is in types and in import lines only.
+
+| Constraint | Decision and check |
+| --- | --- |
+| Behavior | No change. The compiler removes a type and a type import. Build the commit before the change and the commit after it: each compiled `.js` file must have the same bytes. Then run `bun run test`. |
+| Observability | Out of scope. No signal is added or changed, and `cli.ts` stays as it is. |
+| Architecture | The dependency rules and the structure rule do not change. Twelve provider files imported `JsonRecord` from this file before the change, so the dependency is not new. `check:collector-deps`, `check:collector-structure` |
+| Interface | No change. No named package export and no `.tsp` file has `Fields`. `bun run typecheck` checks each import. |
+
 ## Points that later work must know
 
 - **A restored parser can write different text.** A parser that resumes from a checkpoint does not
@@ -479,6 +493,16 @@ Changes of step 5 for a TypeScript caller:
   of spaces, and `JsonRecord.identifier` accepts it. The list of token breakdown fields is in
   `codex-token-counts.ts` and in `usage-intervals.ts`, because a provider file and a storage file cannot
   import each other.
+- **Types that two files declare.** Three types have the same meaning in two files each, and they stay
+  two declarations. The
+  [coding principles](../engineering-guidelines/coding-principles.md#implementation-and-verification)
+  extract shared logic at its third use, and the cleanup uses the same limit for a type.
+  `VerifiedPrefix` is in `transcript/transcript-source.ts` and in the storage port, which cannot import
+  each other. `TextBlock` is in the visible-text file of each provider, and a provider cannot import the
+  other one. `Identity` is a private alias in `claude-advisor-iterations.ts` and in
+  `claude-usage-ledger.ts`. The history port writes the type of `Fields` in full for
+  `LocalHistoryEntry.record`, because `history/` imports no other collector directory. A short local
+  name for an imported type, such as `Source` for `CodexRolloutSource`, is not a second declaration.
 
 ## Risks
 
