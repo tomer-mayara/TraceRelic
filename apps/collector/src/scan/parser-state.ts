@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { ContractValues } from "../storage/collector-storage.ts";
+import { JsonRecord } from "../transcript/json-record.ts";
 
 export class TextOccurrences {
   private readonly counts = new Map<string, number>();
@@ -6,7 +8,7 @@ export class TextOccurrences {
   static restore(state: unknown): TextOccurrences {
     const occurrences = new TextOccurrences();
     for (const [digest, count] of Object.entries(ParserState.record(state))) {
-      if (!/^[a-f0-9]{64}$/.test(digest) || typeof count !== "number" || !Number.isSafeInteger(count) || count < 1) {
+      if (!ContractValues.isDigest(digest) || !JsonRecord.isCount(count) || count < 1) {
         ParserState.invalid();
       }
       occurrences.counts.set(digest, count);
@@ -33,7 +35,7 @@ export class ParserState {
   }
 
   static record(value: unknown, fields?: readonly string[]): Record<string, unknown> {
-    if (typeof value !== "object" || value === null || Array.isArray(value)) ParserState.invalid();
+    if (!JsonRecord.is(value)) ParserState.invalid();
     const prototype = Object.getPrototypeOf(value);
     if (prototype !== null && prototype !== Object.prototype) ParserState.invalid();
     if (fields && Object.keys(value).some(key => !fields.includes(key))) ParserState.invalid();
@@ -41,7 +43,7 @@ export class ParserState {
   }
 
   static string(value: unknown): string | undefined {
-    if (value !== undefined && (typeof value !== "string" || !value.length)) ParserState.invalid();
+    if (value !== undefined && !JsonRecord.isNonemptyString(value)) ParserState.invalid();
     return value;
   }
 

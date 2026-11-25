@@ -1,4 +1,5 @@
-import type { Message } from "../storage/collector-storage.ts";
+import { ContractValues, type Message } from "../storage/collector-storage.ts";
+import { JsonRecord } from "../transcript/json-record.ts";
 import { ParserState } from "./parser-state.ts";
 import type { DecodedChat } from "./decoded-chat.ts";
 
@@ -61,8 +62,8 @@ export class ReplayOccurrences {
     const rules: ReplayBounds = {};
     for (const [digest, bounds] of Object.entries(ParserState.record(value))) {
       const { accepted, replayed } = ParserState.record(bounds, ["accepted", "replayed"]);
-      if (!/^[a-f0-9]{64}$/.test(digest) || typeof accepted !== "number" || !Number.isSafeInteger(accepted) || accepted < 1
-        || typeof replayed !== "number" || !Number.isSafeInteger(replayed) || replayed < 0) ParserState.invalid();
+      if (!ContractValues.isDigest(digest) || !JsonRecord.isCount(accepted) || accepted < 1
+        || !JsonRecord.isCount(replayed)) ParserState.invalid();
       rules[digest] = { accepted, replayed };
     }
     return rules;
