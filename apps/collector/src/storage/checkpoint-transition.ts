@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { Batch, Checkpoint, CodexForkCheckpoint, Harness } from "./collector-storage.ts";
+import { ContractValues, type Batch, type Checkpoint, type CodexForkCheckpoint, type Harness } from "./collector-storage.ts";
 import { BatchValues } from "./batch-values.ts";
 
 const emptyPrefixDigest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -22,7 +22,7 @@ export class CheckpointTransition {
     if (harness === "codex") {
       if (Object.keys(decoder).length === 2 && BatchValues.isRecord(decoder.chat) && BatchValues.isRecord(decoder.usage)) return decoder.chat;
     } else if (harness === "claude" && Object.keys(decoder).length === 1 && BatchValues.isRecord(decoder.occurrences)) {
-      const valid = Object.entries(decoder.occurrences).every(([digest, count]) => /^[a-f0-9]{64}$/.test(digest)
+      const valid = Object.entries(decoder.occurrences).every(([digest, count]) => ContractValues.isDigest(digest)
         && BatchValues.isCount(count) && count > 0);
       if (valid) return decoder;
     }
@@ -44,13 +44,9 @@ export class CheckpointTransition {
     return before !== null && state.lineNumber === before.lineNumber && isDeepStrictEqual(chat, before.decoder);
   }
 
-  private static isPrefixDigest(value: unknown): boolean {
-    return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
-  }
-
   private static isForkPosition(value: unknown): boolean {
     return BatchValues.isRecord(value) && BatchValues.isCount(value.offset) && BatchValues.isCount(value.lineNumber) && value.lineNumber > 0
-      && (value.prefixDigest === undefined || CheckpointTransition.isPrefixDigest(value.prefixDigest));
+      && (value.prefixDigest === undefined || ContractValues.isDigest(value.prefixDigest));
   }
 
   private static isForkCheckpoint(value: unknown): value is CodexForkCheckpoint {
@@ -66,11 +62,11 @@ export class CheckpointTransition {
     if (value.evidenceVersion !== undefined && (value.evidenceVersion !== 1 || typeof value.prefixDigest !== "string")) return false;
     const { prefixDigest, replayThrough, codexFork, claudeCallOrigins } = value;
     if (codexFork !== undefined && !CheckpointTransition.isForkCheckpoint(codexFork)) return false;
-    if (claudeCallOrigins !== undefined && (claudeCallOrigins !== true || !CheckpointTransition.isPrefixDigest(prefixDigest))) return false;
+    if (claudeCallOrigins !== undefined && (claudeCallOrigins !== true || !ContractValues.isDigest(prefixDigest))) return false;
     if (prefixDigest === undefined) return replayThrough === undefined && codexFork === undefined;
-    if (!CheckpointTransition.isPrefixDigest(prefixDigest) || (value.offset === 0 && prefixDigest !== emptyPrefixDigest)) return false;
+    if (!ContractValues.isDigest(prefixDigest) || (value.offset === 0 && prefixDigest !== emptyPrefixDigest)) return false;
     return replayThrough === undefined || (BatchValues.isRecord(replayThrough) && BatchValues.isCount(replayThrough.offset)
-      && replayThrough.offset > value.offset && CheckpointTransition.isPrefixDigest(replayThrough.prefixDigest));
+      && replayThrough.offset > value.offset && ContractValues.isDigest(replayThrough.prefixDigest));
   }
 
   private static preservesReplayBound(current: Checkpoint | undefined, next: Checkpoint): boolean {

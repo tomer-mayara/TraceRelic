@@ -1,5 +1,5 @@
 import { isRecordedTimestamp } from "@tracerelic/shared";
-import type { Batch, Message } from "./collector-storage.ts";
+import { ContractValues, type Batch, type Message } from "./collector-storage.ts";
 import { BatchValues } from "./batch-values.ts";
 import { SessionMetadata } from "./session-metadata.ts";
 
@@ -98,7 +98,7 @@ export class SessionMessages {
     const origins = new Map<number, string>();
     for (const origin of write.origins) {
       if (!BatchValues.isRecord(origin) || !BatchValues.isCount(origin.sourceOrder) || origin.sourceOrder < 1 || origins.has(origin.sourceOrder)
-        || typeof origin.prefixDigest !== "string" || !/^[a-f0-9]{64}$/.test(origin.prefixDigest)
+        || !ContractValues.isDigest(origin.prefixDigest)
         || (origin.refinesAccepted !== undefined && origin.refinesAccepted !== true)) return;
       origins.set(origin.sourceOrder, JSON.stringify([write.path, origin.prefixDigest]));
     }

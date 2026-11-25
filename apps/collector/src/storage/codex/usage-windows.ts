@@ -1,4 +1,4 @@
-import type { StreamKey, TokenCounts, Usage, UsageAnchor, UsageWindow } from "../collector-storage.ts";
+import { ContractValues, type StreamKey, type TokenCounts, type Usage, type UsageAnchor, type UsageWindow } from "../collector-storage.ts";
 import { ObservedCounterSpans } from "./observed-counter-spans.ts";
 import { type Interval, UsageIntervals } from "./usage-intervals.ts";
 import { BatchValues } from "../batch-values.ts";
@@ -95,8 +95,8 @@ export class UsageWindows {
     if (value.boundaryObservations !== undefined) {
       const proof = value.boundaryObservations;
       if (!BatchValues.isRecord(proof) || Object.keys(proof).length !== 2
-        || typeof proof.start !== "string" || !/^[0-9a-f]{64}$/.test(proof.start)
-        || typeof proof.end !== "string" || !/^[0-9a-f]{64}$/.test(proof.end)) return false;
+        || !ContractValues.isDigest(proof.start)
+        || !ContractValues.isDigest(proof.end)) return false;
     }
     const ids = new Set<string>();
     for (const part of value.parts) {

@@ -1,4 +1,4 @@
-import type { Batch, CodexCallAlias, SourceUsageDiagnostic, Usage } from "../collector-storage.ts";
+import { ContractValues, type Batch, type CodexCallAlias, type SourceUsageDiagnostic, type Usage } from "../collector-storage.ts";
 import { BatchValues } from "../batch-values.ts";
 
 export type CodexUsageInput = Pick<Batch, "source" | "usage" | "usageAnchors" | "usageWindows" | "codexCallAliases">;
@@ -29,7 +29,7 @@ export class CodexCallAliases {
   static valid(batch: Batch): boolean {
     const aliases = batch.codexCallAliases;
     return aliases === undefined || (batch.source.harness === "codex" && Array.isArray(aliases)
-      && aliases.every(row => BatchValues.isRecord(row) && typeof row.callUsageId === "string" && /^call:native:[a-f0-9]{64}$/.test(row.callUsageId)
+      && aliases.every(row => BatchValues.isRecord(row) && ContractValues.isNativeCallId(row.callUsageId)
         && typeof row.aliasUsageId === "string" && /^call:(?:native:)?[a-f0-9]{64}$/.test(row.aliasUsageId)
         && (row.closing === undefined || (!row.aliasUsageId.startsWith("call:native:") && BatchValues.isTokenCounts(row.closing)
           && (row.closing.turnId === undefined || BatchValues.isIdentifier(row.closing.turnId))

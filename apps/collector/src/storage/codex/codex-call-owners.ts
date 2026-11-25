@@ -1,4 +1,4 @@
-import type { Batch, CodexCallClaim, Usage } from "../collector-storage.ts";
+import { ContractValues, type Batch, type CodexCallClaim, type Usage } from "../collector-storage.ts";
 import type { CodexCallAliases } from "./codex-call-aliases.ts";
 import { BatchValues } from "../batch-values.ts";
 
@@ -154,12 +154,12 @@ export class CodexCallOwners {
 
   private validClaim(batch: Batch, claim: CodexCallClaim, calls: ReadonlySet<string>, parentOf: ParentLookup): boolean {
     if (!BatchValues.isRecord(claim) || !BatchValues.isIdentifier(claim.ownerSessionId) || !BatchValues.isIdentifier(claim.usageId)
-      || typeof claim.providerId !== "string" || !/^[a-f0-9]{64}$/.test(claim.providerId)) return false;
+      || !ContractValues.isDigest(claim.providerId)) return false;
     if (claim.ownerSessionId === batch.source.sessionId) return calls.has(claim.usageId);
     const proof = batch.checkpoint.codexFork;
     return proof?.inheritedThrough !== undefined && claim.ownerSessionId === proof.parentSessionId
       && CodexCallOwners.hasAncestor(batch.source.sessionId, claim.ownerSessionId, parentOf)
-      && (calls.has(claim.usageId) || /^call:native:[a-f0-9]{64}$/.test(claim.usageId));
+      && (calls.has(claim.usageId) || ContractValues.isNativeCallId(claim.usageId));
   }
 
   publish(update: OwnershipUpdate): void {

@@ -1,5 +1,6 @@
 import type { ClaudeUsageReport, Usage } from "../collector-storage.ts";
 import type { OwnedReport } from "./claude-origin-reports.ts";
+import { BatchValues } from "../batch-values.ts";
 
 type Identity = Pick<ClaudeUsageReport, "messageId" | "requestId">;
 type Iteration = Identity & Pick<ClaudeUsageReport, "iterationId" | "iterationPosition">;
@@ -50,7 +51,7 @@ export class ClaudeAdvisorIterations {
     if (report.iterationPosition !== undefined) return report.iterationPosition;
     if (report.iterationId?.startsWith("index:")) {
       const value = Number(report.iterationId.slice(6));
-      if (Number.isSafeInteger(value) && value >= 0) return value;
+      if (BatchValues.isCount(value)) return value;
     }
   }
 
