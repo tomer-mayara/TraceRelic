@@ -10,9 +10,14 @@ export class JsonRecord {
     if (JsonRecord.is(value)) return value;
   }
 
+  /** True for a string that has one character or more. */
+  static isNonemptyString(value: unknown): value is string {
+    return typeof value === "string" && value.length > 0;
+  }
+
   /** The first value that is a nonempty string. */
   static identifier(...values: unknown[]): string | undefined {
-    return values.find((value): value is string => typeof value === "string" && value.length > 0);
+    return values.find(JsonRecord.isNonemptyString);
   }
 
   /** True for a nonnegative safe integer. */
