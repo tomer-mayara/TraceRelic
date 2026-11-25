@@ -1,9 +1,11 @@
 import { mock } from "node:test";
 import { StorageUnavailableError, type AcknowledgedSource, type Batch, type Checkpoint, type Message, type Usage, type SessionKey,
   type SourceScope, type StreamKey } from "@tracerelic/collector/storage";
-import type { CollectorWrite, CollectorTransaction } from "../../src/storage/collector-database.ts";
-import type { PersistedSession, RecordChanges } from "../../src/storage/collector-projection.ts";
+import type { CollectorTransaction } from "#src/storage/collector-database";
+import type { PersistedSession, RecordChanges } from "#src/storage/collector-projection";
 import { batch, session, storedSource } from "./collector-wire-payloads.ts";
+
+type CollectorWrite = Parameters<CollectorTransaction["save"]>[0];
 
 interface SavedWrite {
   workspace: string;

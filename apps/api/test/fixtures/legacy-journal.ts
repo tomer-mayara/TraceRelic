@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { Client } from "pg";
 import type { AcknowledgedSource, Batch, Checkpoint, SessionView } from "@tracerelic/collector/storage";
-import type { CollectorWrite } from "../../src/storage/collector-database.ts";
+import type { CollectorTransaction } from "#src/storage/collector-database";
+
+type CollectorWrite = Parameters<CollectorTransaction["save"]>[0];
 
 interface LegacyEntry<Write extends CollectorWrite = CollectorWrite> {
   write: Write;

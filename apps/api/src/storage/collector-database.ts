@@ -8,7 +8,7 @@ import { LegacyScannerSource, SourceScopes, StorageUnavailableError, type Acknow
   type SourceScope, type StreamKey, type Usage } from "@tracerelic/collector/storage";
 import type { PersistedSession, RecordChanges, SessionRecords } from "./collector-projection.ts";
 
-export type CollectorWrite = { kind: "batch"; value: Batch } | { kind: "presence"; value: PresenceWrite };
+type CollectorWrite = { kind: "batch"; value: Batch } | { kind: "presence"; value: PresenceWrite };
 
 type SourceAliasWrite = { kind: "alias"; value: { source: StreamKey; target: string; expectedVersion: number } };
 export type JournalWrite = CollectorWrite | SourceAliasWrite;

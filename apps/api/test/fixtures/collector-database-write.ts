@@ -1,5 +1,5 @@
 import { Client } from "pg";
-import type { CollectorTransaction } from "../../src/storage/collector-database.ts";
+import type { CollectorTransaction } from "#src/storage/collector-database";
 import { projectSession, type PersistedSession } from "#src/storage/collector-projection";
 import type { SessionView } from "@tracerelic/collector/storage";
 import { batch, session, storedSource } from "./collector-wire-payloads.ts";

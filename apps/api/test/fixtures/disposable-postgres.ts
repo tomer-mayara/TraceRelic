@@ -40,7 +40,7 @@ export class DisposablePostgres {
     const { stdout } = await exec("docker", ["run", "--rm", "--detach", "--publish", "127.0.0.1::5432",
       "--env", "POSTGRES_PASSWORD", "postgres:18.7"], { env: { ...process.env, POSTGRES_PASSWORD: password } });
     const container = stdout.trim();
-    const remove = async () => { await exec("docker", ["rm", "--force", container]); };
+    const remove = async () => { await exec("docker", ["rm", "--force", "--volumes", container]); };
     try {
       const binding = await exec("docker", ["port", container, "5432/tcp"]);
       const port = /^127\.0\.0\.1:(\d+)$/.exec(binding.stdout.trim())?.[1];

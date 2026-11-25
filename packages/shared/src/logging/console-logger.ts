@@ -46,7 +46,7 @@ export class ConsoleLogger extends Logger {
   }
 
   private static waitForErrorEvent(stream: NodeJS.WriteStream, error: Error): Promise<void> {
-    const pending = this.writeErrors.get(stream);
+    const pending = ConsoleLogger.writeErrors.get(stream);
     if (pending) {
       pending.errors.add(error);
       return pending.settled;
@@ -59,9 +59,9 @@ export class ConsoleLogger extends Logger {
     stream.on(errorMonitor, monitor);
     const settled = setImmediate().then(() => {
       stream.off(errorMonitor, monitor);
-      this.writeErrors.delete(stream);
+      ConsoleLogger.writeErrors.delete(stream);
     });
-    this.writeErrors.set(stream, { errors, settled });
+    ConsoleLogger.writeErrors.set(stream, { errors, settled });
     return settled;
   }
 }

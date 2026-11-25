@@ -3,6 +3,7 @@
     "module": "NodeNext",
     "allowImportingTsExtensions": true,
     "target": "ES2022",
+    "lib": ["ES2022", "ES2024.Promise", "ESNext.Array", "DOM"],
     "types": ["node"],
     "strict": true,
     "isolatedModules": true,

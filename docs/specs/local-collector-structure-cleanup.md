@@ -7,6 +7,7 @@ sessions and the checkpoints stay the same. [Current specification](local-collec
 
 Affected components: `apps/collector` (all of `src/` and its tests), `packages/shared` (two leaf
 modules) and `apps/api` (only its imports of the names that change).
+[Step 6](#step-6-follow-ups-outside-the-collector) has its own list.
 
 ## Status
 
@@ -18,6 +19,7 @@ modules) and `apps/api` (only its imports of the names that change).
 | 3 | The scanner receives its providers through a port | Done, [PR 30](https://github.com/tomer-mayara/TraceRelic/pull/30) |
 | 4 | Each function is a member of a class | Done, [PR 31](https://github.com/tomer-mayara/TraceRelic/pull/31) |
 | 5 | A test reaches the source in two ways, and six members that only tests read are in test fixtures | Done, [PR 32](https://github.com/tomer-mayara/TraceRelic/pull/32) |
+| 6 | Two structure rules also check the API and the shared package, the type check declares two built-ins, and the database fixture removes its volumes | Done, [PR 35](https://github.com/tomer-mayara/TraceRelic/pull/35) |
 
 The description of each PR has the check results of its step.
 
@@ -166,23 +168,27 @@ through its own configuration.
 
 | Selector | Files | Forbidden |
 | --- | --- | --- |
-| A function outside a class | `apps/collector/src` and the two shared leaf modules | A declaration, a function expression or an arrow function that is not in a class body, at the top level or in an object |
-| `this` in a static method | The same files | Each `this` in a static method or a static accessor, also in a function that is in that method |
-| A relative import of the source | `apps/collector/test` | An import, a re-export, a dynamic import or an import type whose module is `../src` |
+| A function outside a class | `apps/collector/src` and the two shared leaf modules | A declaration, a function expression or an arrow function that is not in a class body |
+| `this` in a static method | The same files, `apps/api/src` and all of `packages/shared/src` | Each `this` in a static method or in a static `get` or `set` accessor, also in a function that is in that method |
+| A relative import of the source | The `test` directory of `apps/collector`, of `apps/api` and of `packages/shared` | An import, a re-export, a dynamic import or an import type whose module is `../src` |
 
-The second selector looks only at methods and accessors. It does not look at a static field or at a
-static block, and none of these files has a `this` there. The rule does not apply to `apps/api`, and it
-does not apply to the other files of `packages/shared/src`: `recorded-path.ts` has two functions, and
-`logging/console-logger.ts` has a static method that uses `this`.
+The second selector looks only at methods and at `get` and `set` accessors. It does not look at a static
+field, at an `accessor` field or at a static block. No file of this rule has a `this` there. The first
+selector does not apply to `apps/api/src`, which has 21 functions outside a class body in five files. It
+also does not apply to the other files of `packages/shared/src`: `recorded-path.ts` has two such
+functions. [Decision 7](#decisions) keeps them.
 
 **Test imports.** `apps/collector/package.json` has ten named exports, such as `./storage` and `./scan`.
 A test imports a name that one of them has through the package: `@tracerelic/collector/…`. A test
-imports each other name through `#src/…`. The third selector checks only that no test imports `../src`.
+imports each other name through `#src/…`. `apps/api` has the same `#src/…` map, and the tests of
+`packages/shared` import the package. The third selector checks only that no test imports `../src`. It
+does not see other forms of such an import. Three examples are `import x = require(…)`, a dynamic import
+whose module is a template, and a path that starts with `./../`. No test has one of them.
 
 ## Constraint decisions
 
-These decisions apply to all the steps. Step 4 and the change after step 5 add to them in their own
-sections.
+These decisions apply to all the steps. Step 4, the change after step 5 and step 6 add to them in their
+own sections.
 
 | Constraint | Decision | Check |
 | --- | --- | --- |
@@ -210,6 +216,7 @@ sections.
 | Step 4, after each code commit | 13 commands, identical | 12 scenarios, identical |
 | Step 5, after each change of the production source | 13 commands, identical | 12 scenarios, identical |
 | The change after step 5 | Not run. [Two comparisons of the code](#after-step-5-one-declaration-of-fields) replace it. | Not run |
+| Step 6, after its last code commit | 13 commands, identical | 12 scenarios, identical |
 
 The 13 commands are: a full scan with an installation ID and one without; a full history window and a
 window with fractional seconds; a scan with `--session` and one with `--project`; a Codex fork child
@@ -447,16 +454,69 @@ type for a JSON object. `Row` in `test/fixtures/claude-chat-fixture.ts` is the s
 | Architecture | The dependency rules and the structure rule do not change. Before the change, twelve provider files imported `JsonRecord` from `json-record.ts`. Thus the dependency of `providers/` on that file is not new. `check:collector-deps`, `check:collector-structure` |
 | Interface | No change. No named package export and no `.tsp` file has `Fields`. `bun run typecheck` checks each import. |
 
+### Step 6. Follow-ups outside the collector
+
+Done in PR 35. The owner decided the three points of this step after step 5. A user of the CLI or of the
+API sees no change. Affected components: `apps/api`, `packages/shared`, the root `tsconfig.json` and the
+structure rule.
+
+- **Two rules reach further** ([decision 7](#decisions)). The rule against `this` in a static method
+  also checks `apps/api/src` and all of `packages/shared/src`. It found one method there,
+  `ConsoleLogger.waitForErrorEvent`, which now names its class. The rule against a relative import of the
+  source also checks the tests of `apps/api` and of `packages/shared`. It found four type imports in
+  three fixtures of `apps/api/test`, which now use `#src/…`. Knip cannot follow such an import, so it
+  reported the type `CollectorWrite` as an export that nothing uses. The type is not an export now, and
+  two fixtures derive it from `CollectorTransaction["save"]`.
+- **The type check declares two built-ins that the code uses.** `Array.fromAsync` and
+  `Promise.withResolvers` are not in the library of `target: ES2022`. The type check passed only because
+  one test fixture of `packages/shared` imports `bun`, and the types of Bun declare both. A type check of
+  the collector alone failed. The root `tsconfig.json` now names the library of each one:
+  `"lib": ["ES2022", "ES2024.Promise", "ESNext.Array", "DOM"]`. `DOM` was in the default library, and one
+  test fixture uses it. A third built-in, `Error.isError`, keeps the local type that `logger.ts` gives
+  it. This step does not change that file.
+- **The database fixture removes its volumes.** `disposable-postgres.ts` removed each container with
+  `docker rm --force`. Each container then left one unused Docker volume. The command now has
+  `--volumes`.
+
+| Constraint | Decision | Check |
+| --- | --- | --- |
+| Behavior | No scenario is new, because no caller can do a new thing. The one call of `waitForErrorEvent` names `ConsoleLogger`, so `this` was that class. The other changes are types and type imports, one option of the type check and one flag of a test fixture. One type of the API source is not an export now. | `bun run test`, `check:shared-logging`, `check:collector-api`, `check:collector-postgres`. A comparison of the compiled `.js` files of the production source: only three expressions in `console-logger.js` can be different. The output comparison and the trace comparison. |
+| Observability | Out of scope. The logger writes the same lines. | The logging scenarios of `check:shared-logging` |
+| Architecture | The two wider selectors in [Rules that keep the structure](#rules-that-keep-the-structure). The dependency rules do not change. | `check:collector-structure`, with a rule probe for each new place |
+| Interface | Out of scope. No contract changes. | The three `schema:collector-*` scripts |
+
+No CI check keeps the `lib` line and the `--volumes` flag. CI reads the files of all workspaces in one
+type check. The types of Bun are there, so that check passes also without the `lib` line. CI gives the
+database tests a server through `TRACERELIC_TEST_DATABASE_URL`, so it does not start the containers of
+the fixture. The step checked the two points one time: a type check of the collector alone, and a run of
+`legacy-journal.test.ts` without that variable.
+
 ## Points that later work must know
 
 - **A restored parser can write different text.** A parser that resumes from a checkpoint does not
   always write the same text as one continuous scan. The golden tests pin five cases as they are. Four
-  are a different key order: three have a test with the name "known restore difference, kept as it is",
-  and one is in the main Codex golden. The fifth is also in the main Codex golden, and it is about one
-  prompt. A parser that reads with no lookahead gives that prompt a text ID. Its restored parser gives
-  the native ID one batch later, as a message that refines the accepted one. With the lookahead, one
-  parser gives the native ID in the first batch, and the golden `mainWithLookahead` pins that text. A
-  change to this behavior is a separate decision.
+  are a different key order. Three of them have a test with the name "known restore difference, kept as
+  it is", and one is in the main Codex golden. The fifth is also in the main Codex golden, and it is
+  about one prompt. A parser that reads with no lookahead gives that prompt a text ID. A parser that is
+  restored after the batch of that prompt sends the native ID one batch later, as a message that refines
+  the accepted one. For a prompt of one block, storage then keeps the text ID and records the native ID
+  as an alias. With the lookahead, one parser gives the native ID in the first batch, and the golden
+  `mainWithLookahead` pins that text. A scan has the lookahead for each read of two or more batches that
+  sends messages. Thus the prompt gets a text ID only when a scan ran before Codex wrote the record that
+  has the native ID.
+
+  An analysis after step 5 looked for the effect of the five cases ([decision 9](#decisions)). No case
+  makes a duplicate, and no case makes storage reject a batch. The stored messages and usage records
+  have the same content, other than the ID of the prompt of the fifth case. Two other effects are
+  visible.
+  `ScanActivity` compares a hash of the saved state. Thus `watch` can report an `oldestPendingAgeMs` that
+  grows for a source that storage holds completely. That needs a request that lands late, or a second
+  process of the same installation. And the keys of the `context` of a stored message can come in
+  another order. The analysis also found two differences that no golden test pins. One is a sixth key
+  order, in the calls of `previousChange`. The analysis found no effect of it. The other is a difference
+  of content. The `agent_message` event of an answer can come in a later scan than the answer record.
+  The stored answer can then keep its text IDs and miss the request ID that only the event has. A change
+  to this behavior is a separate decision.
 - **Two block builders, two key orders.** Paginated Codex items build a text block as
   `{ blockIndex, text }`. Legacy Codex records build it as `{ text, blockIndex }`. Claude Code builds
   `{ blockIndex, text }`. The fallback message ID hashes the block, so the builders must stay apart.
@@ -464,9 +524,18 @@ type for a JSON object. `Row` in `test/fixtures/claude-chat-fixture.ts` is the s
   that moves a call changes the prefix. The CLI tests accept each line number, so only the output
   comparison shows a call that moved. Step 4 keeps the four calls on their lines in `cli.ts`. In the
   compiled `dist/cli.js` each call is one line lower after step 4, and the owner accepted that.
-- **Bun and Node.js give a different order.** For the same sample at the same commit, the Bun run of the
-  source and the Node.js run of the compiled files do not give the same bytes. The content is the same,
-  but the sequence of the sessions and of some messages is different. Compare one runtime with itself.
+- **Bun and Node.js read a folder in a different order.** At one commit, the Bun run of the source and
+  the Node.js run of the compiled files give different bytes for the sample. An analysis after step 5
+  found the cause ([decision 9](#decisions)). `TranscriptDirectories.listDirectory` gives the entries of
+  a folder as `readdir` gives them. On macOS, Node.js gives the names in byte order, and Bun gives the
+  order of the file system. Thus the two runtimes can read the transcript files in a different sequence.
+  The sessions and the entries of the `history` command then come in another order. Stored results can
+  also be different. The analysis showed three of them with made-up files. The messages of a session
+  that has two or more files can come in another order. The usage rows and the total of such a Codex
+  session can be different. `UsageWindows.merge` keeps the counter history of the first file that it
+  gets. A Claude Code fork child that storage gets before its parent can get a higher version. No
+  contract states the order of the files of a folder, or the order of the sessions of one provider.
+  Compare one runtime with itself. A change to this behavior is a separate decision.
 - **Build after a change to `packages/shared`.** Bun and Node.js load `@tracerelic/shared` from
   `packages/shared/dist`. Run `bun run build` before `bun run collector`.
 - **The function members of the port use method syntax.** `ScanProvider`, `ProviderScan`, `EarlierCopies`
@@ -492,6 +561,7 @@ type for a JSON object. `Row` in `test/fixtures/claude-chat-fixture.ts` is the s
   of the other workspaces. Thus Knip reports an export that only a test imports through `#src/…` as not
   used. That agrees with the rule of step 5: a helper that only a test needs belongs in
   `test/fixtures/`. Run Knip after a build. Without one, it reports the `#…` imports as not resolved.
+  [Decision 8](#decisions) plans one TypeScript project for each workspace.
 - **Pairs that look alike and stay two rules.** `StreamKeys.stream` and `StreamKeys.sourceId` give
   different text for a source that has no installation ID. `ForkCapture.later` and the comparison in
   `SessionMetadata.selectBranch` are not `RecordedInstant.compare`. `ClaudeUsage.text` ignores a string
@@ -537,10 +607,11 @@ type for a JSON object. `Row` in `test/fixtures/claude-chat-fixture.ts` is the s
   [history.tsp](local-collector/history.tsp) for a TypeScript caller, and the history scenarios use it.
 - The field `harness` of a scan entry. `TranscriptBatches` writes it, and no production code reads it.
   The field makes the entry types of the two providers different types, and the contract has the field.
+  The owner confirmed this point and the point before it after step 5.
 
 ## Decisions
 
-The owner accepted these six decisions.
+The owner accepted these nine decisions.
 
 1. **Provider class names.** `CodexHistory` and `ClaudeHistory`. The configuration key (`claudePath`),
    the stored `harness` value and the specification all say `claude`.
@@ -559,6 +630,21 @@ The owner accepted these six decisions.
    each harness. The command gives that method a `GlobalConfig`, which rejects a path that is not
    absolute. A TypeScript caller that makes a provider or a scanner itself must meet them. A check in a
    constructor is a new error for such a caller, so it needs its own scenario.
+7. **Reach of the structure rules.** The owner decided this after step 5. Two rules now reach `apps/api`
+   and `packages/shared`: the rule against `this` in a static method, and the rule against a relative
+   import of the source. The [rule table](#rules-that-keep-the-structure) gives the files. The function
+   rule stays with the collector and the two leaf modules, so the functions of `apps/api/src` and of
+   `recorded-path.ts` stay. Step 6 did that.
+8. **One TypeScript project for each workspace.** The owner decided to plan this as separate work, so
+   that Knip can follow `#src/…`. Knip then counts a test as a user of an export. Thus that plan also adds
+   a Knip run in production mode, which does not count tests. That run reports an export that only tests
+   use, so decision 2 has a check. A member that the owner keeps on purpose gets an exception. This work
+   is not started.
+9. **Cause and effect before a decision.** The owner asked for an analysis of two points before a
+   decision on them. The points are the text of a restored parser, and the different order on Bun and on
+   Node.js. The two analyses are done, and
+   [Points that later work must know](#points-that-later-work-must-know) has the result of each one. The
+   owner has not decided what to change.
 
 ## The review that started the cleanup
 
