@@ -20,6 +20,7 @@ modules) and `apps/api` (only its imports of the names that change).
 | 4 | Each function is a member of a class | Done, [PR 31](https://github.com/tomer-mayara/TraceRelic/pull/31) |
 | 5 | A test reaches the source in two ways, and six members that only tests read are in test fixtures | Done, [PR 32](https://github.com/tomer-mayara/TraceRelic/pull/32) |
 | 6 | Two structure rules also check the API and the shared package, the type check declares two built-ins, and the database fixture removes its volumes | Done, [PR 35](https://github.com/tomer-mayara/TraceRelic/pull/35) |
+| 7 | The copies of seven rules call one method each | In work |
 
 The description of each PR has the check results of its step.
 
@@ -187,8 +188,8 @@ whose module is a template, and a path that starts with `./../`. No test has one
 
 ## Constraint decisions
 
-These decisions apply to all the steps. Step 4, the change after step 5 and step 6 add to them in their
-own sections.
+These decisions apply to all the steps. Step 4, the change after step 5, step 6 and step 7 add to them
+in their own sections.
 
 | Constraint | Decision | Check |
 | --- | --- | --- |
@@ -490,6 +491,68 @@ type check. The types of Bun are there, so that check passes also without the `l
 database tests a server through `TRACERELIC_TEST_DATABASE_URL`, so it does not start the containers of
 the fixture. The step checked the two points one time: a type check of the collector alone, and a run of
 `legacy-journal.test.ts` without that variable.
+
+### Step 7. Rules that methods repeat
+
+The owner approved this step on 2026-11-24. It is in work.
+
+Step 4 and the change after step 5 looked at declarations: functions and types. A rule that a method
+writes inline has no declaration, so those scans did not see its copies. Two searches of
+`apps/collector/src` at commit `521cb37` list them. The first search gives each regular expression, and
+each test, comparison and calculation of 8 tokens or more, that has the same shape in more than one
+place. The second search finds, by the structure of the code, each place of four tests: a pattern with
+the digest, a count, a positive count and a nonempty string. It does not look for the test for a JSON
+object. The searches do not see a rule that is split over two statements, and they do not see the same
+rule in a different form. A user of the CLI or of the API sees no change. Affected component:
+`apps/collector` (23 source files).
+
+The unit is a test that has a name, such as "a count". A caller that adds a limit to a method, as in
+`BatchValues.isCount(x) && x > 0`, uses the method, and the limit is the rule of that caller. Thus the
+12 places in 7 files of `storage/` that call `BatchValues.isCount` with a limit are not copies. The step
+applies two sentences of the
+[coding principles](../engineering-guidelines/coding-principles.md#implementation-and-verification): reuse
+existing code, and extract shared logic when a third use expresses the same rule.
+
+| Rule | Places now | After the step |
+| --- | --- | --- |
+| The text of a SHA-256 digest: 64 hexadecimal digits in lower case | 11 tests in 9 files of `providers/codex/`, `scan/` and `storage/`, with two spellings of the pattern. Two of the tests are private helpers. | `ContractValues.isDigest`. `ContractValues` is a new class in the storage port. |
+| The ID of a native Codex call: `call:native:` and a digest | 4 tests in 4 files: 3 files of `storage/`, and `providers/codex/codex-usage.ts` | `ContractValues.isNativeCallId` |
+| A nonempty string | 8 inline tests: 7 in 4 files of `providers/`, and 1 in `ParserState.string` | `JsonRecord.isNonemptyString`, a new method. `JsonRecord.identifier` uses it. |
+| The first value that is a nonempty string | 4 inline copies in 3 files of `providers/` | `JsonRecord.identifier` |
+| A count: a safe integer that is 0 or more | 7 tests in full: 6 in `transcript/transcript-batches.ts`, `scan/parser-state.ts`, `scan/replay-occurrences.ts` and `scan/transcript-cursor.ts`, and 1 in `storage/claude/claude-advisor-iterations.ts` | `JsonRecord.isCount` for the 6, and `BatchValues.isCount` for the 1. A limit, such as `< 1`, stays at its place. |
+| A JSON object | 1 test in full in `scan/parser-state.ts` | `JsonRecord.is` |
+| The sequence of two token counters | `ObservedCounterSpans.compare`, a private method that has the body of `UsageIntervals.position` in the same directory | `UsageIntervals.position` |
+
+That is 35 places and one private method.
+
+These copies stay:
+
+- **A rule with two places and no method.** Three examples: the test for the error codes `EACCES` and
+  `EPERM` in two files of `providers/claude/`, the test for a token-usage record in two files of
+  `providers/codex/`, and the name pattern of a rollout file in `source-inventory.ts` and in the storage
+  port.
+- **Copies in one file.** One example: `codex-token-counts.ts` writes the sum of the cached tokens three
+  times.
+- **Tests that the layers keep apart.** `transcript/` and `storage/` cannot import each other. Thus
+  `JsonRecord` and `BatchValues` each have the test for a count, for a nonempty string and for a JSON
+  object.
+- **Five tests in full that the step does not change.** The storage port writes the count test one time
+  and the test for a JSON object two times. It cannot import `JsonRecord` or `BatchValues`.
+  `config/global-config.ts` writes the test for a nonempty string, and `config/` imports no other
+  directory of the collector. `captured-transcript-file.ts` writes the count test one time. It imports
+  only `node:` modules, and the step adds no import to it.
+- **Five patterns that contain the digest and have one place each**, such as the pattern of a text ID.
+- **The prefixes of the IDs**, such as `verified:`, `:reset:` and `index:`. A parser writes them and the
+  storage reads them. A class for each ID format is a larger change, and it needs its own decision.
+- **The digest pattern in the contracts.** `storage.tsp` has it three times and `collector-api/main.tsp`
+  has it one time.
+
+| Constraint | Decision | Check |
+| --- | --- | --- |
+| Behavior | No change. At each place, the method gives the same result as the old test for each value that can reach that place. Three of the digest tests have no test of the type now: their value is a key of an object, which is a string. | Before the change, make the condition of each place wrong on purpose, one place at a time. A test must fail. Where no test fails, add a unit test first. Then: a unit test for each new public member, written first (`ContractValues.isDigest`, `ContractValues.isNativeCallId` and `JsonRecord.isNonemptyString`), the golden tests, the steps of the PR workflow, and the output comparison and the trace comparison before the change and after it. A reviewer that did not write the change names the values that can reach each place. |
+| Observability | Out of scope. No signal is added or changed, and `cli.ts` stays as it is. | The CLI tests |
+| Architecture | The dependency rules do not change. Two provider files and two scan files get a value import of the storage port, which `scanner-uses-only-the-storage-port` allows. These two scan files and `scan/transcript-cursor.ts` also import `transcript/json-record.ts`. No import makes a cycle. | `check:collector-deps` |
+| Interface | The named export `./storage` gets one more class, `ContractValues`. No `.tsp` file changes: `storage.tsp` has the pattern for `PrefixDigest` now. | `bun run build` and the three `schema:collector-*` scripts |
 
 ## Points that later work must know
 
