@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import type { DecodedChat } from "@tracerelic/collector/scan";
 import { CodexChat } from "#src/providers/codex/codex-chat";
+import { CodexForkTurn } from "#src/providers/codex/codex-fork-usage";
 import { CodexSessionParser } from "#src/providers/codex/codex-session-parser";
 import { CodexForkUsageFixture as F } from "../../../fixtures/codex-fork-usage-fixture.ts";
 
@@ -75,6 +76,15 @@ test("native item ownership can identify a child turn with an unavailable parent
     F.record("event_msg", { type: "item_completed", thread_id: "parent", turn_id: "b" }),
     F.report(undefined, F.counts(7, 0), { call_id: "parent", turn_id: "b" })));
   assert.deepEqual(measurements(result).map(call => call.inputTokens), [5]);
+});
+
+test("a started turn whose ID is empty or not text gives the child no turn", () => {
+  for (const [turnId, owned] of [["ours", "ours"], ["", undefined], [42, undefined]] as const) {
+    const turn = new CodexForkTurn(F.forkedAt);
+    const payload = { type: "task_started", turn_id: turnId, started_at: 1776265201 };
+    turn.observe(F.rows(F.record("event_msg", payload))[0], payload);
+    assert.equal(turn.snapshot(), owned);
+  }
 });
 
 test("a native call carries a workspace provider key and keeps its session-scoped usage ID", () => {

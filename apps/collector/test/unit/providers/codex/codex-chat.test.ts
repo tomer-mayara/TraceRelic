@@ -299,6 +299,20 @@ test("rejects malformed Codex checkpoint state without disclosing the supplied d
   }
 });
 
+test("rejects a restored mirror receipt whose digest is not 64 lowercase hexadecimal digits", () => {
+  const digest = "a".repeat(64);
+  const parser = CodexChat.resume();
+  parser.decodeBatch(F.entries(F.event("user_message", "Hello")).map(entry => ({ ...entry, recordPrefixDigest: digest })));
+  const state = JSON.parse(JSON.stringify(parser.snapshot()));
+  const [key] = Object.keys(state.mirrors);
+  const receipt = (value: unknown) => ({ ...state, mirrors: { [key]: [{ ...state.mirrors[key][0], receipt: { at: F.at, digest: value } }] } });
+  assert.deepEqual(state.mirrors[key][0].receipt, { at: F.at, digest });
+  assert.doesNotThrow(() => CodexChat.resume(receipt(digest)));
+  for (const malformed of ["malformed", digest.toUpperCase(), digest.slice(1), `${digest}0`, 42, undefined]) {
+    assert.throws(() => CodexChat.resume(receipt(malformed)), { name: "Error", message: "Invalid chat parser state" });
+  }
+});
+
 test("a pending mirror distinguishes a JSON surrogate escape from the replacement character", () => {
   const entries = F.entries(F.event("user_message", "\uD800"), F.response("user", [F.input("\uFFFD")]));
   const first = CodexChat.resume();
