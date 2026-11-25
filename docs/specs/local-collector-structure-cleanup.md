@@ -20,26 +20,27 @@ modules) and `apps/api` (only its imports of the names that change).
 | 4 | Each function is a member of a class | Done, [PR 31](https://github.com/tomer-mayara/TraceRelic/pull/31) |
 | 5 | A test reaches the source in two ways, and six members that only tests read are in test fixtures | Done, [PR 32](https://github.com/tomer-mayara/TraceRelic/pull/32) |
 | 6 | Two structure rules also check the API and the shared package, the type check declares two built-ins, and the database fixture removes its volumes | Done, [PR 35](https://github.com/tomer-mayara/TraceRelic/pull/35) |
-| 7 | The copies of seven rules call one method each | In work |
+| 7 | The copies of seven rules call one method each | Done, [PR 36](https://github.com/tomer-mayara/TraceRelic/pull/36) |
 
 The description of each PR has the check results of its step.
 
-| Measure | Before | After step 1 | After step 2 | After step 3 | After step 4 | After step 5 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Top-level functions in `apps/collector/src` | 265 | 262 | 258 | 256 | 0 | 0 |
-| Classes | 57 | 67 | 67 | 70 | 93 | 93 |
-| Node tests | 687 | 778 | 778 | 809 | 809 | 815 |
-| Collector scenarios | 47 | 49 | 49 | 52 | 52 | 52 |
+| Measure | Before | After step 1 | After step 2 | After step 3 | After step 4 | After step 5 | After step 7 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Top-level functions in `apps/collector/src` | 265 | 262 | 258 | 256 | 0 | 0 | 0 |
+| Classes | 57 | 67 | 67 | 70 | 93 | 93 | 94 |
+| Node tests | 687 | 778 | 778 | 809 | 809 | 815 | 848 |
+| Collector scenarios | 47 | 49 | 49 | 52 | 52 | 52 | 52 |
 
 "Before" is commit `21ab8a9`. Step 2 moved four of the functions to `packages/shared` with two leaf
 modules. Step 3 moved two functions into provider classes. After step 4, each function of
 `apps/collector/src` and of the two leaf modules is in a class. Step 5 added one golden test, which has
-five batches.
+five batches. Step 6 changed none of these numbers. Step 7 added one class and 33 tests.
 
 ## Structure
 
 Steps 1 to 4 made this structure. Step 5 did not change it. The change after step 5 added the type
-`Fields` to `json-record.ts`.
+`Fields` to `json-record.ts`. Step 7 added the class `ContractValues` to the storage port and the method
+`JsonRecord.isNonemptyString`.
 
 ```text
 apps/collector/src/
@@ -159,8 +160,9 @@ path of the location. Without one, it is the root-based stream ID of the provide
 The rules for the API, the HTTP client, the schedule and the storage port were there before the cleanup.
 They have the same meaning with the new paths. `schedule-runs-the-scan-through-its-handler` also forbids
 `providers/` and `transcript/`, because the readers went there from `history/`. A provider imports the
-storage port, because the scan port names its types. Thus `local-history-is-independent-of-storage` applies
-to `history/` and `transcript/` only.
+storage port: the scan port names its types, and provider classes call `StreamKeys`,
+`LegacyScannerSource` and `ContractValues`. Thus `local-history-is-independent-of-storage` applies to
+`history/` and `transcript/` only.
 
 **Structure rule.** [collector-structure.eslint.mjs](../../.habit-hooks/collector-structure.eslint.mjs)
 has three selectors. `bun run check:collector-structure` checks them, and the
@@ -218,6 +220,7 @@ in their own sections.
 | Step 5, after each change of the production source | 13 commands, identical | 12 scenarios, identical |
 | The change after step 5 | Not run. [Two comparisons of the code](#after-step-5-one-declaration-of-fields) replace it. | Not run |
 | Step 6, after its last code commit | 13 commands, identical | 12 scenarios, identical |
+| Step 7, after its last code commit | 13 commands, identical | 12 scenarios, identical |
 
 The 13 commands are: a full scan with an installation ID and one without; a full history window and a
 window with fractional seconds; a scan with `--session` and one with `--project`; a Codex fork child
@@ -494,7 +497,7 @@ the fixture. The step checked the two points one time: a type check of the colle
 
 ### Step 7. Rules that methods repeat
 
-The owner approved this step on 2026-11-24. It is in work.
+Done in PR 36. The owner approved this step on 2026-11-24.
 
 Step 4 and the change after step 5 looked at declarations: functions and types. A rule that a method
 writes inline has no declaration, so those scans did not see its copies. Two searches of
@@ -553,6 +556,24 @@ These copies stay:
 | Observability | Out of scope. No signal is added or changed, and `cli.ts` stays as it is. | The CLI tests |
 | Architecture | The dependency rules do not change. Two provider files and two scan files get a value import of the storage port, which `scanner-uses-only-the-storage-port` allows. These two scan files and `scan/transcript-cursor.ts` also import `transcript/json-record.ts`. No import makes a cycle. | `check:collector-deps` |
 | Interface | The named export `./storage` gets one more class, `ContractValues`. No `.tsp` file changes: `storage.tsp` has the pattern for `PrefixDigest` now. | `bun run build` and the three `schema:collector-*` scripts |
+
+The results:
+
+- **The tests before the change.** The workers made 100 wrong conditions on the code before the change,
+  one at a time: 76 at the 35 places, 2 in the body of `ObservedCounterSpans.compare`, and 22 at the call
+  sites of the private helpers. No test found 30 of them. Two of the 30 cannot change a result. The other
+  28 got a test first: 23 new tests.
+- **The change.** The 35 places call the seven methods. Four private helpers went away, because each had
+  the body of a method: `CodexUsage.validCallId`, `CheckpointTransition.isPrefixDigest`, the local
+  function `isDigest` of `source-inventory.ts` and `ObservedCounterSpans.compare`.
+- **The tests after the change.** The workers made 86 wrong conditions at the changed places. The tests
+  find 84. The other two cannot change a result.
+- **One difference that no input reaches.** `BatchValues.isNativeCodexCall` had no test of the type. It
+  now rejects an ID that is not a string and whose text form is a native call ID. Each caller gives it a
+  `Usage` that passed `BatchValues.isUsage`, so the ID is a string.
+- **Review.** An independent reviewer compared each place before the change and after it, and named the
+  values that can reach it. It found no other difference. It ran the 17 test files that pin a place on
+  the source of `main`, and each test passes.
 
 ## Points that later work must know
 
@@ -674,7 +695,7 @@ These copies stay:
 
 ## Decisions
 
-The owner accepted these nine decisions.
+The owner accepted these ten decisions.
 
 1. **Provider class names.** `CodexHistory` and `ClaudeHistory`. The configuration key (`claudePath`),
    the stored `harness` value and the specification all say `claude`.
@@ -708,6 +729,8 @@ The owner accepted these nine decisions.
    Node.js. The two analyses are done, and
    [Points that later work must know](#points-that-later-work-must-know) has the result of each one. The
    owner has not decided what to change.
+10. **The rules of step 7.** The owner approved step 7 with all seven rules. The other choice was the two
+    patterns only: the digest and the ID of a native Codex call.
 
 ## The review that started the cleanup
 
