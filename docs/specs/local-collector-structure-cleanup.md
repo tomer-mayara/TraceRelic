@@ -35,7 +35,8 @@ five batches.
 
 ## Structure
 
-Steps 1 to 4 made this structure. Step 5 did not change it.
+Steps 1 to 4 made this structure. Step 5 did not change it. The change after step 5 added the type
+`Fields` to `json-record.ts`.
 
 ```text
 apps/collector/src/
@@ -66,7 +67,7 @@ apps/collector/src/
 ├── transcript/                provider-neutral file reading
 │   ├── captured-transcript-file.ts, transcript-directories.ts
 │   ├── jsonl-records.ts       JsonlRecords: complete lines to JSON objects
-│   ├── json-record.ts         JsonRecord: the checks on one decoded JSON value. Fields: one decoded JSON object
+│   ├── json-record.ts         JsonRecord: the checks on one decoded JSON value. Fields: the type of a JSON object
 │   ├── transcript-batches.ts  TranscriptBatches: byte-bounded batches with prefix digests
 │   ├── source-discovery.ts    SourceDiscovery: the selection by session and project
 │   └── transcript-source.ts   TranscriptSource, RecordBatch, ReadPosition, ScanSelection
@@ -180,7 +181,8 @@ imports each other name through `#src/…`. The third selector checks only that 
 
 ## Constraint decisions
 
-These decisions apply to all the steps. Step 4 adds to them in its own section.
+These decisions apply to all the steps. Step 4 and the change after step 5 add to them in their own
+sections.
 
 | Constraint | Decision | Check |
 | --- | --- | --- |
@@ -207,6 +209,7 @@ These decisions apply to all the steps. Step 4 adds to them in its own section.
 | Steps 1 to 3 together: `main` and the commit of step 3 | 13 commands, identical | 12 scenarios, identical |
 | Step 4, after each code commit | 13 commands, identical | 12 scenarios, identical |
 | Step 5, after each change of the production source | 13 commands, identical | 12 scenarios, identical |
+| The change after step 5 | Not run. [Two comparisons of the code](#after-step-5-one-declaration-of-fields) replace it. | Not run |
 
 The 13 commands are: a full scan with an installation ID and one without; a full history window and a
 window with fractional seconds; a scan with `--session` and one with `--project`; a Codex fork child
@@ -431,15 +434,17 @@ Changes of step 5 for a TypeScript caller:
 ### After step 5. One declaration of `Fields`
 
 `Fields` is the type of one decoded JSON object. Six provider files and five test fixtures each
-declared this type, and one of the fixtures declared it without `Readonly`. The type is one export of
-[json-record.ts](../../apps/collector/src/transcript/json-record.ts), and it is the type that
-`JsonRecord.object` gives for a JSON object. The change is in types and in import lines only.
+declared this type with the name `Fields`, and one of the fixtures declared it without `Readonly`. The
+name now has one declaration, an export of
+[json-record.ts](../../apps/collector/src/transcript/json-record.ts). `JsonRecord.object` gives this
+type for a JSON object. `Row` in `test/fixtures/claude-chat-fixture.ts` is the same record type without
+`Readonly`, and it stays. The change is in types and in import lines only.
 
 | Constraint | Decision and check |
 | --- | --- |
-| Behavior | No change. The compiler removes a type and a type import. Build the commit before the change and the commit after it: each compiled `.js` file must have the same bytes. Then run `bun run test`. |
+| Behavior | No change. The compiler removes each type declaration and each type import. Two comparisons of the commit before the change with the commit after it show this. Each compiled `.js` file must have the same bytes. For the source that Bun runs, Bun's transpiler must give the same code for each changed file. Then run `bun run test`. |
 | Observability | Out of scope. No signal is added or changed, and `cli.ts` stays as it is. |
-| Architecture | The dependency rules and the structure rule do not change. Twelve provider files imported `JsonRecord` from this file before the change, so the dependency is not new. `check:collector-deps`, `check:collector-structure` |
+| Architecture | The dependency rules and the structure rule do not change. Before the change, twelve provider files imported `JsonRecord` from `json-record.ts`. Thus the dependency of `providers/` on that file is not new. `check:collector-deps`, `check:collector-structure` |
 | Interface | No change. No named package export and no `.tsp` file has `Fields`. `bun run typecheck` checks each import. |
 
 ## Points that later work must know
@@ -491,18 +496,23 @@ declared this type, and one of the fixtures declared it without `Readonly`. The 
   different text for a source that has no installation ID. `ForkCapture.later` and the comparison in
   `SessionMetadata.selectBranch` are not `RecordedInstant.compare`. `ClaudeUsage.text` ignores a string
   of spaces, and `JsonRecord.identifier` accepts it. The list of token breakdown fields is in
-  `codex-token-counts.ts` and in `usage-intervals.ts`, because a provider file and a storage file cannot
-  import each other.
+  `codex-token-counts.ts` and in `usage-intervals.ts`. A provider file and a storage file cannot import
+  each other. The storage port could hold one list, but the list has two uses only.
 - **Types that two files declare.** Three types have the same meaning in two files each, and they stay
   two declarations. The
   [coding principles](../engineering-guidelines/coding-principles.md#implementation-and-verification)
-  extract shared logic at its third use, and the cleanup uses the same limit for a type.
-  `VerifiedPrefix` is in `transcript/transcript-source.ts` and in the storage port, which cannot import
-  each other. `TextBlock` is in the visible-text file of each provider, and a provider cannot import the
-  other one. `Identity` is a private alias in `claude-advisor-iterations.ts` and in
-  `claude-usage-ledger.ts`. The history port writes the type of `Fields` in full for
-  `LocalHistoryEntry.record`, because `history/` imports no other collector directory. A short local
-  name for an imported type, such as `Source` for `CodexRolloutSource`, is not a second declaration.
+  say to extract shared logic when a third use expresses the same rule. The cleanup uses the same limit
+  for the declarations of a type.
+  - `VerifiedPrefix` is in `transcript/transcript-source.ts` and in the storage port, which cannot import
+    each other. `CapturedTranscriptFile.prefixDigests` writes the two members in full: that file imports
+    only `node:` modules.
+  - `TextBlock` is in the visible-text file of each provider. A provider cannot import the other
+    provider. A neutral file could hold the type, as `json-record.ts` holds `Fields`.
+  - `Identity` is a private alias in `claude-advisor-iterations.ts` and in `claude-usage-ledger.ts`. No
+    rule keeps these two files apart.
+  - Two things are not a second declaration. The history port writes the type of `Fields` in full for
+    `LocalHistoryEntry.record`, because `history/` imports no other collector directory. A file can
+    give an imported type a short local name, such as `Source` for `CodexRolloutSource`.
 
 ## Risks
 
