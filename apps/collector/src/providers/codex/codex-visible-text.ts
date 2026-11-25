@@ -1,7 +1,6 @@
-import { JsonRecord } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 import type { Role } from "../../storage/collector-storage.ts";
 
-type Fields = Readonly<Record<string, unknown>>;
 export type TextBlock = { text: string; blockIndex: number };
 
 /** The text of a Codex record that the chat shows: its role and its text blocks. */

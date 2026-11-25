@@ -6,7 +6,7 @@ export class JsonRecord {
   }
 
   /** The value as a record, or undefined when it is not a JSON object. */
-  static object(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  static object(value: unknown): Fields | undefined {
     if (JsonRecord.is(value)) return value;
   }
 
@@ -20,3 +20,6 @@ export class JsonRecord {
     return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
   }
 }
+
+/** The fields of one decoded JSON object. The code that reads them does not change them. */
+export type Fields = Readonly<Record<string, unknown>>;

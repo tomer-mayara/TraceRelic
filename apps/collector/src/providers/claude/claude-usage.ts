@@ -1,12 +1,11 @@
 import type { ClaudeTranscriptEntry } from "./claude-history.ts";
-import { JsonRecord } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { ClaudeCallOrigin, ClaudeUsageReport, UsageDiagnostic, UsageDiagnosticCode } from "../../storage/collector-storage.ts";
 import { ClaudeAssistantRecord } from "./claude-assistant-record.ts";
 import type { ClaudeSubagent } from "./claude-session-identity.ts";
 import { ClaudeUsageCounts, type ReportIssue } from "./claude-usage-counts.ts";
 
-type Fields = Readonly<Record<string, unknown>>;
 type Request = Pick<ClaudeUsageReport, "at" | "status" | "messageId" | "requestId" | "turnId" | "origin">;
 type Entry = ClaudeTranscriptEntry & { readonly startOffset?: number };
 type Fork = Pick<ClaudeCallOrigin, "parentSessionId" | "parentMessageUuid">;

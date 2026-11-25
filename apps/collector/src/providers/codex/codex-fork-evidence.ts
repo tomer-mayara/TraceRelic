@@ -1,12 +1,12 @@
 import type { CodexRolloutEntry, CodexRolloutSource } from "./codex-history.ts";
 import type { DamagedLine, ReadPosition, RecordBatch } from "../../transcript/index.ts";
-import { JsonRecord } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 import { RecordedInstant } from "@tracerelic/shared";
 import type { CodexForkCheckpoint, TokenCounts } from "../../storage/collector-storage.ts";
 import { ParserState } from "../../scan/parser-state.ts";
 import { CodexForkTurn } from "./codex-fork-usage.ts";
 import { breakdowns, CodexTokenCounts } from "./codex-token-counts.ts";
-import { type CallContext, CodexCallContext, CodexUsageReport, type Fields } from "./codex-usage-report.ts";
+import { type CallContext, CodexCallContext, CodexUsageReport } from "./codex-usage-report.ts";
 
 type Source = CodexRolloutSource;
 type Entry = CodexRolloutEntry & { startOffset: number; afterBlankPrefix?: true };

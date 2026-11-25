@@ -1,6 +1,4 @@
-import { JsonRecord } from "../../transcript/json-record.ts";
-
-type Fields = Readonly<Record<string, unknown>>;
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 
 /** The assistant message of a Claude Code record, as the usage parser accepts it. */
 export class ClaudeAssistantRecord {

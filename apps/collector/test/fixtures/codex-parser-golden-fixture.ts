@@ -1,7 +1,7 @@
 import type { CodexSessionParser } from "#src/providers/codex/codex-session-parser";
+import type { Fields } from "#src/transcript/json-record";
 import { GoldenTranscript } from "./parser-golden-fixture.ts";
 
-type Fields = Readonly<Record<string, unknown>>;
 type ForkPlan = Parameters<typeof CodexSessionParser.forFork>[0];
 /** A batch as the history reader yields it, with its `next` position and prefix digest. */
 type CodexBatch = Parameters<CodexSessionParser["prepareLookahead"]>[1] extends AsyncIterable<infer Batch> ? Batch : never;

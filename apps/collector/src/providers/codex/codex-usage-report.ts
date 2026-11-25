@@ -1,13 +1,12 @@
 import type { CodexRolloutEntry } from "./codex-history.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import type { TokenCounts, Usage } from "../../storage/collector-storage.ts";
-import { JsonRecord } from "../../transcript/json-record.ts";
+import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
 import { ParserState } from "../../scan/parser-state.ts";
 import { CodexTokenCounts } from "./codex-token-counts.ts";
 
 export type UsageEntry = Pick<CodexRolloutEntry, "sessionId" | "lineNumber" | "timestamp" | "record" | "sourceFile">
   & { afterBlankPrefix?: true; startOffset?: number; endOffset?: number };
-export type Fields = Readonly<Record<string, unknown>>;
 export type Call = Usage & { kind: "call" };
 export type CallContext = Pick<Call, "turnId" | "requestId" | "model">;
 export interface Report {
