@@ -1,7 +1,7 @@
 import type { CodexRolloutEntry } from "./codex-history.ts";
 import type { DamagedLine } from "../../transcript/index.ts";
 import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
-import type { Metadata, Role } from "../../storage/collector-storage.ts";
+import { ContractValues, type Metadata, type Role } from "../../storage/collector-storage.ts";
 import { isRecordedTimestamp } from "@tracerelic/shared";
 import { ParserState, TextOccurrences } from "../../scan/parser-state.ts";
 import type { ChatParser, DecodedChat } from "../../scan/decoded-chat.ts";
@@ -305,7 +305,7 @@ export class CodexChat implements ChatParser<ChatEntry> {
 
   private static mirrorReceipt(value: unknown): MirrorReceipt {
     const { at, digest } = ParserState.record(value, ["at", "digest"]);
-    if (typeof at !== "string" || !isRecordedTimestamp(at) || typeof digest !== "string" || !/^[a-f0-9]{64}$/.test(digest)) return ParserState.invalid();
+    if (typeof at !== "string" || !isRecordedTimestamp(at) || !ContractValues.isDigest(digest)) return ParserState.invalid();
     return { at, digest };
   }
 

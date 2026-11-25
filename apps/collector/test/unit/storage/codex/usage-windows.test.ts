@@ -225,3 +225,11 @@ test("unmatched ranges can add independent native calls when every accepted toke
   assert.deepEqual(noNativeId?.measurements, fallback.parts);
   assert.equal(noNativeId && mayCover(noNativeId, { usageId: "loose", historyId: otherOrigin }, archivedCopy), true);
 });
+
+test("a window proves its boundary observations only with two digests", () => {
+  const boundaryObservations = { start: "a".repeat(64), end: "b".repeat(64) };
+  assert.equal(UsageWindows.isWindow({ ...later, boundaryObservations }), true);
+  for (const proof of [{ ...boundaryObservations, start: "not-a-digest" }, { ...boundaryObservations, end: "not-a-digest" }]) {
+    assert.equal(UsageWindows.isWindow({ ...later, boundaryObservations: proof }), false);
+  }
+});

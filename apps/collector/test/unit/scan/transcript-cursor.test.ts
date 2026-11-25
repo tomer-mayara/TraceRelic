@@ -110,3 +110,15 @@ test("a correction can add only a batch field in which a provider names the chec
   ];
   assert.equal(rejected.length, 4);
 });
+
+test("restore rejects a saved line number that is not a safe integer from one through the checkpoint byte", async () => {
+  const source = new MockTranscript("/mock/one.jsonl", "one", texts);
+  const [, accepted] = await checkpoints(source, new MockFormat());
+  const saved = JSON.parse(accepted.parserState);
+  const restore = (lineNumber: unknown) =>
+    TranscriptCursor.restore(source, { ...accepted, parserState: JSON.stringify({ ...saved, lineNumber }) }, new MockFormat());
+  for (const lineNumber of [1, accepted.offset]) await restore(lineNumber);
+  for (const lineNumber of [0, accepted.offset + 1, 1.5, "2"]) {
+    await assert.rejects(restore(lineNumber), { message: `Cannot restore parser state for /mock/one.jsonl at byte ${accepted.offset}` });
+  }
+});

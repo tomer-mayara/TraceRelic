@@ -24,7 +24,7 @@ export class CodexVisibleText {
     if (role === "assistant" && !CodexVisibleText.displaysAnswer(item.moderation)) return [];
     return item.content.flatMap((value, blockIndex) => {
       const part = JsonRecord.object(value);
-      if (part?.type !== (role === "user" ? "text" : "Text") || typeof part.text !== "string" || !part.text.length) return [];
+      if (part?.type !== (role === "user" ? "text" : "Text") || !JsonRecord.isNonemptyString(part.text)) return [];
       return [{ blockIndex, text: part.text }];
     });
   }
@@ -44,7 +44,7 @@ export class CodexVisibleText {
   static blocks(role: Role, event: boolean, payload: Fields): TextBlock[] {
     if (event) {
       const text = payload.message;
-      if (typeof text !== "string" || !text.length || (role === "user" && CodexVisibleText.injectedUserText(text))) return [];
+      if (!JsonRecord.isNonemptyString(text) || (role === "user" && CodexVisibleText.injectedUserText(text))) return [];
       return [{ text, blockIndex: 0 }];
     }
     const content = payload.content;
@@ -55,7 +55,7 @@ export class CodexVisibleText {
       const block = JsonRecord.object(part);
       if (block?.type !== (role === "user" ? "input_text" : "output_text")) continue;
       const text = block.text;
-      if (typeof text !== "string" || !text.length) continue;
+      if (!JsonRecord.isNonemptyString(text)) continue;
       const kind = Array.isArray(kinds) ? kinds[blockIndex] : undefined;
       if (role === "user" && (CodexVisibleText.injectedUserText(text, kind) || CodexVisibleText.mediaLabel(text, content, blockIndex))) continue;
       blocks.push({ text, blockIndex });
@@ -65,7 +65,7 @@ export class CodexVisibleText {
 
   private static injectedUserText(text: string, kind?: unknown): boolean {
     // Codex marks text supplied by a user explicitly. Legacy records need the envelope check.
-    if (typeof kind === "string" && kind && kind !== "unknown") return kind !== "user.text";
+    if (JsonRecord.isNonemptyString(kind) && kind !== "unknown") return kind !== "user.text";
     const trimmed = text.trim();
     return /^<(environment_context|user_instructions|skill|subagent_notification|user_shell_command|codex_internal_context|goal_context|recommended_plugins)(?: [^>]*)?>[\s\S]*<\/\1>$/i.test(trimmed)
       || /^# AGENTS\.md instructions(?: for [^\r\n]+)?\r?\n\s*<INSTRUCTIONS>[\s\S]*<\/INSTRUCTIONS>(?:\s*<environment_context>[\s\S]*<\/environment_context>)?$/.test(trimmed);

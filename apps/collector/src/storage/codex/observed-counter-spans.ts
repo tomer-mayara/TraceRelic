@@ -1,4 +1,5 @@
 import type { TokenCounts, UsageWindow } from "../collector-storage.ts";
+import { UsageIntervals } from "./usage-intervals.ts";
 
 interface ObservedInterval {
   window: UsageWindow;
@@ -21,10 +22,6 @@ interface OrderedInterval {
 
 /** The counter spans that two epochs of one native rollout recorded together. */
 export class ObservedCounterSpans {
-  private static compare(left: TokenCounts, right: TokenCounts): number {
-    return left.inputTokens - right.inputTokens || left.outputTokens - right.outputTokens;
-  }
-
   private static observedBoundaries(intervals: readonly ObservedInterval[]): Set<string> {
     const observations = new Set<string>();
     for (const { window } of intervals) {
@@ -66,14 +63,14 @@ export class ObservedCounterSpans {
   private static contiguous(windows: readonly OrderedInterval[], index: number): boolean {
     const current = windows[index];
     const next = windows[index + 1];
-    return !!next && !!current.to && !ObservedCounterSpans.compare(current.end, next.start) && current.to === next.from;
+    return !!next && !!current.to && !UsageIntervals.position(current.end, next.start) && current.to === next.from;
   }
 
   /** Start at a shared observation. Stop at the next common boundary or where one copy runs out of evidence. */
   private static limits(left: OrderedInterval[], i: number, right: OrderedInterval[], j: number, step: 1 | -1) {
     for (;;) {
       const a = left[i], b = right[j];
-      const order = step * ObservedCounterSpans.compare(a.end, b.end);
+      const order = step * UsageIntervals.position(a.end, b.end);
       const verified = !order && a.to === b.to;
       if (verified || (order <= 0 && !ObservedCounterSpans.contiguous(left, i)) || (order >= 0 && !ObservedCounterSpans.contiguous(right, j))) {
         return { left: i + 1, right: j + 1, verified };
@@ -93,7 +90,7 @@ export class ObservedCounterSpans {
     let j = 0;
     while (i < left.length && j < right.length) {
       const a = left[i], b = right[j];
-      const order = step * ObservedCounterSpans.compare(a.start, b.start);
+      const order = step * UsageIntervals.position(a.start, b.start);
       if (!order && a.from && a.from === b.from
         && a.sources.some(source => b.sources.some(other => source !== other))) {
         const end = ObservedCounterSpans.limits(left, i, right, j, step);

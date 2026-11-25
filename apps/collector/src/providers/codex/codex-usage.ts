@@ -1,6 +1,6 @@
 import type { DamagedLine } from "../../transcript/index.ts";
 import { type Fields, JsonRecord } from "../../transcript/json-record.ts";
-import type { TokenCounts, Usage, UsageDiagnostic, UsageWindow } from "../../storage/collector-storage.ts";
+import { ContractValues, type TokenCounts, type Usage, type UsageDiagnostic, type UsageWindow } from "../../storage/collector-storage.ts";
 import { ParserState } from "../../scan/parser-state.ts";
 import type { CodexForkUsage } from "./codex-fork-usage.ts";
 import { type Breakdown, breakdowns, CodexTokenCounts, zero } from "./codex-token-counts.ts";
@@ -61,12 +61,12 @@ export class CodexUsage {
 
   private restoreAliases(saved: Record<string, unknown>): void {
     if (saved.aliases !== undefined) for (const [alias, ids] of Object.entries(ParserState.record(saved.aliases))) {
-      if (!CodexUsage.validCallId(alias) || !Array.isArray(ids) || !ids.length || !ids.every(CodexUsage.validCallId)) ParserState.invalid();
+      if (!ContractValues.isNativeCallId(alias) || !Array.isArray(ids) || !ids.length || !ids.every(ContractValues.isNativeCallId)) ParserState.invalid();
       this.aliases.set(alias, new Set(ids));
     }
     if (saved.previousChange !== undefined) {
       const { start, calls, closingId } = ParserState.record(saved.previousChange, ["start", "calls", "closingId"]);
-      if (!this.baseline || !Array.isArray(calls) || (closingId !== undefined && !CodexUsage.validCallId(closingId))) ParserState.invalid();
+      if (!this.baseline || !Array.isArray(calls) || (closingId !== undefined && !ContractValues.isNativeCallId(closingId))) ParserState.invalid();
       this.previousChange = { start: CodexTokenCounts.restore(start), calls: calls.map(CodexUsage.restoreCall), closingId };
     }
   }
@@ -74,7 +74,7 @@ export class CodexUsage {
   private restoreObservations(value: unknown): void {
     if (!Array.isArray(value)) ParserState.invalid();
     for (const id of value) {
-      if (typeof id !== "string" || !/^[a-f0-9]{64}$/.test(id) || this.observations.has(id)) ParserState.invalid();
+      if (!ContractValues.isDigest(id) || this.observations.has(id)) ParserState.invalid();
       this.observations.add(id);
       this.lastObservation = id;
     }
@@ -83,7 +83,7 @@ export class CodexUsage {
   private restoreCalls(known: unknown, pending: unknown): void {
     for (const [id, value] of Object.entries(ParserState.record(known))) {
       const { historyId, ...amount } = ParserState.record(value, ["historyId", "inputTokens", "outputTokens"]);
-      if (!CodexUsage.validCallId(id) || !CodexUsage.validHistory(historyId) || historyId.split(":reset:")[0] !== this.historyId.split(":reset:")[0]) ParserState.invalid();
+      if (!ContractValues.isNativeCallId(id) || !CodexUsage.validHistory(historyId) || historyId.split(":reset:")[0] !== this.historyId.split(":reset:")[0]) ParserState.invalid();
       this.seen.set(id, { historyId, ...CodexTokenCounts.restore(amount) });
     }
     if (!Array.isArray(pending)) ParserState.invalid();
@@ -182,9 +182,9 @@ export class CodexUsage {
       const { startOffset, endOffset } = entry;
       const { inputTokens, outputTokens, responseId, turnId } = call;
       (result.codexCallAliases ??= []).push({ callUsageId: call.id, aliasUsageId: alias,
-        ...(!CodexUsage.validCallId(alias) && { closing: { inputTokens, outputTokens, ...(responseId && { responseId }), ...(turnId && { turnId }) } }),
+        ...(!ContractValues.isNativeCallId(alias) && { closing: { inputTokens, outputTokens, ...(responseId && { responseId }), ...(turnId && { turnId }) } }),
         ...(startOffset !== undefined && endOffset !== undefined && { sourceOrder: entry.lineNumber, byteRange: { startOffset, endOffset } }) });
-      if (!CodexUsage.validCallId(alias)) continue;
+      if (!ContractValues.isNativeCallId(alias)) continue;
       const ids = this.aliases.get(alias) ?? new Set<string>();
       const enriched = !ids.has(call.id);
       ids.add(call.id);
@@ -332,8 +332,8 @@ export class CodexUsage {
     result.usageWindows.push(window);
     if (independent && !seen) this.remember(independent);
     this.advance(end);
-    this.previousChange = { start: window.start, calls: calls.filter(call => CodexUsage.validCallId(call.id)),
-      ...(last && CodexUsage.validCallId(last.id) && { closingId: last.id }) };
+    this.previousChange = { start: window.start, calls: calls.filter(call => ContractValues.isNativeCallId(call.id)),
+      ...(last && ContractValues.isNativeCallId(last.id) && { closingId: last.id }) };
   }
 
   private zeroCall(at: TokenCounts, call: Call, result: Result): void {
@@ -394,10 +394,6 @@ export class CodexUsage {
     return typeof value === "string" && /^(?:un)?verified:[a-f0-9]{64}(?::reset:[a-f0-9]{64})?$/.test(value);
   }
 
-  private static validCallId(value: unknown): value is string {
-    return typeof value === "string" && /^call:native:[a-f0-9]{64}$/.test(value);
-  }
-
   private static couldBeSameCall(pending: Call, last: Call): boolean {
     return CodexTokenCounts.sameTotals(pending, last)
       && (!pending.turnId || !last.turnId || pending.turnId === last.turnId)
@@ -408,7 +404,7 @@ export class CodexUsage {
     const fields = ParserState.record(value, ["id", "kind", "revision", "at", "turnId", "requestId", "responseId", "model",
       "inputTokens", "outputTokens", ...breakdowns]);
     const { id, kind, revision, at, turnId, requestId, responseId, model, ...amount } = fields;
-    if (!CodexUsage.validCallId(id) || kind !== "call" || revision !== 1 || !CodexUsageReport.recorded(at)) ParserState.invalid();
+    if (!ContractValues.isNativeCallId(id) || kind !== "call" || revision !== 1 || !CodexUsageReport.recorded(at)) ParserState.invalid();
     const call: Call = { id, kind, revision, at, ...CodexTokenCounts.restore(amount) };
     for (const [key, value] of [["turnId", turnId], ["requestId", requestId], ["responseId", responseId], ["model", model]] as const) {
       const text = ParserState.string(value);

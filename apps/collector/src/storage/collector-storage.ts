@@ -41,6 +41,19 @@ export class StreamKeys {
   }
 }
 
+/** The tests on values of the contract that the parsers and the storage both make. */
+export class ContractValues {
+  /** True for the text of a SHA-256 digest: 64 hexadecimal digits in lower case. */
+  static isDigest(value: unknown): value is string {
+    return typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+  }
+
+  /** True for the ID of a native Codex call: `call:native:` and a digest. */
+  static isNativeCallId(value: unknown): value is string {
+    return typeof value === "string" && /^call:native:[0-9a-f]{64}$/.test(value);
+  }
+}
+
 export interface SourceLocation {
   root: string;
   path: string;

@@ -1,5 +1,5 @@
 import { isRecordedTimestamp } from "@tracerelic/shared";
-import type { ByteRange, ClaudeCallOrigin, ClaudeUsageReport, TokenCounts, Usage, UsageStatus } from "./collector-storage.ts";
+import { ContractValues, type ByteRange, type ClaudeCallOrigin, type ClaudeUsageReport, type TokenCounts, type Usage, type UsageStatus } from "./collector-storage.ts";
 
 /** The rules that storage applies to the values of a batch. */
 export class BatchValues {
@@ -87,7 +87,7 @@ export class BatchValues {
   }
 
   static isNativeCodexCall(usage: Usage): boolean {
-    return usage.kind === "call" && (BatchValues.isIdentifier(usage.requestId) || BatchValues.isIdentifier(usage.responseId) || /^call:native:[a-f0-9]{64}$/.test(usage.id));
+    return usage.kind === "call" && (BatchValues.isIdentifier(usage.requestId) || BatchValues.isIdentifier(usage.responseId) || ContractValues.isNativeCallId(usage.id));
   }
 
   /** Copies can report a native call at different times. Retain its first accepted observation. */

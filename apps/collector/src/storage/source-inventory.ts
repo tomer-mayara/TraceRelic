@@ -1,7 +1,7 @@
 import { matchesRecordedPath, recordedPathDialect } from "@tracerelic/shared";
 import { isDeepStrictEqual } from "node:util";
 import {
-  LegacyScannerSource, SourceScopes, type AcknowledgedSource, type Batch, type Checkpoint, type CodexIdentityStatus, type MissingSource, type PresenceWrite,
+  ContractValues, LegacyScannerSource, SourceScopes, type AcknowledgedSource, type Batch, type Checkpoint, type CodexIdentityStatus, type MissingSource, type PresenceWrite,
   type ObservedExtent, type SourceLocation, type SourceObservation, type SourcePresence, type SourceScope, type StreamKey,
 } from "./collector-storage.ts";
 import { BatchValues } from "./batch-values.ts";
@@ -52,10 +52,9 @@ export class StoredSource {
   }
 
   private static validProofs(end: number, digest: unknown, checked: unknown): boolean {
-    const isDigest = (v: unknown): v is string => typeof v === "string" && /^[a-f0-9]{64}$/.test(v);
-    if (digest !== undefined && !isDigest(digest)) return false;
+    if (digest !== undefined && !ContractValues.isDigest(digest)) return false;
     if (checked === undefined) return true;
-    return BatchValues.isRecord(checked) && BatchValues.isCount(checked.offset) && checked.offset <= end && isDigest(checked.prefixDigest)
+    return BatchValues.isRecord(checked) && BatchValues.isCount(checked.offset) && checked.offset <= end && ContractValues.isDigest(checked.prefixDigest)
       && (checked.offset !== end || digest === undefined || checked.prefixDigest === digest);
   }
 

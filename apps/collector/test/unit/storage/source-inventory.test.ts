@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { PresenceWrite, SourceObservation, StreamKey } from "@tracerelic/collector/storage";
+import { StoredSource } from "#src/storage/source-inventory";
 import { batch } from "../../fixtures/collector-storage-fixture.ts";
 import { InMemoryCollectorStorage } from "../../fixtures/in-memory-collector-storage.ts";
 import { inventoryLocation as location, inventoryScope as scope, inventorySource as source, measuredSource, presence } from "../../fixtures/source-inventory-fixture.ts";
@@ -149,4 +150,13 @@ test("a legacy replay checkpoint can establish complete bytes the earlier collec
   assert.equal((await store.listSources(scope))[0].observedEnd, 500);
   assert.equal(await store.recordPresence(presence(2, "missing", 420)), "committed");
   assert.equal((await store.readSession(source))?.coverage, "partial");
+});
+
+test("an observation proves the bytes it saw only with digests", () => {
+  const observed = (proof: Partial<SourceObservation>) => ({ ...measuredSource(500), sourceObservation: { location, observedEnd: 500, ...proof } });
+  const proof = { observedPrefixDigest: "a".repeat(64), checkedPrefix: { offset: 420, prefixDigest: "b".repeat(64) } };
+  assert.ok(StoredSource.accept(undefined, observed(proof), 0));
+  for (const invalid of [{ ...proof, observedPrefixDigest: "not-a-digest" }, { ...proof, checkedPrefix: { offset: 420, prefixDigest: "not-a-digest" } }]) {
+    assert.equal(StoredSource.accept(undefined, observed(invalid), 0), null);
+  }
 });

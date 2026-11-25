@@ -1,5 +1,6 @@
 import type { LocalHistoryEntry } from "../history/history-provider.ts";
 import { RecordedInstant } from "@tracerelic/shared";
+import { JsonRecord } from "./json-record.ts";
 import { JsonlRecords } from "./jsonl-records.ts";
 import type {
   BatchRecords, ReadPosition, RecordBatch, SelectedFile, TranscriptEntry, TranscriptSource,
@@ -26,8 +27,8 @@ export class TranscriptBatches {
   private async *readBatches<H extends LocalHistoryEntry["harness"]>(
     source: SelectedFile<H>, position: ReadPosition, maxBatchBytes: number, endOffset: number,
   ): AsyncGenerator<RecordBatch<TranscriptEntry<H>>> {
-    if (!Number.isSafeInteger(maxBatchBytes) || maxBatchBytes <= 0) throw new RangeError("Expected a positive batch byte limit");
-    if (![position.offset, position.lineNumber, endOffset].every(n => Number.isSafeInteger(n) && n >= 0)) {
+    if (!JsonRecord.isCount(maxBatchBytes) || maxBatchBytes <= 0) throw new RangeError("Expected a positive batch byte limit");
+    if (![position.offset, position.lineNumber, endOffset].every(n => JsonRecord.isCount(n))) {
       throw new RangeError("Expected nonnegative byte and line positions");
     }
     const { file } = source;

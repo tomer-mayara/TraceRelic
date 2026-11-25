@@ -305,3 +305,17 @@ test("checkpoint state excludes raw transcript text and rejects malformed counte
     assert.throws(() => CodexUsage.resume(malformed), { name: "Error", message: "Invalid chat parser state" });
   }
 });
+
+test("rejects a restored call of the previous change whose ID is not a native call ID", () => {
+  const decoder = CodexUsage.resume();
+  decoder.decodeBatch(F.entries(F.header(), F.report(F.counts(100, 20)),
+    F.report(undefined, F.counts(15, 5), { request_id: "r1" }), F.report(F.counts(160, 40), F.counts(20, 10), { request_id: "r2" })));
+  const state = JSON.parse(JSON.stringify(decoder.snapshot()));
+  const [call, ...others] = state.previousChange.calls;
+  const withId = (id: unknown) => ({ ...state, previousChange: { ...state.previousChange, calls: [{ ...call, id }, ...others] } });
+  assert.match(call.id, /^call:native:[0-9a-f]{64}$/);
+  assert.doesNotThrow(() => CodexUsage.resume(withId(call.id)));
+  for (const id of ["malformed", call.id.slice(0, 12) + call.id.slice(12).toUpperCase(), call.id.replace("native:", ""), `${call.id}0`, 42]) {
+    assert.throws(() => CodexUsage.resume(withId(id)), { name: "Error", message: "Invalid chat parser state" });
+  }
+});

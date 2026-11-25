@@ -1,4 +1,5 @@
 import { TranscriptChangedError, type DamagedLine, type ReadPosition, type RecordBatch, type TranscriptSource, type VerifiedPrefix } from "../transcript/index.ts";
+import { JsonRecord } from "../transcript/json-record.ts";
 import type { Batch, Checkpoint, Message, SessionView } from "../storage/collector-storage.ts";
 import { ParserState } from "./parser-state.ts";
 import type { ChatParser, DecodedChat, DecodedUsage } from "./decoded-chat.ts";
@@ -293,7 +294,7 @@ export class TranscriptCursor<Entry extends SourceLine> {
     if (version !== format.version && version !== replayVersion && version !== format.gapVersion && !(format.upgrade && version === 1)) {
       throw new Error(`Unsupported parser version for ${sourceFile} at byte ${checkpoint.offset}`);
     }
-    if (typeof lineNumber !== "number" || !Number.isSafeInteger(lineNumber)
+    if (!JsonRecord.isCount(lineNumber)
       || lineNumber < (checkpoint.offset ? 1 : 0) || lineNumber > checkpoint.offset) {
       throw new Error(invalid);
     }

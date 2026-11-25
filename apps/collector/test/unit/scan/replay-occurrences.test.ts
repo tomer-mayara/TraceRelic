@@ -67,6 +67,7 @@ test("rejects invalid saved occurrence ranges without exposing checkpoint conten
   assert.equal(ReplayOccurrences.restore(undefined), undefined);
   for (const value of [
     null, [], "private", { private: valid }, { [F.repeated]: { ...valid, accepted: -1 } },
+    { [F.repeated]: { ...valid, accepted: 1.5 } },
     { [F.repeated]: { ...valid, replayed: Number.MAX_SAFE_INTEGER + 1 } },
     { [F.repeated]: { ...valid, replayed: 0.1 } }, { [F.repeated]: { ...valid, private: true } },
   ]) {
