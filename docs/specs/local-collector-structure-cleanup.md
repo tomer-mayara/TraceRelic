@@ -640,12 +640,14 @@ The results:
   contract. Each pass class receives its history class as a `Pick` of the methods that it calls.
 - **Knip does not follow `#src/…`.** Knip resolves such an import to the compiled file in `dist/`. It
   finds the source of a compiled file only through an `outDir` in a `tsconfig.json` of the same
-  workspace. The repository has one `tsconfig.json`, at the root. A second one in an app is the
-  TypeScript project of that directory for an editor, and TypeScript 6 then reports errors for the files
-  of the other workspaces. Thus Knip reports an export that only a test imports through `#src/…` as not
-  used. That agrees with the rule of step 5: a helper that only a test needs belongs in
-  `test/fixtures/`. Run Knip after a build. Without one, it reports the `#…` imports as not resolved.
-  [Decision 8](#decisions) plans one TypeScript project for each workspace.
+  workspace. The repository has one `tsconfig.json`, at the root. Step 5 tried a second one in each app,
+  which extended the root file and added only an `outDir`. Such a file is the TypeScript project of that
+  directory for an editor. It inherits the `include` of the root, and TypeScript 6 then reports errors
+  for the files of the other workspaces. Thus Knip reports an export that only a test imports through `#src/…` as not used. That
+  agrees with the rule of step 5: a helper that only a test needs belongs in `test/fixtures/`. Run Knip
+  after a build. Without one, it reports the `#…` imports as not resolved.
+  [The plan of decision 8](workspace-typescript-projects.md) gives each workspace a project with its own
+  `include`.
 - **Pairs that look alike and stay two rules.** `StreamKeys.stream` and `StreamKeys.sourceId` give
   different text for a source that has no installation ID. `ForkCapture.later` and the comparison in
   `SessionMetadata.selectBranch` are not `RecordedInstant.compare`. `ClaudeUsage.text` ignores a string
@@ -722,8 +724,10 @@ The owner accepted these ten decisions.
 8. **One TypeScript project for each workspace.** The owner decided to plan this as separate work, so
    that Knip can follow `#src/…`. Knip then counts a test as a user of an export. Thus that plan also adds
    a Knip run in production mode, which does not count tests. That run reports an export that only tests
-   use, so decision 2 has a check. A member that the owner keeps on purpose gets an exception. This work
-   is not started.
+   use. The [plan](workspace-typescript-projects.md) is written, and it waits for the approval of the
+   owner. It found that Knip does not check the members of a class. Thus that run does not check
+   decision 2. It checks the same rule for an export, and the members that the owner keeps need no
+   exception.
 9. **Cause and effect before a decision.** The owner asked for an analysis of two points before a
    decision on them. The points are the text of a restored parser, and the different order on Bun and on
    Node.js. The two analyses are done, and
