@@ -224,14 +224,16 @@ The risks of the way with the four project files:
   it, and another file can import it from the module that declares it. The default run gives 12 of the
   type reports, so no file imports those exports. Tests or fixtures import the other ones. Some of them
   are public on purpose, for example `LocalFileLogger`, which the shared logging spec names. The owner
-  has not decided on this point.
+  decided on 2026-11-25 that Knip must check these exports:
+  [plan](knip-entry-exports-and-habit-hooks.md).
 - **Files under `test/`.** For the default run, each file under `test/` is an entry, and the production
   run does not read these files. Thus no run reports an export of a fixture, or a fixture file, that
   nothing imports. This limit is older than the change.
 - **The production run in Habit Hooks.** The Knip sensor of Habit Hooks is in the plugin
   `habit-hooks-typescript` 1.5.0. It reads `entry` and `project` at the top level of `knip.json`, and it
   starts a production pass only when both have a `!` mark. This `knip.json` has them in `workspaces`,
-  so the sensor runs only the default run.
+  so the sensor runs only the default run. The owner decided on 2026-11-25 that Habit Hooks must run
+  the production pass: the same [plan](knip-entry-exports-and-habit-hooks.md).
 - **The root list `ignoreDependencies`.** Knip applies the six packages of that list to each workspace.
   Thus the production run does not report an import of one of them from the production source.
 
