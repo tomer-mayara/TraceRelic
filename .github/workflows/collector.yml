@@ -71,6 +71,9 @@ jobs:
       - name: Lint workspace
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         run: bun run lint
+      - name: Find code that the production source does not use
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bun run knip:production
       - name: Run workspace tests
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: bun run test:compiled

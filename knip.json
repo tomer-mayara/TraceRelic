@@ -6,12 +6,12 @@
       "ignoreDependencies": ["@typespec/http", "@typespec/json-schema", "@typespec/openapi", "@typespec/openapi3", "jscpd", "ts-morph"]
     },
     "apps/*": {
-      "entry": ["test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts", "src/cli.ts", "src/main.ts", "src/storage/collector-storage.ts", "scripts/*.{ts,mjs}"],
-      "project": ["{src,test}/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}"]
+      "entry": ["test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts", "src/cli.ts!", "src/main.ts!", "src/storage/collector-storage.ts!", "scripts/*.{ts,mjs}!"],
+      "project": ["src/**/*.{ts,tsx}!", "test/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}!"]
     },
     "packages/*": {
-      "entry": ["src/index.ts", "test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts"],
-      "project": ["{src,test}/**/*.{ts,tsx}"]
+      "entry": ["src/index.ts!", "test/{unit,integration,interface,acceptance}/**/*.{test,steps}.ts"],
+      "project": ["src/**/*.{ts,tsx}!", "test/**/*.{ts,tsx}"]
     }
   }
 }

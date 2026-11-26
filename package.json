@@ -18,6 +18,7 @@
     "check:collector-structure": "eslint --config .habit-hooks/collector-structure.eslint.mjs apps/collector/src apps/collector/test apps/api/src apps/api/test packages/shared/src packages/shared/test",
     "check:shared-logging": "bun run build && bun run check:logging-contract && bun run --cwd packages/shared check:logging-scenarios && bun test ./packages/shared/test",
     "habit-hooks": "uvx --from 'habit-hooks[typescript]==1.5.0' habit-hooks",
+    "knip:production": "knip --production --strict",
     "typecheck": "tsrs --noEmit && tsrs -p apps/collector && tsrs -p apps/api && tsrs -p apps/api/test && tsrs -p packages/shared",
     "build": "bun run typecheck && bun run --cwd apps/api contract && mkdir -p apps/collector/dist/contracts && cp apps/api/dist/contracts/collector-api.schema.json apps/collector/dist/contracts/ && bun run --filter '@tracerelic/*' compile:source && swc test -d dist/test --delete-dir-on-start --strip-leading-paths --config-file .swcrc",
     "test": "bun run build && bun run test:compiled",

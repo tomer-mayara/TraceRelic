@@ -46,11 +46,11 @@
         "@tracerelic/shared": "workspace:*",
         "ajv": "8.20.0",
         "ajv-formats": "3.0.1",
-        "better-sqlite3": "13.2.0",
       },
       "devDependencies": {
         "@cucumber/cucumber": "13.3.0",
         "@types/better-sqlite3": "9.6.0",
+        "better-sqlite3": "13.2.0",
       },
     },
     "packages/shared": {
