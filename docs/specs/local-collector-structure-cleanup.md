@@ -468,9 +468,9 @@ structure rule.
   also checks `apps/api/src` and all of `packages/shared/src`. It found one method there,
   `ConsoleLogger.waitForErrorEvent`, which now names its class. The rule against a relative import of the
   source also checks the tests of `apps/api` and of `packages/shared`. It found four type imports in
-  three fixtures of `apps/api/test`, which now use `#src/…`. Knip cannot follow such an import, so it
-  reported the type `CollectorWrite` as an export that nothing uses. The type is not an export now, and
-  two fixtures derive it from `CollectorTransaction["save"]`.
+  three fixtures of `apps/api/test`, which now use `#src/…`. At that time Knip could not follow such an
+  import, so it reported the type `CollectorWrite` as an export that nothing uses. The type is not an
+  export now, and two fixtures derive it from `CollectorTransaction["save"]`.
 - **The type check declares two built-ins that the code uses.** `Array.fromAsync` and
   `Promise.withResolvers` are not in the library of `target: ES2022`. The type check passed only because
   one test fixture of `packages/shared` imports `bun`, and the types of Bun declare both. A type check of
@@ -489,11 +489,12 @@ structure rule.
 | Architecture | The two wider selectors in [Rules that keep the structure](#rules-that-keep-the-structure). The dependency rules do not change. | `check:collector-structure`, with a rule probe for each new place |
 | Interface | Out of scope. No contract changes. | The three `schema:collector-*` scripts |
 
-No CI check keeps the `lib` line and the `--volumes` flag. CI reads the files of all workspaces in one
-type check. The types of Bun are there, so that check passes also without the `lib` line. CI gives the
-database tests a server through `TRACERELIC_TEST_DATABASE_URL`, so it does not start the containers of
-the fixture. The step checked the two points one time: a type check of the collector alone, and a run of
-`legacy-journal.test.ts` without that variable.
+At the end of step 6, no CI check kept the `lib` line and the `--volumes` flag. The step checked the two
+points one time: a type check of the collector alone, and a run of `legacy-journal.test.ts` without
+`TRACERELIC_TEST_DATABASE_URL`. The `lib` line has a check now. The
+[workspace projects](workspace-typescript-projects.md) gave the collector its own type check, which has
+no types of Bun. The flag still has no CI check. CI gives the database tests a server through that
+variable, so it does not start the containers of the fixture.
 
 ### Step 7. Rules that methods repeat
 
@@ -638,16 +639,17 @@ The results:
 - **Methods that only a pass and the tests call.** `discoverSources`, `confirmedAbsent`, `identitiesAt`
   and `recoveryCandidates` are public on `CodexHistory` and `ClaudeHistory`, and they are not in the
   contract. Each pass class receives its history class as a `Pick` of the methods that it calls.
-- **Knip does not follow `#src/…`.** Knip resolves such an import to the compiled file in `dist/`. It
-  finds the source of a compiled file only through an `outDir` in a `tsconfig.json` of the same
-  workspace. The repository has one `tsconfig.json`, at the root. Step 5 tried a second one in each app,
-  which extended the root file and added only an `outDir`. Such a file is the TypeScript project of that
-  directory for an editor. It inherits the `include` of the root, and TypeScript 6 then reports errors
-  for the files of the other workspaces. Thus Knip reports an export that only a test imports through `#src/…` as not used. That
-  agrees with the rule of step 5: a helper that only a test needs belongs in `test/fixtures/`. Run Knip
-  after a build. Without one, it reports the `#…` imports as not resolved.
-  [The plan of decision 8](workspace-typescript-projects.md) gives each workspace a project with its own
-  `include`.
+- **Knip follows `#src/…` through the project file of a workspace.** Knip resolves such an import to the
+  compiled file in `dist/`. It finds the source of that file through the `outDir` of the `tsconfig.json`
+  of the workspace. The [workspace projects](workspace-typescript-projects.md) gave each workspace such a
+  file, with its own `include`. Thus the default Knip run counts a test as a user of an export.
+  `bun run knip:production` does not count tests, and the PR workflow runs it. That run reports an export
+  that only tests use. Step 5 gave the rule for such an export: a helper that only a test needs belongs
+  in `test/fixtures/`. No Knip run checks the members of a class or the exports of an entry file. No run
+  reports a helper of `test/fixtures/` that nothing uses. The default run takes each file under `test/`
+  as an entry, and the production run does not read those files. With no build, the default run still
+  reports the imports through `#collector-fixture/…` as not resolved. The
+  [plan](workspace-typescript-projects.md#not-solved) has these limits.
 - **Pairs that look alike and stay two rules.** `StreamKeys.stream` and `StreamKeys.sourceId` give
   different text for a source that has no installation ID. `ForkCapture.later` and the comparison in
   `SessionMetadata.selectBranch` are not `RecordedInstant.compare`. `ClaudeUsage.text` ignores a string
@@ -722,12 +724,12 @@ The owner accepted these ten decisions.
    rule stays with the collector and the two leaf modules, so the functions of `apps/api/src` and of
    `recorded-path.ts` stay. Step 6 did that.
 8. **One TypeScript project for each workspace.** The owner decided to plan this as separate work, so
-   that Knip can follow `#src/…`. Knip then counts a test as a user of an export. Thus that plan also adds
-   a Knip run in production mode, which does not count tests. That run reports an export that only tests
-   use. The owner approved the [plan](workspace-typescript-projects.md) on 2026-11-25. The plan found
-   that Knip does not check the members of a class. Thus that run does not check
-   decision 2. It checks the same rule for an export, and the members that the owner keeps need no
-   exception.
+   that Knip can follow `#src/…`. The owner approved the [plan](workspace-typescript-projects.md) on
+   2026-11-25, and [PR 38](https://github.com/tomer-mayara/TraceRelic/pull/38) made the change. Knip now
+   counts a test as a user of an export. Thus the change also added a Knip run in production mode, which
+   does not count tests and which reports an export that only tests use. Knip does not check the members
+   of a class. Thus that run does not check decision 2. It checks the same rule for an export, and the
+   members that the owner keeps need no exception.
 9. **Cause and effect before a decision.** The owner asked for an analysis of two points before a
    decision on them. The points are the text of a restored parser, and the different order on Bun and on
    Node.js. The two analyses are done, and
