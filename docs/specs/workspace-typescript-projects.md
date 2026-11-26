@@ -11,9 +11,10 @@ Affected components: the root (`package.json`, `knip.json`, the PR workflow, the
 `packages/shared` (new `tsconfig.json` files). Two options of decision 2 also change
 `apps/collector/package.json` and `bun.lock`.
 
-**State: this plan waits for the approval of the owner. No code changes before that.**
+**State: the owner approved this plan on 2026-11-25, with the [decisions](#decisions-of-the-owner)
+below. The change comes in a second PR.**
 [Decision 8 of the collector structure cleanup](local-collector-structure-cleanup.md#decisions) asked
-for it.
+for this plan.
 
 ## Problem
 
@@ -70,10 +71,12 @@ gets one step that runs it.
 
 **README.** One paragraph on the projects, and one on the production run.
 
-## Decisions for the owner
+## Decisions of the owner
 
-1. **The layout.** Three ways give the new check for an export that only tests use. They are different
-   in what they add and in what they cost. This plan recommends the first one. Only it gives the two
+The owner decided each point on 2026-11-25.
+
+1. **The layout: the four project files.** Three ways give the new check for an export that only tests
+   use. They are different in what they add and in what they cost. Only the first one gives the two
    things that decision 8 names: Knip follows `#src/…`, and an editor has a project for each workspace.
 
    | | Four project files | Production run alone | Production run and one check file |
@@ -91,26 +94,26 @@ gets one step that runs it.
    `tsconfig.collector-check.json`. It extends the root file and includes only the collector. Bun, an
    editor and Knip do not read a file with that name. The default Knip run is not in the PR workflow:
    Habit Hooks and a contributor run it.
-2. **`better-sqlite3`.** With the new `knip.json`, the production run reports one thing on `main`.
-   `better-sqlite3` is a dependency of `apps/collector`, and only
+2. **`better-sqlite3`: option A.** With the new `knip.json`, the production run reports one thing on
+   `main`. `better-sqlite3` is a dependency of `apps/collector`, and only
    `test/integration/environment.test.ts` imports it. The new step of the PR workflow fails until one of
    three changes is made.
-   - A, recommended: move it to `devDependencies`, also in `bun.lock`. `@tracerelic/collector` is a
-     private package, and each install also installs the dev dependencies. With `--strict`, the
-     production run reports a later import of `better-sqlite3` from the production source.
+   - A: move it to `devDependencies`, also in `bun.lock`. `@tracerelic/collector` is a private package,
+     and each install also installs the dev dependencies. With `--strict`, the production run reports a
+     later import of `better-sqlite3` from the production source.
    - B: keep it in `dependencies`, and add `better-sqlite3!` to `ignoreDependencies` of the `apps/*` entry
      of `knip.json`.
    - C: remove the dependency, its types and its environment test, if the collector has no plan for
      SQLite. A README example names that test file. A variant keeps the test and writes it with
      `node:sqlite` of Node.js.
-3. **Members of a class.** [Decision 2](local-collector-structure-cleanup.md#decisions) is about a
-   member that only tests read. Knip checks exports, types, files and dependencies. It does not check the
-   members of a class or the fields of an object. Thus the production run does not check decision 2. It
-   checks the same rule for an export. The things that the owner keeps need no exception:
+3. **Members of a class: no check.** [Decision 2](local-collector-structure-cleanup.md#decisions) is
+   about a member that only tests read. Knip checks exports, types, files and dependencies. It does not
+   check the members of a class or the fields of an object. Thus the production run does not check
+   decision 2. It checks the same rule for an export. The things that the owner keeps need no exception:
    `LocalLLMHistory.readLocalHistory` with `HistoryWindow.between`, and the field `harness`. This plan
    adds no check for members: that would be a script of our own to maintain.
-4. **An export that stays on purpose.** The production run reports no export on `main`, so no exception
-   is necessary now. If one is necessary later, a JSDoc tag on the export is the smallest way. With the
+4. **An export that stays on purpose: no exception now.** The production run reports no export on
+   `main`, so no exception is necessary now. If one is necessary later, a JSDoc tag on the export is the smallest way. With the
    four project files, the tag is `@internal`: the production run does not report such an export, and the
    default run sees its test. Without the project files, the tag must be `@public`, which hides the
    export from both runs.
@@ -180,13 +183,13 @@ The risks of the way with the four project files:
   `dist/` is absent. After a build it resolves them.
 - **Members of a class.** See decision 3.
 
-## Steps after the approval
+## Steps
 
 One PR, with these commits:
 
 1. The four project files and the `typecheck` script.
-2. `knip.json`, the script `knip:production`, the step in the PR workflow, and the option of decision 2
-   that the owner chooses.
+2. `knip.json`, the script `knip:production`, the step in the PR workflow, and the move of
+   `better-sqlite3` to `devDependencies`.
 3. The README, and each place of the cleanup plan that this change makes untrue. These are the point
    about Knip, decision 8, and two sentences of step 6: one about `#src/…` and one about the `lib` line.
 

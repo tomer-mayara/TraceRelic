@@ -724,8 +724,8 @@ The owner accepted these ten decisions.
 8. **One TypeScript project for each workspace.** The owner decided to plan this as separate work, so
    that Knip can follow `#src/…`. Knip then counts a test as a user of an export. Thus that plan also adds
    a Knip run in production mode, which does not count tests. That run reports an export that only tests
-   use. The [plan](workspace-typescript-projects.md) is written, and it waits for the approval of the
-   owner. It found that Knip does not check the members of a class. Thus that run does not check
+   use. The owner approved the [plan](workspace-typescript-projects.md) on 2026-11-25. The plan found
+   that Knip does not check the members of a class. Thus that run does not check
    decision 2. It checks the same rule for an export, and the members that the owner keeps need no
    exception.
 9. **Cause and effect before a decision.** The owner asked for an analysis of two points before a
