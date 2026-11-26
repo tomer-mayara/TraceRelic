@@ -237,7 +237,7 @@ The risks of the way with the four project files:
 
 ## Steps
 
-PR 38 made the change in four commits:
+PR 38 made the change in this order:
 
 1. The four project files and the `typecheck` script.
 2. `knip.json`, the script `knip:production`, the step in the PR workflow, and the move of

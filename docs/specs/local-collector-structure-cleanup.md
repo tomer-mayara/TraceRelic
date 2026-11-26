@@ -646,9 +646,10 @@ The results:
   `bun run knip:production` does not count tests, and the PR workflow runs it. That run reports an export
   that only tests use. Step 5 gave the rule for such an export: a helper that only a test needs belongs
   in `test/fixtures/`. No Knip run checks the members of a class or the exports of an entry file. No run
-  reports a helper of `test/fixtures/` that nothing uses, because Knip takes each file under `test/` as
-  an entry. With no build, the default run still reports the imports through `#collector-fixture/…` as
-  not resolved. The [plan](workspace-typescript-projects.md#not-solved) has these limits.
+  reports a helper of `test/fixtures/` that nothing uses. The default run takes each file under `test/`
+  as an entry, and the production run does not read those files. With no build, the default run still
+  reports the imports through `#collector-fixture/…` as not resolved. The
+  [plan](workspace-typescript-projects.md#not-solved) has these limits.
 - **Pairs that look alike and stay two rules.** `StreamKeys.stream` and `StreamKeys.sourceId` give
   different text for a source that has no installation ID. `ForkCapture.later` and the comparison in
   `SessionMetadata.selectBranch` are not `RecordedInstant.compare`. `ClaudeUsage.text` ignores a string
