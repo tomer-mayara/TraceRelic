@@ -2,6 +2,8 @@
 
 TraceRelic is a starter for collecting token usage from Codex and Claude Code sessions. The collector lives in `apps/collector`, the API in `apps/api`, and shared TypeScript code in `packages/shared`.
 
+See how the components fit together in the [architecture overview](docs/architecture.md).
+
 ## Read local Codex and Claude Code history
 
 Pass the configuration file to the collector with `--config`. The supplied file selects the usual Codex and Claude Code directories. Omit `claudePath` to read only Codex. [TypeScript definition](apps/collector/src/config/global-config-schema.ts) · [tracerelic.config.json](tracerelic.config.json)
