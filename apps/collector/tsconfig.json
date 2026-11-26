@@ -1,0 +1,9 @@
+{
+  // The TypeScript project of this workspace, for an editor and for `bun run typecheck`.
+  // Knip reads outDir to find the source in src/ of a compiled file in dist/. No TypeScript program writes there.
+  // Put each other compiler option in the root tsconfig.json. Bun also reads this file when it builds or runs
+  // the source: see "Run the checks" in the README.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "outDir": "dist" },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

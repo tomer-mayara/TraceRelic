@@ -1,0 +1,10 @@
+{
+  // The TypeScript project of the API tests. The tests import the API source through #src/… and collector
+  // fixtures through #collector-fixture/…. TypeScript makes those files, and each file that they import,
+  // sources of this project. With an outDir, each one outside this directory would be an error (TS6059).
+  // Thus this project has no outDir.
+  // Put each compiler option in the root tsconfig.json. Bun also reads this file when it builds or runs
+  // a test: see "Run the checks" in the README.
+  "extends": "../../../tsconfig.json",
+  "include": ["**/*.ts"]
+}

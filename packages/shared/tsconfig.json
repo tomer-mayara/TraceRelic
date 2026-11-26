@@ -1,0 +1,11 @@
+{
+  // The TypeScript project of this workspace, for an editor and for `bun run typecheck`.
+  // Knip reads outDir to follow an import of @tracerelic/shared to the source in src/. With outDir,
+  // TypeScript also reports a file of this project that imports a file outside this directory by a
+  // relative path (TS6059). No TypeScript program writes to dist/.
+  // Put each other compiler option in the root tsconfig.json. Bun also reads this file when it builds or runs
+  // the source: see "Run the checks" in the README.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "outDir": "dist" },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
